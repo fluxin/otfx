@@ -552,7 +552,11 @@ run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> 
 		}
 		render_candidates, produced := next_frame(effect, ctx)
 		if !produced do break
-		engine.frame(ctx, render_candidates)
+		if render_candidates == nil {
+			engine.frame_all(ctx)
+		} else {
+			engine.frame(ctx, render_candidates)
+		}
 		if resize_aware && engine.resize_settled(ctx) {
 			engine.reset_canvas_area(ctx.visible_top)
 			return .Terminal_Resized

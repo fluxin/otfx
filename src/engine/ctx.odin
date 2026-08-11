@@ -37,8 +37,14 @@ group_reveal_complete :: proc(r: Group_Reveal) -> bool {
 	return r.tick >= r.duration
 }
 
-frame :: proc(e: ^Engine, render_candidates: []Char_Id = nil) {
+frame_all :: proc(e: ^Engine) {
 	enforce_framerate(e)
-	frame_build(e, render_candidates)
+	frame_build_all(e)
+	free_all(context.temp_allocator)
+}
+
+frame :: proc(e: ^Engine, render_ids: []Char_Id) {
+	enforce_framerate(e)
+	frame_build_selected(e, render_ids)
 	free_all(context.temp_allocator)
 }

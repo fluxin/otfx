@@ -41,14 +41,14 @@ coord_vec :: proc(c: Coord) -> linalg.Vector2f64 {
 	return {f64(c.column), f64(c.row)}
 }
 
-coord_on_line :: proc(start, end: Coord, t: f64) -> Coord {
+coord_on_line :: #force_inline proc(start, end: Coord, t: f64) -> Coord {
 	p := linalg.lerp(coord_vec(start), coord_vec(end), t)
 	return {round_half_even(p.x), round_half_even(p.y)}
 }
 
 // Every effect path currently uses at most one control point. Keep the
 // quadratic De Casteljau hot path fixed-size and allocation-free.
-coord_on_quadratic_bezier :: proc(start, control, end: Coord, t: f64) -> Coord {
+coord_on_quadratic_bezier :: #force_inline proc(start, control, end: Coord, t: f64) -> Coord {
 	a := linalg.lerp(coord_vec(start), coord_vec(control), t)
 	b := linalg.lerp(coord_vec(control), coord_vec(end), t)
 	p := linalg.lerp(a, b, t)
@@ -76,19 +76,14 @@ find_coords_on_circle :: proc(
 ) -> [dynamic]Coord {
 	points: [dynamic]Coord
 	if radius == 0 do return points
-	limit := coords_limit != 0 ? coords_limit : round_half_even(2 * math.PI * f64(radius))
+	limit := coords_limit != 0 ? coords_limit : round_half_even(math.TAU * f64(radius))
 	seen: [dynamic]Coord
-	angle_step := 2 * math.PI / f64(limit)
+	angle_step := math.TAU / f64(limit)
 	radial := linalg.Vector2f64{f64(radius), 0}
 	origin_v := coord_vec(origin)
 	for i in 0 ..< limit {
 		angle := angle_step * f64(i)
-		rot := linalg.Matrix2f64 {
-			math.cos(angle),
-			-math.sin(angle),
-			math.sin(angle),
-			math.cos(angle),
-		}
+		rot := linalg.matrix2_rotate(angle)
 		q := rot * radial
 		q.x *= 2
 		p := origin_v + q
@@ -182,31 +177,9 @@ color_from_hex :: proc(s: string) -> (Color, bool) {
 	t := strings.trim_left(s, "#")
 	t = strings.trim_right(t, "#")
 	if len(t) != 6 do return {}, false
-	c: Color
-	ok := true
-	c.r, ok = hex_byte(t[0], t[1]); if !ok do return {}, false
-	c.g, ok = hex_byte(t[2], t[3]); if !ok do return {}, false
-	c.b, ok = hex_byte(t[4], t[5]); if !ok do return {}, false
-	return c, true
-}
-
-hex_byte :: proc(hi, lo: byte) -> (u8, bool) {
-	a := hex_digit(hi)
-	b := hex_digit(lo)
-	if a < 0 || b < 0 do return 0, false
-	return u8(a << 4 | b), true
-}
-
-hex_digit :: proc(c: byte) -> int {
-	switch {
-	case c >= '0' && c <= '9':
-		return int(c - '0')
-	case c >= 'a' && c <= 'f':
-		return int(c - 'a') + 10
-	case c >= 'A' && c <= 'F':
-		return int(c - 'A') + 10
-	}
-	return -1
+	v, ok := strconv.parse_uint(t, 16)
+	if !ok do return {}, false
+	return {u8(v >> 16), u8(v >> 8), u8(v)}, true
 }
 
 // ttfx CLI colors: <= 3 characters is an xterm-256 code, otherwise hex.
@@ -268,22 +241,18 @@ gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]C
 		assert(step_count >= 1)
 		start := stops[pair]
 		end := stops[(pair + 1) % len(stops)]
-		start_rgb := [3]int{int(start.r), int(start.g), int(start.b)}
-		end_rgb := [3]int{int(end.r), int(end.g), int(end.b)}
-		delta := [3]int {
-			math.floor_div(end_rgb[0] - start_rgb[0], step_count),
-			math.floor_div(end_rgb[1] - start_rgb[1], step_count),
-			math.floor_div(end_rgb[2] - start_rgb[2], step_count),
-		}
+		start_r, start_g, start_b := int(start.r), int(start.g), int(start.b)
+		delta_r := math.floor_div(int(end.r) - start_r, step_count)
+		delta_g := math.floor_div(int(end.g) - start_g, step_count)
+		delta_b := math.floor_div(int(end.b) - start_b, step_count)
 		range_start := len(spectrum) != 0 ? 1 : 0
 		for i in range_start ..< step_count {
-			rgb := start_rgb + delta * i
 			append(
 				&spectrum,
 				Color {
-					u8(clamp(rgb[0], 0, 255)),
-					u8(clamp(rgb[1], 0, 255)),
-					u8(clamp(rgb[2], 0, 255)),
+					u8(clamp(start_r + delta_r * i, 0, 255)),
+					u8(clamp(start_g + delta_g * i, 0, 255)),
+					u8(clamp(start_b + delta_b * i, 0, 255)),
 				},
 			)
 		}
@@ -297,14 +266,14 @@ gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]C
 gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color {
 	assert(steps >= 1 && index >= 0 && index <= steps)
 	if index == steps do return end
-	start_rgb := linalg.Vector3f64{f64(start.r), f64(start.g), f64(start.b)}
-	end_rgb := linalg.Vector3f64{f64(end.r), f64(end.g), f64(end.b)}
-	delta := linalg.floor((end_rgb - start_rgb) / f64(steps))
-	rgb := start_rgb + delta * f64(index)
+	start_r, start_g, start_b := int(start.r), int(start.g), int(start.b)
+	delta_r := math.floor_div(int(end.r) - start_r, steps)
+	delta_g := math.floor_div(int(end.g) - start_g, steps)
+	delta_b := math.floor_div(int(end.b) - start_b, steps)
 	return {
-		u8(clamp(int(rgb.x), 0, 255)),
-		u8(clamp(int(rgb.y), 0, 255)),
-		u8(clamp(int(rgb.z), 0, 255)),
+		u8(clamp(start_r + delta_r * index, 0, 255)),
+		u8(clamp(start_g + delta_g * index, 0, 255)),
+		u8(clamp(start_b + delta_b * index, 0, 255)),
 	}
 }
 
@@ -313,6 +282,12 @@ gradient_color_at_fraction :: proc(spectrum: []Color, fraction: f64) -> Color {
 	n := len(spectrum)
 	index := clamp(int(math.ceil(fraction * f64(n))) - 1, 0, n - 1)
 	return spectrum[index]
+}
+
+gradient_index_at_ratio :: #force_inline proc(numerator, denominator, count: int) -> int {
+	assert(denominator >= 1 && count >= 1)
+	// ceil(numerator * count / denominator) - 1, clamped to the palette.
+	return clamp(math.floor_div(numerator * count - 1, denominator), 0, count - 1)
 }
 
 Gradient_Direction :: enum {
@@ -353,16 +328,19 @@ gradient_sampler :: proc(
 }
 
 gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Color {
-	fraction: f64
 	switch s.direction {
 	case .Vertical:
-		fraction = f64(c.row - s.min_row + 1) / f64(s.max_row - s.min_row + 1)
+		return(
+			spectrum[gradient_index_at_ratio(c.row - s.min_row + 1, s.max_row - s.min_row + 1, len(spectrum))] \
+		)
 	case .Horizontal:
-		fraction = f64(c.column - s.min_col + 1) / f64(s.max_col - s.min_col + 1)
+		return(
+			spectrum[gradient_index_at_ratio(c.column - s.min_col + 1, s.max_col - s.min_col + 1, len(spectrum))] \
+		)
 	case .Diagonal:
-		numerator := f64((c.row - s.min_row + 1) * 2 + c.column - s.min_col + 1)
-		denominator := f64((s.max_row - s.min_row + 1) * 2 + s.max_col - s.min_col + 1)
-		fraction = numerator / denominator
+		return(
+			spectrum[gradient_index_at_ratio((c.row - s.min_row + 1) * 2 + c.column - s.min_col + 1, (s.max_row - s.min_row + 1) * 2 + s.max_col - s.min_col + 1, len(spectrum))] \
+		)
 	case .Radial:
 		distance, ok := find_normalized_distance_from_center(
 			s.min_row,
@@ -371,9 +349,10 @@ gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Col
 			s.max_col,
 			c,
 		)
-		fraction = ok ? distance : 0
+		if !ok do return spectrum[0]
+		return gradient_color_at_fraction(spectrum, clamp(distance, 0.0, 1.0))
 	}
-	return gradient_color_at_fraction(spectrum, clamp(fraction, 0.0, 1.0))
+	unreachable()
 }
 
 // RGB -> HSL -> RGB brightness adjustment (beams/highlight/matrix).

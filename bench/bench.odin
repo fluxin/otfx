@@ -11,7 +11,8 @@ import "core:time"
 // user-facing CLIs. Frame pacing is disabled; timings measure render
 // throughput. Execute from the repository root:
 //
-//   odin run bench -- [repeats] [effect ...]
+//   odin build bench -o:speed -out:bench/bench
+//   BENCH_MIN_SECONDS=1 ./bench/bench [repeats] [effect ...]
 
 REPEATS_DEFAULT :: 5
 MIN_SAMPLE_SECONDS_DEFAULT :: 2.0
@@ -195,20 +196,6 @@ run_command :: proc(
 		matched := 0
 		output_done := false
 		for !output_done {
-			has_data, pipe_err := os.pipe_has_data(stdout_r)
-			switch pipe_err {
-			case nil:
-			case .Broken_Pipe:
-				output_done = true
-			case:
-				_ = os.process_kill(process)
-				_, _ = os.process_wait(process)
-				fmt.eprintfln("failed to poll %s output: %v", command[0], pipe_err)
-				return {}, false
-			}
-			if output_done do continue
-			if !has_data do continue
-
 			count, read_err := os.read(stdout_r, buffer[:])
 			if count > 0 do frames += frame_count_append(buffer[:count], &matched)
 			switch read_err {

@@ -1280,54 +1280,67 @@ paint_render_character :: #force_inline proc(
 	}
 }
 
-update_render_cells :: proc(e: ^Engine, candidates: []Char_Id = nil) -> (int, int) {
-	width := max(e.visible_right, 0)
-	height := max(e.visible_top, 0)
+render_cells_clear :: proc(e: ^Engine) -> (width, height: int) {
+	width = max(e.visible_right, 0)
+	height = max(e.visible_top, 0)
 	cells := width * height
 	assert(len(e.render_cells) >= cells)
 	render_cells := e.render_cells[:cells]
 	for i in 0 ..< cells do render_cells[i] = EMPTY_CELL
+	return width, height
+}
+
+update_render_cells_all :: proc(e: ^Engine) -> (int, int) {
+	width, height := render_cells_clear(e)
+	render_cells := e.render_cells[:width * height]
 	// dense SOA scan: visibility, position, painter key are field arrays.
 	visible := e.chars.is_visible[:]
 	coords := e.chars.current_coord[:]
 	layers := e.chars.layer[:]
 	character_ids := e.chars.character_id[:]
-	if candidates == nil {
-		for i in 0 ..< len(e.chars) {
-			paint_render_character(
-				render_cells,
-				visible,
-				coords,
-				layers,
-				character_ids,
-				i,
-				width,
-				e.row_offset,
-				e.col_offset,
-				e.visible_bottom,
-				e.visible_top,
-				e.visible_left,
-				e.visible_right,
-			)
-		}
-	} else {
-		for id in candidates {
-			paint_render_character(
-				render_cells,
-				visible,
-				coords,
-				layers,
-				character_ids,
-				int(id),
-				width,
-				e.row_offset,
-				e.col_offset,
-				e.visible_bottom,
-				e.visible_top,
-				e.visible_left,
-				e.visible_right,
-			)
-		}
+	for i in 0 ..< len(e.chars) {
+		paint_render_character(
+			render_cells,
+			visible,
+			coords,
+			layers,
+			character_ids,
+			i,
+			width,
+			e.row_offset,
+			e.col_offset,
+			e.visible_bottom,
+			e.visible_top,
+			e.visible_left,
+			e.visible_right,
+		)
+	}
+	return width, height
+}
+
+update_render_cells_selected :: proc(e: ^Engine, selected: []Char_Id) -> (int, int) {
+	width, height := render_cells_clear(e)
+	render_cells := e.render_cells[:width * height]
+	visible := e.chars.is_visible[:]
+	coords := e.chars.current_coord[:]
+	layers := e.chars.layer[:]
+	character_ids := e.chars.character_id[:]
+	for id in selected {
+		paint_render_character(
+			render_cells,
+			visible,
+			coords,
+			layers,
+			character_ids,
+			int(id),
+			width,
+			e.row_offset,
+			e.col_offset,
+			e.visible_bottom,
+			e.visible_top,
+			e.visible_left,
+			e.visible_right,
+		)
 	}
 	return width, height
 }
@@ -1371,9 +1384,8 @@ render_cell_dirty :: #force_inline proc(
 	)
 }
 
-// Build the frame into e.out_buf, top row first.
-frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
-	width, height := update_render_cells(e, candidates)
+// Emit the already-rasterized frame top row first.
+frame_emit :: proc(e: ^Engine, width, height: int) {
 	buf := &e.out_buf
 	clear(buf)
 	min_cap := width * height
@@ -1390,24 +1402,18 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 		row_index := height - 1 - screen_row
 		row_cells := e.render_cells[row_index * width:(row_index + 1) * width]
 		previous_row := previous[row_index * width:(row_index + 1) * width]
-		column := 0
-		for column < width {
-			for column < width {
-				if render_cell_dirty(
-					row_cells[column],
-					previous_row[column],
-					visuals,
-					cached,
-					input_styles,
-					uses_input_preexisting_colors,
-					e.cfg.existing_color_handling,
-				) {
-					break
-				}
-				column += 1
+		for column in 0 ..< width {
+			if !render_cell_dirty(
+				row_cells[column],
+				previous_row[column],
+				visuals,
+				cached,
+				input_styles,
+				uses_input_preexisting_colors,
+				e.cfg.existing_color_handling,
+			) {
+				continue
 			}
-			if column == width do break
-
 			if screen_row > cursor_row {
 				append(buf, ansi.CSI)
 				buf_append_decimal(buf, screen_row - cursor_row)
@@ -1421,33 +1427,22 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 				cursor_column = column
 			}
 
-			for column < width &&
-			    render_cell_dirty(
-				    row_cells[column],
-				    previous_row[column],
-				    visuals,
-				    cached,
-				    input_styles,
-				    uses_input_preexisting_colors,
-				    e.cfg.existing_color_handling,
-			    ) {
-				cell := row_cells[column]
-				previous_row[column] = cell
-				if cell == EMPTY_CELL {
-					append(buf, ' ')
+			cell := row_cells[column]
+			previous_row[column] = cell
+			if cell == EMPTY_CELL {
+				append(buf, ' ')
+			} else {
+				id := int(cell)
+				visual := effective_visual(
+					visuals[id],
+					input_styles[id],
+					uses_input_preexisting_colors[id],
+					e.cfg.existing_color_handling,
+				)
+				symbol := visual.symbol
+				if e.cfg.no_color {
+					append(buf, ..transmute([]byte)symbol)
 				} else {
-					id := int(cell)
-					visual := effective_visual(
-						visuals[id],
-						input_styles[id],
-						uses_input_preexisting_colors[id],
-						e.cfg.existing_color_handling,
-					)
-					symbol := visual.symbol
-					if e.cfg.no_color {
-						append(buf, ..transmute([]byte)symbol)
-						continue
-					}
 					fg, bg, bold := visual.fg, visual.bg, visual.bold
 					if visual != cached[id] {
 						code: [dynamic; 64]byte
@@ -1477,11 +1472,20 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 					code_len := int(render_code_lens[id])
 					append(buf, ..render_codes[id][:code_len])
 				}
-				column += 1
-				cursor_column += 1
 			}
+			cursor_column += 1
 		}
 	}
+}
+
+frame_build_all :: proc(e: ^Engine) {
+	width, height := update_render_cells_all(e)
+	frame_emit(e, width, height)
+}
+
+frame_build_selected :: proc(e: ^Engine, selected: []Char_Id) {
+	width, height := update_render_cells_selected(e, selected)
+	frame_emit(e, width, height)
 }
 
 prep_canvas :: proc(reuse_canvas: bool, move_to_top: string, visible_right, visible_top: int) {

@@ -68,17 +68,21 @@ mean wall time, mean child CPU time, a single exact Linux `wait4` peak-RSS
 observation, and observed terminal frame markers. This is an end-to-end
 production benchmark, not terminal-stream or intermediate-frame parity.
 
-Current five-repeat results (`BENCH_MIN_SECONDS=1`) for the direct Wipe/Sweep
-timelines are:
+Latest full-suite results: five repeats with `BENCH_MIN_SECONDS=1`, a dense
+200×50 input, seed 1, and disabled frame pacing. The aggregation is an
+unweighted mean across the 35 fixed-duration effects; Matrix and Thunderstorm
+are excluded because their wall-clock duration is configured independently.
 
-| Workload | Rust wall, best / mean | Odin wall, best / mean | Rust / Odin peak RSS | Frames | Result |
-|---|---:|---:|---:|---:|---:|
-| Wipe | 41.0 / 41.2 ms | 10.8 / 10.9 ms | 53.6 / 14.0 MiB | 138 / 138 | 3.80× faster; 74% lower RSS |
-| Sweep | 47.9 / 48.8 ms | 18.2 / 18.2 ms | 56.8 / 15.1 MiB | 220 / 220 | 2.63× faster; 73% lower RSS |
+| Metric | Rust | Odin | Odin / Rust |
+|---|---:|---:|---:|
+| Best wall, mean per effect | 238.5 ms | 113.1 ms | 0.47× (2.35× faster) |
+| Mean child CPU, mean per effect | 230.3 ms | 105.7 ms | 0.46× |
+| Peak RSS, mean per effect | 132.1 MiB | 13.3 MiB | 0.10× |
 
-Child CPU time is retained in the benchmark report. It is deliberately not a
-headline metric for these short processes: scheduler and process-start
-granularity make it less stable than elapsed wall time.
+The harness prints best and mean wall time, child CPU time, peak RSS, and
+observed frame markers for every effect. Frame counts are diagnostics rather
+than throughput normalizers: the two implementations can construct different
+intermediate compositions while honoring the same effect contract.
 
 ### Wall-clock-gated effects
 
@@ -87,15 +91,15 @@ for a configured interval. With pacing disabled, both use a full CPU core;
 their elapsed-time ratio and emitted frames are therefore diagnostics, **not**
 normalized throughput or semantic-parity claims.
 
-The following single-run diagnostics use `BENCH_MATRIX_RAIN_TIME=1` and the
-default `--storm-time 1` at 200×50. CPU is child CPU time divided by elapsed
-wall time; peak RSS is one `wait4` observation. Frame counts are host- and
-renderer-dependent observations only.
+The following five-repeat diagnostics use `BENCH_MATRIX_RAIN_TIME=5` and the
+default `--storm-time 1` at 200×50. CPU is mean child CPU time; peak RSS is
+one `wait4` observation. Frame counts are host- and renderer-dependent
+observations only.
 
-| Effect | Rust elapsed / CPU | Odin elapsed / CPU | Rust / Odin peak RSS | Observed frames, Rust / Odin |
+| Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Observed frames, Rust / Odin |
 |---|---:|---:|---:|---:|
-| Matrix (`--rain-time 1`) | 1.132 s / 99.0% | 1.129 s / 98.3% | 45.1 / 11.0 MiB | 7,188 / 21,772 |
-| Thunderstorm (`--storm-time 1`) | 1.181 s / 99.1% | 1.014 s / 98.6% | 142.8 / 11.0 MiB | 2,617 / 30,690 |
+| Matrix (`--rain-time 5`) | 5,133.5 / 5,110.0 ms | 5,120.0 / 5,096.0 ms | 45.3 / 11.0 MiB | 93,297 / 106,148 |
+| Thunderstorm (`--storm-time 1`) | 1,160.6 / 1,146.0 ms | 1,014.2 / 1,004.0 ms | 143.4 / 10.8 MiB | 4,708 / 30,986 |
 
 Different frame counts in the same time window are expected with the two
 renderer designs. A speed or parity claim for these effects needs a shared
@@ -105,15 +109,17 @@ Run the current production benchmark with:
 
 ```sh
 odin build src -o:speed -out:otfx
-BENCH_MIN_SECONDS=1 odin run bench -- 5
+odin build bench -o:speed -out:bench/bench
+BENCH_MIN_SECONDS=1 ./bench/bench 5
 ```
 
-The benchmark is entirely Odin; it sets fixed terminal dimensions for each
-child process, batches short effects into multi-second samples, and emits an
-end-of-run summary of unweighted mean wall time, child CPU time, peak RSS, and
-geometric wall-speedup. Matrix and Thunderstorm are explicitly excluded from
-that normalized summary. `BENCH_MATRIX_RAIN_TIME` and `BENCH_STORM_TIME` can
-shorten their default 5-second and 1-second diagnostic windows.
+The benchmark is entirely Odin; build it once and reuse `bench/bench`. It sets
+fixed terminal dimensions for each child process, batches short effects into
+multi-second samples, and emits an end-of-run summary of unweighted mean wall
+time, child CPU time, peak RSS, and geometric wall-speedup. Matrix and
+Thunderstorm are explicitly excluded from that normalized summary.
+`BENCH_MATRIX_RAIN_TIME` and `BENCH_STORM_TIME` can shorten their default
+5-second and 1-second diagnostic windows.
 
 ### Compile time
 
