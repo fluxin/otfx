@@ -274,11 +274,10 @@ matrix_trim :: proc(
 		tail := rain_colors[max(len(rain_colors) - 3, 0):]
 		darker := engine.adjust_color_brightness(tail[rand.int_max(len(tail))], 0.65)
 		target := visible_characters[c.characters.start + c.visible_head]
-		engine.character_set_visual(
-			chars,
-			target,
-			{symbol = visual_symbols[target].symbol, fg = darker},
-		)
+		chars.visual[target] = {
+			symbol = visual_symbols[target].symbol,
+			fg     = darker,
+		}
 	}
 }
 
@@ -327,16 +326,18 @@ matrix_tick_column :: proc(
 			next := characters[c.pending_head]
 			c.pending_head += 1
 			sym := rain_symbols[rand.int_max(len(rain_symbols))]
-			engine.character_set_visual(chars, next, {symbol = sym, fg = highlight_color})
+			chars.visual[next] = {
+				symbol = sym,
+				fg     = highlight_color,
+			}
 			if c.visible_count > 0 {
 				prev :=
 					visible_characters[c.characters.start + c.visible_head + c.visible_count - 1]
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				engine.character_set_visual(
-					chars,
-					prev,
-					{symbol = visual_symbols[prev].symbol, fg = col},
-				)
+				chars.visual[prev] = {
+					symbol = visual_symbols[prev].symbol,
+					fg     = col,
+				}
 			}
 			is_visible[next] = true
 			visible_characters[c.characters.start + c.visible_head + c.visible_count] = next
@@ -346,11 +347,10 @@ matrix_tick_column :: proc(
 			last_fg := visual_fg[last].fg
 			if last_fg != nil && last_fg.? == highlight_color {
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				engine.character_set_visual(
-					chars,
-					last,
-					{symbol = visual_symbols[last].symbol, fg = col},
-				)
+				chars.visual[last] = {
+					symbol = visual_symbols[last].symbol,
+					fg     = col,
+				}
 			}
 			if c.hold_time != 0 {
 				c.hold_time -= 1
@@ -392,7 +392,10 @@ matrix_tick_column :: proc(
 		}
 		col := swap_color ? next_color : (current_fg != nil ? current_fg.? : highlight_color)
 		sym := swap_symbol ? next_symbol : current_symbol
-		engine.character_set_visual(chars, id, {symbol = sym, fg = col})
+		chars.visual[id] = {
+			symbol = sym,
+			fg     = col,
+		}
 	}
 }
 
@@ -488,7 +491,7 @@ matrix_step_resolve_scenes :: proc(s: ^Matrix_State, chars: ^engine.Character_St
 	write := 0
 	for id in s.resolve_active {
 		visual, complete := engine.step_animation(&s.resolve_scenes[id])
-		engine.character_set_visual(chars, id, visual)
+		chars.visual[id] = visual
 		if complete {
 			s.resolve_active_ids[id] = 0
 		} else {
@@ -638,11 +641,7 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 						column.visible_count -= 1
 						if input_symbols[next] != " " {
 							scene := &s.resolve_scenes[next]
-							engine.character_set_visual(
-								chars,
-								next,
-								engine.scene_first_visual(scene^),
-							)
+							chars.visual[next] = engine.scene_first_visual(scene^)
 							if s.resolve_active_ids[next] == 0 {
 								s.resolve_active_ids[next] = 1
 								append(&s.resolve_active, next)

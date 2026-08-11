@@ -109,11 +109,10 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
 		e.chars.layer[id] = 1
-		engine.character_set_visual(
-			&e.chars,
-			id,
-			{symbol = e.chars.input_symbol[id], fg = spectrum[0]},
-		)
+		e.chars.visual[id] = {
+			symbol = e.chars.input_symbol[id],
+			fg     = spectrum[0],
+		}
 		e.chars.is_visible[id] = true
 	}
 	s.initial_hold = 25

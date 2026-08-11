@@ -106,7 +106,10 @@ overflow_row_color :: proc(
 	color: engine.Color,
 ) {
 	for id in characters {
-		engine.character_set_visual(chars, id, {symbol = chars.input_symbol[id], fg = color})
+		chars.visual[id] = {
+			symbol = chars.input_symbol[id],
+			fg     = color,
+		}
 	}
 }
 
@@ -177,11 +180,10 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		row := engine.group_members(final_rows, row_index)
 		for id in row {
 			if id < engine.Char_Id(len(final_colors)) {
-				engine.character_set_visual(
-					&e.chars,
-					id,
-					{symbol = e.chars.visual[id].symbol, fg = final_colors[id]},
-				)
+				e.chars.visual[id] = {
+					symbol = e.chars.visual[id].symbol,
+					fg     = final_colors[id],
+				}
 			}
 		}
 		overflow_append_row(s, row, true)

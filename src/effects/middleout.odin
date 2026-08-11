@@ -146,11 +146,10 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		)
 		s.center_limit = max(s.center_limit, s.center_max_steps[i])
 		s.full_limit = max(s.full_limit, s.full_max_steps[i])
-		engine.character_set_visual(
-			&e.chars,
-			id,
-			{symbol = e.chars.input_symbol[id], fg = s.config.starting_color},
-		)
+		e.chars.visual[id] = {
+			symbol = e.chars.input_symbol[id],
+			fg     = s.config.starting_color,
+		}
 		e.chars.is_visible[id] = true
 	}
 	s.full_limit = max(s.full_limit, 60)

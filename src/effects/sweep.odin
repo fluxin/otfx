@@ -171,7 +171,7 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 				phase = 1
 				scene = &s.second_scenes[id]
 			}
-			engine.character_set_visual(&e.chars, id, engine.scene_first_visual(scene^))
+			e.chars.visual[id] = engine.scene_first_visual(scene^)
 			if s.active_phase[id] < 0 do append(&s.active, id)
 			s.active_phase[id] = phase
 		}
@@ -192,7 +192,7 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		if phase < 0 do continue
 		scene := phase == 0 ? &s.first_scenes[id] : &s.second_scenes[id]
 		visual, scene_complete := engine.step_animation(scene)
-		engine.character_set_visual(&e.chars, id, visual)
+		e.chars.visual[id] = visual
 		if scene_complete {
 			s.active_phase[id] = -1
 		} else {

@@ -367,10 +367,6 @@ Character :: struct {
 
 Character_Storage :: #soa[dynamic]Character
 
-character_set_visual :: proc(chars: ^Character_Storage, id: Char_Id, visual: Visual) {
-	chars.visual[id] = visual
-}
-
 // ---------------------------------------------------------------------------
 // engine world
 // ---------------------------------------------------------------------------

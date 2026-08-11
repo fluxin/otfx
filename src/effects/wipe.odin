@@ -144,7 +144,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		for gi in change.added.start ..< change.added.start + change.added.len {
 			for id in engine.group_members(s.reveal.groups, gi) {
 				scene := &s.scenes[id]
-				engine.character_set_visual(&e.chars, id, engine.scene_first_visual(scene^))
+				e.chars.visual[id] = engine.scene_first_visual(scene^)
 				e.chars.is_visible[id] = true
 				if s.active_by_id[id] == 0 {
 					s.active_by_id[id] = 1
@@ -167,7 +167,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	for id in s.active {
 		if s.active_by_id[id] == 0 do continue
 		visual, complete := engine.step_animation(&s.scenes[id])
-		engine.character_set_visual(&e.chars, id, visual)
+		e.chars.visual[id] = visual
 		if complete {
 			s.active_by_id[id] = 0
 		} else {

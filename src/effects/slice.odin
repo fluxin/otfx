@@ -121,7 +121,10 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	defer delete(characters[:])
 	for id in characters {
 		color := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		engine.character_set_visual(&e.chars, id, {symbol = e.chars.input_symbol[id], fg = color})
+		e.chars.visual[id] = {
+			symbol = e.chars.input_symbol[id],
+			fg     = color,
+		}
 	}
 
 	// Horizontal Slice includes inner fill cells inside the text rectangle;

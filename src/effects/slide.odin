@@ -136,11 +136,10 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		c := e.chars.input_coord[id]
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		engine.character_set_visual(
-			&e.chars,
-			id,
-			{symbol = e.chars.input_symbol[id], fg = s.config.final_gradient_stops[0]},
-		)
+		e.chars.visual[id] = {
+			symbol = e.chars.input_symbol[id],
+			fg     = s.config.final_gradient_stops[0],
+		}
 	}
 
 	grouping: engine.Character_Group = .Row_T2B

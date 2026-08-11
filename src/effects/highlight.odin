@@ -119,7 +119,10 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		if i == 0 do s.palette_len = len(hl)
 		append(&s.palette, ..hl[:])
 		delete(hl[:])
-		engine.character_set_visual(&e.chars, id, {symbol = e.chars.input_symbol[id], fg = base})
+		e.chars.visual[id] = {
+			symbol = e.chars.input_symbol[id],
+			fg     = base,
+		}
 		e.chars.is_visible[id] = true
 	}
 }
