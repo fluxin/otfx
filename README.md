@@ -62,60 +62,58 @@ producing the same named effect and honoring its supported option surface.
 
 ## Performance
 
-Measurements run each real CLI with frame pacing disabled (`--frame-rate 0`),
-the same dense input, terminal dimensions, and seed. RSS is `/usr/bin/time`
-maximum resident set. They are useful production measurements, but not a
-byte-parity benchmark: `otfx` intentionally renders dirty runs while `ttfx`
-redraws through its reference path.
+[`bench/bench.odin`](bench/bench.odin) runs the real Rust and Odin CLIs with
+the same dense 200×50 input, seed, and `--frame-rate 0`. It reports best and
+mean wall time, mean child CPU time, a single exact Linux `wait4` peak-RSS
+observation, and observed terminal frame markers. This is an end-to-end
+production benchmark, not terminal-stream or intermediate-frame parity.
 
-| Workload | ttfx Rust | otfx Odin | Observed result |
-|---|---:|---:|---:|
-| Rain | 0.57 s / 110.5 MiB | 0.19 s / 45.2 MiB | 3.0× faster, 2.4× lower RSS |
-| Pour (`--pour-speed 1 --gap 4`) | 2.69 s / 129.0 MiB | 0.96 s / 39.0 MiB | 2.8× faster, 3.3× lower RSS |
-| Waves (`--wave-count 15`) | 1.84 s / 1.83 GiB | 0.20 s / 12.2 MiB | 9.2× faster, 153× lower RSS |
-| Colorshift (`--cycles 12`) | 1.94 s / 495.8 MiB | 0.07 s / 12.0 MiB | 27.7× faster, 41× lower RSS |
-| Fireworks (defaults) | 0.75 s / 255.2 MiB | 0.33 s / 13.3 MiB | 2.3× faster, 19× lower RSS |
-| Bubbles (`--bubble-delay 1`) | 0.64 s / 158.3 MiB | 0.27 s / 12.5 MiB | 2.4× faster, 12.7× lower RSS |
-| Startup (`slide`, `x`) | 1.2 ms | 1.2 ms | Equal on the current host; latency only |
+Current five-repeat results (`BENCH_MIN_SECONDS=1`) for the direct Wipe/Sweep
+timelines are:
 
-### Matrix is not a normalized speedup number
+| Workload | Rust wall, best / mean | Odin wall, best / mean | Rust / Odin peak RSS | Frames | Result |
+|---|---:|---:|---:|---:|---:|
+| Wipe | 41.0 / 41.2 ms | 10.8 / 10.9 ms | 53.6 / 14.0 MiB | 138 / 138 | 3.80× faster; 74% lower RSS |
+| Sweep | 47.9 / 48.8 ms | 18.2 / 18.2 ms | 56.8 / 15.1 MiB | 220 / 220 | 2.63× faster; 73% lower RSS |
 
-`matrix` has a wall-clock-gated rain phase. With `--rain-time 5`, both programs
-intentionally occupy about five seconds, so elapsed time cannot establish a
-meaningful speedup. The current long run is **5.34 s / 80.8 MiB** for Rust and
-**5.01 s / 29.8 MiB** for Odin. That shows a lower RSS footprint, but the
-1.07× elapsed ratio is **not** a throughput claim.
+Child CPU time is retained in the benchmark report. It is deliberately not a
+headline metric for these short processes: scheduler and process-start
+granularity make it less stable than elapsed wall time.
 
-There is a second reason to keep Matrix off a normalized chart: within that
-fixed wall-clock window, the two renderers can produce different numbers of
-frames: the current 200×50 run emitted **107,399 Rust frames** and **900,604
-Odin frames**. These are an observed sample, not stable metrics: scheduler and
-host throughput change the count. A fair Matrix comparison needs a shared
-virtual clock and fixed logical frame count; that harness is not implemented
-yet.
+### Wall-clock-gated effects
 
-`thunderstorm` has the same timing property through `--storm-time`; the
-benchmark sweep includes it with `--storm-time 1` for end-to-end and RSS
-observation, but it is also excluded from normalized speedup claims. At 200×50
-one sample one-second storm emitted **4,813 Rust frames** and **55,920 Odin
-frames**; those counts vary with scheduling just as Matrix does.
+`matrix` (`--rain-time`) and `thunderstorm` (`--storm-time`) deliberately run
+for a configured interval. With pacing disabled, both use a full CPU core;
+their elapsed-time ratio and emitted frames are therefore diagnostics, **not**
+normalized throughput or semantic-parity claims.
 
-The same caution applies in lesser degree to every row above: the numbers are
-end-to-end user-facing throughput and memory, not proof of equal intermediate
-frames. Do not interpret them as a semantic-parity benchmark.
+The following single-run diagnostics use `BENCH_MATRIX_RAIN_TIME=1` and the
+default `--storm-time 1` at 200×50. CPU is child CPU time divided by elapsed
+wall time; peak RSS is one `wait4` observation. Frame counts are host- and
+renderer-dependent observations only.
+
+| Effect | Rust elapsed / CPU | Odin elapsed / CPU | Rust / Odin peak RSS | Observed frames, Rust / Odin |
+|---|---:|---:|---:|---:|
+| Matrix (`--rain-time 1`) | 1.132 s / 99.0% | 1.129 s / 98.3% | 45.1 / 11.0 MiB | 7,188 / 21,772 |
+| Thunderstorm (`--storm-time 1`) | 1.181 s / 99.1% | 1.014 s / 98.6% | 142.8 / 11.0 MiB | 2,617 / 30,690 |
+
+Different frame counts in the same time window are expected with the two
+renderer designs. A speed or parity claim for these effects needs a shared
+virtual clock and a fixed logical-frame capture harness.
 
 Run the current production benchmark with:
 
 ```sh
 odin build src -o:speed -out:otfx
-python3 bench/bench.py 5
+BENCH_MIN_SECONDS=1 odin run bench -- 5
 ```
 
-`bench/bench.py` uses a 200×50 canvas, disables pacing, batches short effects
-into multi-second samples, and prints frame counts next to elapsed time. Matrix
-and Thunderstorm are intentionally labelled as wall-clock gated in its output
-and documentation. It includes the same small-input startup comparison as the
-performance table.
+The benchmark is entirely Odin; it sets fixed terminal dimensions for each
+child process, batches short effects into multi-second samples, and emits an
+end-of-run summary of unweighted mean wall time, child CPU time, peak RSS, and
+geometric wall-speedup. Matrix and Thunderstorm are explicitly excluded from
+that normalized summary. `BENCH_MATRIX_RAIN_TIME` and `BENCH_STORM_TIME` can
+shorten their default 5-second and 1-second diagnostic windows.
 
 ### Compile time
 

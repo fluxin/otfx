@@ -7,3 +7,7 @@ bench/bench
 bench/bench.bin
 bench/__pycache__/
 *.pyc
+
+# Local profiler captures.
+perf.data
+perf.data.old
