@@ -1,0 +1,621 @@
+package engine
+
+import "core:fmt"
+import "core:math"
+import ease "core:math/ease"
+import linalg "core:math/linalg"
+import "core:strconv"
+import "core:strings"
+
+// ---------------------------------------------------------------------------
+// geometry
+// ---------------------------------------------------------------------------
+
+Coord :: struct {
+	column: int,
+	row:    int,
+}
+
+coord :: proc(column, row: int) -> Coord {
+	return {column, row}
+}
+
+round_half_even :: proc(x: f64) -> int {
+	floor := math.floor(x)
+	diff := x - floor
+	if diff > 0.5 do return int(floor) + 1
+	if diff < 0.5 do return int(floor)
+	f := int(floor)
+	return f if f % 2 == 0 else f + 1
+}
+
+// Terminal cells are ~2:1; row deltas are doubled when requested.
+line_length :: proc(a, b: Coord, double_row_diff: bool) -> f64 {
+	v := coord_vec(b) - coord_vec(a)
+	if double_row_diff do v *= linalg.Vector2f64{1, 2}
+	return linalg.length(v)
+}
+
+coord_vec :: proc(c: Coord) -> linalg.Vector2f64 {
+	return {f64(c.column), f64(c.row)}
+}
+
+coord_on_line :: proc(start, end: Coord, t: f64) -> Coord {
+	p := linalg.lerp(coord_vec(start), coord_vec(end), t)
+	return {round_half_even(p.x), round_half_even(p.y)}
+}
+
+// Every effect path currently uses at most one control point. Keep the
+// quadratic De Casteljau hot path fixed-size and allocation-free.
+coord_on_quadratic_bezier :: proc(start, control, end: Coord, t: f64) -> Coord {
+	a := linalg.lerp(coord_vec(start), coord_vec(control), t)
+	b := linalg.lerp(coord_vec(control), coord_vec(end), t)
+	p := linalg.lerp(a, b, t)
+	return {round_half_even(p.x), round_half_even(p.y)}
+}
+
+quadratic_bezier_length :: proc(start, control, end: Coord) -> f64 {
+	length := 0.0
+	previous := start
+	// Preserve ttfx semantics: sample through t=0.9, omitting the last span.
+	for step in 1 ..< 10 {
+		point := coord_on_quadratic_bezier(start, control, end, f64(step) / 10)
+		length += line_length(previous, point, true)
+		previous = point
+	}
+	return length
+}
+
+// Circle points as rotation-matrix * radial vector. Terminal cells are roughly
+// twice as tall as they are wide, so double only the column offset.
+find_coords_on_circle :: proc(
+	origin: Coord,
+	radius, coords_limit: int,
+	unique: bool,
+) -> [dynamic]Coord {
+	points: [dynamic]Coord
+	if radius == 0 do return points
+	limit := coords_limit != 0 ? coords_limit : round_half_even(2 * math.PI * f64(radius))
+	seen: [dynamic]Coord
+	angle_step := 2 * math.PI / f64(limit)
+	radial := linalg.Vector2f64{f64(radius), 0}
+	origin_v := coord_vec(origin)
+	for i in 0 ..< limit {
+		angle := angle_step * f64(i)
+		rot := linalg.Matrix2f64 {
+			math.cos(angle),
+			-math.sin(angle),
+			math.sin(angle),
+			math.cos(angle),
+		}
+		q := rot * radial
+		q.x *= 2
+		p := origin_v + q
+		point := coord(round_half_even(p.x), round_half_even(p.y))
+		if unique {
+			dup := false
+			for q2 in seen {
+				if q2 == point {
+					dup = true
+					break
+				}
+			}
+			if dup do continue
+			append(&seen, point)
+		}
+		append(&points, point)
+	}
+	return points
+}
+
+find_coords_in_rect :: proc(origin: Coord, distance: int) -> [dynamic]Coord {
+	coords: [dynamic]Coord
+	if distance == 0 do return coords
+	reserve(&coords, (2 * distance + 1) * (2 * distance + 1))
+	for column in origin.column - distance ..= origin.column + distance {
+		for row in origin.row - distance ..= origin.row + distance {
+			append(&coords, coord(column, row))
+		}
+	}
+	return coords
+}
+
+// TerminalTextEffects calls this a circle; terminal cell aspect makes it an
+// ellipse with horizontal radius diameter and vertical radius diameter/2.
+find_coords_in_circle :: proc(center: Coord, diameter: int) -> [dynamic]Coord {
+	coords: [dynamic]Coord
+	if diameter == 0 do return coords
+	a_squared := math.pow(f64(diameter), 2)
+	b_squared := math.pow(f64(diameter) / 2, 2)
+	for column in center.column - diameter ..= center.column + diameter {
+		x := f64(column - center.column)
+		x_component := math.pow(x, 2) / a_squared
+		max_row_offset := int(math.sqrt(b_squared * (1 - x_component)))
+		for row in center.row - max_row_offset ..= center.row + max_row_offset {
+			append(&coords, coord(column, row))
+		}
+	}
+	return coords
+}
+
+extrapolate_along_ray :: proc(origin, target: Coord, offset_from_target: f64) -> Coord {
+	base := line_length(origin, target, false)
+	if base == 0 do return target
+	return coord_on_line(origin, target, (base + offset_from_target) / base)
+}
+
+find_normalized_distance_from_center :: proc(
+	bottom, top, left, right: int,
+	c: Coord,
+) -> (
+	f64,
+	bool,
+) {
+	y_offset := bottom - 1
+	x_offset := left - 1
+	w := right - x_offset
+	h := top - y_offset
+	col := c.column - x_offset
+	row := c.row - y_offset
+	if col < 1 || col > w || row < 1 || row > h do return 0, false
+	center_x := f64(w) / 2
+	center_y := f64(h) / 2
+	max_distance := math.sqrt(f64(w) * f64(w) + f64(h * 2) * f64(h * 2))
+	distance := math.sqrt(
+		math.pow(f64(col) - center_x, 2) + math.pow((f64(row) - center_y) * 2, 2),
+	)
+	return distance / (max_distance / 2), true
+}
+
+// ---------------------------------------------------------------------------
+// colors & gradients
+// ---------------------------------------------------------------------------
+
+Color :: struct {
+	r, g, b: u8,
+}
+
+color_from_hex :: proc(s: string) -> (Color, bool) {
+	t := strings.trim_left(s, "#")
+	t = strings.trim_right(t, "#")
+	if len(t) != 6 do return {}, false
+	c: Color
+	ok := true
+	c.r, ok = hex_byte(t[0], t[1]); if !ok do return {}, false
+	c.g, ok = hex_byte(t[2], t[3]); if !ok do return {}, false
+	c.b, ok = hex_byte(t[4], t[5]); if !ok do return {}, false
+	return c, true
+}
+
+hex_byte :: proc(hi, lo: byte) -> (u8, bool) {
+	a := hex_digit(hi)
+	b := hex_digit(lo)
+	if a < 0 || b < 0 do return 0, false
+	return u8(a << 4 | b), true
+}
+
+hex_digit :: proc(c: byte) -> int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c - 'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c - 'A') + 10
+	}
+	return -1
+}
+
+// ttfx CLI colors: <= 3 characters is an xterm-256 code, otherwise hex.
+parse_cli_color :: proc(s: string) -> (Color, bool) {
+	if len(s) <= 3 {
+		v, ok := strconv.parse_int(s)
+		if !ok || v < 0 || v > 255 do return {}, false
+		return xterm_to_rgb(u8(v)), true
+	}
+	return color_from_hex(s)
+}
+
+xterm_to_rgb :: proc(code: u8) -> Color {
+	c := int(code)
+	base := [16]Color {
+		{0, 0, 0},
+		{128, 0, 0},
+		{0, 128, 0},
+		{128, 128, 0},
+		{0, 0, 128},
+		{128, 0, 128},
+		{0, 128, 128},
+		{192, 192, 192},
+		{128, 128, 128},
+		{255, 0, 0},
+		{0, 255, 0},
+		{255, 255, 0},
+		{0, 0, 255},
+		{255, 0, 255},
+		{0, 255, 255},
+		{255, 255, 255},
+	}
+	switch {
+	case c < 16:
+		return base[c]
+	case c < 232:
+		v := c - 16
+		step :: proc(n: int) -> u8 {return n == 0 ? 0 : u8(55 + n * 40)}
+		return {step(v / 36), step((v / 6) % 6), step(v % 6)}
+	case:
+		g := u8(8 + (c - 232) * 10)
+		return {g, g, g}
+	}
+}
+
+// Upstream builds gradients with integer floor-division channel deltas, not
+// float lerp; keep that so palettes match what users know.
+gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]Color {
+	spectrum: [dynamic]Color
+	assert(len(stops) >= 1)
+	assert(len(steps) >= 1)
+	if len(stops) == 1 {
+		for _ in 0 ..< steps[0] do append(&spectrum, stops[0])
+		return spectrum
+	}
+	pair_count := len(stops) - 1 + int(do_loop)
+	for pair in 0 ..< pair_count {
+		step_count := steps[min(pair, len(steps) - 1)]
+		assert(step_count >= 1)
+		start := stops[pair]
+		end := stops[(pair + 1) % len(stops)]
+		start_rgb := [3]int{int(start.r), int(start.g), int(start.b)}
+		end_rgb := [3]int{int(end.r), int(end.g), int(end.b)}
+		delta := [3]int {
+			math.floor_div(end_rgb[0] - start_rgb[0], step_count),
+			math.floor_div(end_rgb[1] - start_rgb[1], step_count),
+			math.floor_div(end_rgb[2] - start_rgb[2], step_count),
+		}
+		range_start := len(spectrum) != 0 ? 1 : 0
+		for i in range_start ..< step_count {
+			rgb := start_rgb + delta * i
+			append(
+				&spectrum,
+				Color {
+					u8(clamp(rgb[0], 0, 255)),
+					u8(clamp(rgb[1], 0, 255)),
+					u8(clamp(rgb[2], 0, 255)),
+				},
+			)
+		}
+		append(&spectrum, end)
+	}
+	return spectrum
+}
+
+gradient_with_steps :: proc(stops: []Color, steps: int, do_loop: bool) -> [dynamic]Color {
+	return gradient_make(stops, []int{steps}, do_loop)
+}
+
+// Sample the same integer-delta interpolation used by gradient_make without
+// materializing the two-stop gradient. Index == steps is the exact end color.
+gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color {
+	assert(steps >= 1 && index >= 0 && index <= steps)
+	if index == steps do return end
+	start_rgb := [3]int{int(start.r), int(start.g), int(start.b)}
+	end_rgb := [3]int{int(end.r), int(end.g), int(end.b)}
+	delta := [3]int {
+		math.floor_div(end_rgb[0] - start_rgb[0], steps),
+		math.floor_div(end_rgb[1] - start_rgb[1], steps),
+		math.floor_div(end_rgb[2] - start_rgb[2], steps),
+	}
+	rgb := start_rgb + delta * index
+	return {u8(clamp(rgb[0], 0, 255)), u8(clamp(rgb[1], 0, 255)), u8(clamp(rgb[2], 0, 255))}
+}
+
+gradient_color_at_fraction :: proc(spectrum: []Color, fraction: f64) -> Color {
+	assert(fraction >= 0 && fraction <= 1)
+	n := len(spectrum)
+	index := clamp(int(math.ceil(fraction * f64(n))) - 1, 0, n - 1)
+	return spectrum[index]
+}
+
+Gradient_Direction :: enum {
+	Vertical,
+	Horizontal,
+	Radial,
+	Diagonal,
+}
+
+gdir_parse :: proc(s: string) -> (Gradient_Direction, bool) {
+	switch s {
+	case "vertical":
+		return .Vertical, true
+	case "horizontal":
+		return .Horizontal, true
+	case "radial":
+		return .Radial, true
+	case "diagonal":
+		return .Diagonal, true
+	}
+	return .Vertical, false
+}
+
+// Gradient sampling state is just bounds and direction. Effects walk their
+// character SoA once and derive the color directly; there is no canvas-sized
+// lookup table or associative map to allocate and fill first.
+Gradient_Sampler :: struct {
+	min_row, max_row: int,
+	min_col, max_col: int,
+	direction:        Gradient_Direction,
+}
+
+gradient_sampler :: proc(
+	min_row, max_row, min_col, max_col: int,
+	dir: Gradient_Direction,
+) -> Gradient_Sampler {
+	return {min_row, max_row, min_col, max_col, dir}
+}
+
+gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Color {
+	fraction: f64
+	switch s.direction {
+	case .Vertical:
+		fraction = f64(c.row - s.min_row + 1) / f64(s.max_row - s.min_row + 1)
+	case .Horizontal:
+		fraction = f64(c.column - s.min_col + 1) / f64(s.max_col - s.min_col + 1)
+	case .Diagonal:
+		numerator := f64((c.row - s.min_row + 1) * 2 + c.column - s.min_col + 1)
+		denominator := f64((s.max_row - s.min_row + 1) * 2 + s.max_col - s.min_col + 1)
+		fraction = numerator / denominator
+	case .Radial:
+		distance, ok := find_normalized_distance_from_center(
+			s.min_row,
+			s.max_row,
+			s.min_col,
+			s.max_col,
+			c,
+		)
+		fraction = ok ? distance : 0
+	}
+	return gradient_color_at_fraction(spectrum, clamp(fraction, 0.0, 1.0))
+}
+
+// RGB -> HSL -> RGB brightness adjustment (beams/highlight/matrix).
+adjust_color_brightness :: proc(color: Color, brightness: f64) -> Color {
+	hue_to_rgb :: proc(p, q, t: f64) -> f64 {
+		h := t
+		if h < 0 do h += 1
+		if h > 1 do h -= 1
+		if h < 1.0 / 6.0 do return p + (q - p) * 6.0 * h
+		if h < 1.0 / 2.0 do return q
+		if h < 2.0 / 3.0 do return p + (q - p) * (2.0 / 3.0 - h) * 6.0
+		return p
+	}
+	r := f64(color.r) / 255
+	g := f64(color.g) / 255
+	b := f64(color.b) / 255
+	max_val := max(r, max(g, b))
+	min_val := min(r, min(g, b))
+	lightness := (max_val + min_val) / 2
+	hue_value, saturation := 0.0, 0.0
+	if max_val != min_val {
+		diff := max_val - min_val
+		saturation =
+			lightness > 0.5 ? diff / (2.0 - max_val - min_val) : diff / (max_val + min_val)
+		switch {
+		case max_val == r:
+			hue_value = (g - b) / diff + (g < b ? 6.0 : 0.0)
+		case max_val == g:
+			hue_value = (b - r) / diff + 2.0
+		case:
+			hue_value = (r - g) / diff + 4.0
+		}
+		hue_value /= 6.0
+	}
+	lightness = clamp(lightness * brightness, 0.0, 1.0)
+	red, green, blue := lightness, lightness, lightness
+	if saturation != 0 {
+		q :=
+			lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - lightness * saturation
+		p := 2 * lightness - q
+		red = hue_to_rgb(p, q, hue_value + 1.0 / 3.0)
+		green = hue_to_rgb(p, q, hue_value)
+		blue = hue_to_rgb(p, q, hue_value - 1.0 / 3.0)
+	}
+	return {
+		u8(round_half_even(red * 255)),
+		u8(round_half_even(green * 255)),
+		u8(round_half_even(blue * 255)),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// easing — named functions come from core:math/ease.
+// ---------------------------------------------------------------------------
+
+Easing_Mode :: enum {
+	Native,
+	Cubic_Bezier,
+}
+
+Easing :: struct {
+	kind:   ease.Ease,
+	mode:   Easing_Mode,
+	bezier: [4]f64,
+}
+
+ease_of :: proc(kind: ease.Ease) -> Easing {
+	return {kind = kind}
+}
+
+cubic_bezier_easing :: proc(x1, y1, x2, y2: f64) -> Easing {
+	return {mode = .Cubic_Bezier, bezier = {x1, y1, x2, y2}}
+}
+
+easing_parse :: proc(s: string) -> (Easing, bool) {
+	k: ease.Ease
+	switch strings.to_lower(s) {
+	case "linear":
+		k = .Linear
+	case "in_sine":
+		k = .Sine_In
+	case "out_sine":
+		k = .Sine_Out
+	case "in_out_sine":
+		k = .Sine_In_Out
+	case "in_quad":
+		k = .Quadratic_In
+	case "out_quad":
+		k = .Quadratic_Out
+	case "in_out_quad":
+		k = .Quadratic_In_Out
+	case "in_cubic":
+		k = .Cubic_In
+	case "out_cubic":
+		k = .Cubic_Out
+	case "in_out_cubic":
+		k = .Cubic_In_Out
+	case "in_quart":
+		k = .Quartic_In
+	case "out_quart":
+		k = .Quartic_Out
+	case "in_out_quart":
+		k = .Quartic_In_Out
+	case "in_quint":
+		k = .Quintic_In
+	case "out_quint":
+		k = .Quintic_Out
+	case "in_out_quint":
+		k = .Quintic_In_Out
+	case "in_expo":
+		k = .Exponential_In
+	case "out_expo":
+		k = .Exponential_Out
+	case "in_out_expo":
+		k = .Exponential_In_Out
+	case "in_circ":
+		k = .Circular_In
+	case "out_circ":
+		k = .Circular_Out
+	case "in_out_circ":
+		k = .Circular_In_Out
+	case "in_back":
+		k = .Back_In
+	case "out_back":
+		k = .Back_Out
+	case "in_out_back":
+		k = .Back_In_Out
+	case "in_elastic":
+		k = .Elastic_In
+	case "out_elastic":
+		k = .Elastic_Out
+	case "in_out_elastic":
+		k = .Elastic_In_Out
+	case "in_bounce":
+		k = .Bounce_In
+	case "out_bounce":
+		k = .Bounce_Out
+	case "in_out_bounce":
+		k = .Bounce_In_Out
+	case:
+		return {}, false
+	}
+	return {kind = k}, true
+}
+
+easing_apply :: #force_inline proc(e: Easing, p: f64) -> f64 {
+	if e.mode == .Native do return ease.ease(e.kind, p)
+	if p <= 0 do return 0
+	if p >= 1 do return 1
+	x1, y1, x2, y2 := e.bezier[0], e.bezier[1], e.bezier[2], e.bezier[3]
+	t := p
+	for _ in 0 ..< 20 {
+		one_minus_t := 1 - t
+		x := 3 * x1 * one_minus_t * one_minus_t * t + 3 * x2 * one_minus_t * t * t + t * t * t
+		delta := x - p
+		if math.abs(delta) < 1e-5 do break
+		derivative :=
+			3 * one_minus_t * one_minus_t * x1 +
+			6 * one_minus_t * t * (x2 - x1) +
+			3 * t * t * (1 - x2)
+		if math.abs(derivative) < 1e-6 do break
+		t -= delta / derivative
+	}
+	one_minus_t := 1 - t
+	return 3 * y1 * one_minus_t * one_minus_t * t + 3 * y2 * one_minus_t * t * t + t * t * t
+}
+
+// Shared dense-timeline sampler used by scene playback and effects that keep
+// start ticks instead of materializing one Scene per character.
+eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: Easing) -> int {
+	assert(total_steps >= 1)
+	ratio := f64(step) / f64(total_steps)
+	factor := easing_apply(fn, ratio)
+	return clamp(round_half_even(factor * f64(total_steps - 1)), 0, total_steps - 1)
+}
+
+Easing_Tracker :: struct {
+	fn:               Easing,
+	total_steps:      int,
+	current_step:     int,
+	eased_value:      f64,
+	last_eased_value: f64,
+	step_delta:       f64,
+}
+
+tracker_step :: proc(t: ^Easing_Tracker) -> f64 {
+	if t.current_step < t.total_steps {
+		t.current_step += 1
+		t.eased_value = easing_apply(t.fn, f64(t.current_step) / f64(t.total_steps))
+		t.step_delta = t.eased_value - t.last_eased_value
+		t.last_eased_value = t.eased_value
+	}
+	return t.eased_value
+}
+
+tracker_reset :: proc(t: ^Easing_Tracker) {
+	t.current_step, t.eased_value, t.last_eased_value, t.step_delta = 0, 0, 0, 0
+}
+
+tracker_complete :: proc(t: Easing_Tracker) -> bool {
+	return t.current_step >= t.total_steps
+}
+
+// ---------------------------------------------------------------------------
+// ansi
+// ---------------------------------------------------------------------------
+
+ANSI_SAVE_CURSOR: string = "\x1b7"
+ANSI_RESTORE_CURSOR: string = "\x1b8"
+ANSI_HIDE_CURSOR: string = "\x1b[?25l"
+ANSI_SHOW_CURSOR: string = "\x1b[?25h"
+ANSI_RESET_ALL: string = "\x1b[0m"
+ANSI_CLEAR_TO_END: string = "\x1b[0J"
+ANSI_BOLD: string = "\x1b[1m"
+ANSI_ITALIC: string = "\x1b[3m"
+ANSI_UNDERLINE: string = "\x1b[4m"
+ANSI_BLINK: string = "\x1b[5m"
+ANSI_REVERSE: string = "\x1b[7m"
+
+buf_append_decimal :: proc(buf: ^$Buffer, v: int) {
+	if v >= 100 {
+		append(buf, byte('0') + byte(v / 100))
+	}
+	if v >= 10 {
+		append(buf, byte('0') + byte((v / 10) % 10))
+	}
+	append(buf, byte('0') + byte(v % 10))
+}
+
+buf_append_sgr_color :: proc(buf: ^$Buffer, selector: int, c: Color) {
+	append(buf, '\x1b', '[')
+	buf_append_decimal(buf, selector)
+	append(buf, ';', '2', ';')
+	buf_append_decimal(buf, int(c.r))
+	append(buf, ';')
+	buf_append_decimal(buf, int(c.g))
+	append(buf, ';')
+	buf_append_decimal(buf, int(c.b))
+	append(buf, 'm')
+}
+
+move_cursor_up :: proc(n: int) -> string {
+	return fmt.tprintf("\x1b[%dA", n)
+}

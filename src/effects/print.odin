@@ -1,0 +1,226 @@
+package effects
+
+import engine "../engine"
+
+import "core:fmt"
+
+Print_Config :: struct {
+	print_head_return_speed:  f64,
+	print_speed:              int,
+	print_head_easing:        engine.Easing,
+	final_gradient_stops:     [dynamic]engine.Color,
+	final_gradient_steps:     [dynamic]int,
+	final_gradient_direction: engine.Gradient_Direction,
+}
+
+print_config_default :: proc() -> Print_Config {
+	cfg := Print_Config {
+		print_head_return_speed  = 1.5,
+		print_speed              = 2,
+		print_head_easing        = engine.ease_of(.Quadratic_In_Out),
+		final_gradient_direction = .Diagonal,
+	}
+	append(
+		&cfg.final_gradient_stops,
+		..[]engine.Color {
+			engine.Color{0x02, 0xb8, 0xbd},
+			engine.Color{0xc1, 0xf0, 0xe3},
+			engine.Color{0x00, 0xff, 0xa0},
+		},
+	)
+	append(&cfg.final_gradient_steps, 12)
+	return cfg
+}
+
+print_parse :: proc(cfg: ^Print_Config, args: []string) -> bool {
+	for i := 0; i < len(args); i += 1 {
+		name, value, has_value := split_opt(args[i])
+		switch name {
+		case "--print-head-return-speed":
+			if !parse_float_flag(&cfg.print_head_return_speed, args, &i, value, has_value) || cfg.print_head_return_speed <= 0 do return false
+		case "--print-speed":
+			if !parse_int_flag(&cfg.print_speed, args, &i, value, has_value) || cfg.print_speed <= 0 do return false
+		case "--print-head-easing":
+			if !parse_ease_flag(&cfg.print_head_easing, args, &i, value, has_value) do return false
+		case "--final-gradient-stops":
+			if !parse_colors_flag(&cfg.final_gradient_stops, args, &i, value, has_value) do return false
+		case "--final-gradient-steps":
+			if !parse_ints_flag(&cfg.final_gradient_steps, args, &i, value, has_value) do return false
+		case "--final-gradient-direction":
+			if !parse_gdir_flag(&cfg.final_gradient_direction, args, &i, value, has_value) do return false
+		case:
+			fmt.eprintln("Error: unknown print option: ", name)
+			return false
+		}
+	}
+	return true
+}
+
+Print_Row :: struct {
+	span:  engine.Span,
+	typed: int,
+}
+
+Print_State :: struct {
+	config:      Print_Config,
+	row_chars:   [dynamic]engine.Char_Id,
+	rows:        [dynamic]Print_Row,
+	current_row: int,
+	typing_head: engine.Char_Id,
+	typing:      bool,
+	last_column: int,
+}
+
+print_row_characters :: proc(s: ^Print_State, row_index: int) -> []engine.Char_Id {
+	return engine.span_slice(s.row_chars[:], s.rows[row_index].span)
+}
+
+print_row_all_fill :: proc(chars: ^engine.Character_Storage, ids: []engine.Char_Id) -> bool {
+	for id in ids {
+		if !chars.is_fill[id] do return false
+	}
+	return true
+}
+
+print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
+	s.typing_head = engine.add_character(e, "█", engine.coord(1, 1))
+
+	spectrum := engine.gradient_make(
+		s.config.final_gradient_stops[:],
+		s.config.final_gradient_steps[:],
+		false,
+	)
+	defer delete(spectrum[:])
+	sampler := engine.gradient_sampler(
+		e.canvas.text_bottom,
+		e.canvas.text_top,
+		e.canvas.text_left,
+		e.canvas.text_right,
+		s.config.final_gradient_direction,
+	)
+	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
+	characters := engine.get_characters(query, engine.filter_all_fills(), .Top_Bottom_Left_Right)
+	defer delete(characters[:])
+	final_colors := make([]engine.Color, len(e.chars), context.temp_allocator)
+	white := engine.Color{0xff, 0xff, 0xff}
+	for id in characters {
+		coord := e.chars.input_coord[id]
+		if coord.row >= e.canvas.text_bottom &&
+		   coord.row <= e.canvas.text_top &&
+		   coord.column >= e.canvas.text_left &&
+		   coord.column <= e.canvas.text_right {
+			final_colors[id] = engine.gradient_sample(sampler, spectrum[:], coord)
+		} else {
+			final_colors[id] = white
+		}
+	}
+
+	groups := engine.get_characters_grouped(query, engine.filter_all_fills(), .Row_T2B)
+	defer engine.groups_delete(&groups)
+	for group_index in 0 ..< engine.group_count(groups) {
+		group := engine.group_slice(groups, group_index)
+		all_fill := print_row_all_fill(&e.chars, group)
+		right_extent := 0
+		if !all_fill {
+			for id in group {
+				if !e.chars.is_fill[id] do right_extent = max(right_extent, e.chars.input_coord[id].column)
+			}
+		}
+		start := len(s.row_chars)
+		for id in group {
+			if all_fill && len(s.row_chars) > start do break
+			if !all_fill && e.chars.input_coord[id].column > right_extent do continue
+			e.chars.current_coord[id] = engine.coord(e.chars.input_coord[id].column, 1)
+			scene := engine.new_scene(e, false, .None, nil)
+			gradient := engine.gradient_with_steps(
+				[]engine.Color{white, final_colors[id]},
+				5,
+				false,
+			)
+			engine.scene_add_gradient(
+				&e.scenes[scene],
+				[]string{"█", "▓", "▒", "░", e.chars.input_symbol[id]},
+				3,
+				gradient[:],
+				nil,
+			)
+			delete(gradient[:])
+			engine.activate_scene(e, id, scene)
+			append(&s.row_chars, id)
+		}
+		append(&s.rows, Print_Row{{start, len(s.row_chars) - start}, 0})
+	}
+	s.typing = len(s.rows) > 0
+}
+
+print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
+	if len(e.active) == 0 && !s.typing do return false
+	head_path := e.chars.active_path[s.typing_head]
+	if head_path >= 0 {
+		// carriage return is still active
+	} else if s.typing {
+		row := &s.rows[s.current_row]
+		characters := print_row_characters(s, s.current_row)
+		if row.typed < len(characters) {
+			count := min(len(characters) - row.typed, s.config.print_speed)
+			for _ in 0 ..< count {
+				id := characters[row.typed]
+				row.typed += 1
+				e.chars.is_visible[id] = true
+				engine.active_insert(e, id)
+				s.last_column = e.chars.input_coord[id].column
+			}
+		} else if s.current_row + 1 < len(s.rows) {
+			for row_index in 0 ..= s.current_row {
+				processed := &s.rows[row_index]
+				ids := print_row_characters(s, row_index)[:processed.typed]
+				for id in ids do e.chars.current_coord[id].row += 1
+			}
+			previous := s.current_row
+			s.current_row += 1
+			current := &s.rows[s.current_row]
+			current_ids := print_row_characters(s, s.current_row)
+			previous_ids := print_row_characters(s, previous)[:s.rows[previous].typed]
+			if !print_row_all_fill(&e.chars, previous_ids) &&
+			   !print_row_all_fill(&e.chars, current_ids) {
+				left_extent := e.canvas.right
+				for id in current_ids {
+					if !e.chars.is_fill[id] do left_extent = min(left_extent, e.chars.input_coord[id].column)
+				}
+				trim := 0
+				for trim < len(current_ids) && e.chars.input_coord[current_ids[trim]].column < left_extent do trim += 1
+				current.span.start += trim
+				current.span.len -= trim
+				current_ids = print_row_characters(s, s.current_row)
+			}
+
+			e.chars.current_coord[s.typing_head] = engine.coord(s.last_column, 1)
+			e.chars.is_visible[s.typing_head] = true
+			target_column := e.chars.input_coord[current_ids[0]].column
+			path := engine.new_path(
+				e,
+				s.config.print_head_return_speed,
+				s.config.print_head_easing,
+				nil,
+				0,
+				false,
+			)
+			engine.path_add_waypoint(&e.paths[path], engine.coord(target_column, 1))
+			engine.register_event(
+				e,
+				s.typing_head,
+				.Path_Complete,
+				.Path,
+				path,
+				{kind = .Set_Visible, visible = false},
+			)
+			engine.activate_path(e, s.typing_head, path)
+			engine.active_insert(e, s.typing_head)
+		} else {
+			s.typing = false
+		}
+	}
+	engine.update(e)
+	engine.frame(e)
+	return true
+}

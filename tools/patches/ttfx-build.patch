@@ -1,0 +1,39 @@
+diff --git a/src/effects/thunderstorm.rs b/src/effects/thunderstorm.rs
+index 3ec715d..36273b5 100644
+--- a/src/effects/thunderstorm.rs
++++ b/src/effects/thunderstorm.rs
+@@ -359,17 +359,17 @@ impl Thunderstorm {
+                 let neighbor_symbol = ctx.terminal.arena[neighbor.0 as usize].input_symbol.clone();
+                 if neighbor_symbol == "/" {
+                     column += 1;
+-                    symbol = ctx.rng.choice(&["|", "\\"]);
++                    symbol = *ctx.rng.choice(&["|", "\\"]);
+                 } else if neighbor_symbol == "\\" {
+                     column -= 1;
+-                    symbol = ctx.rng.choice(&["|", "/"]);
++                    symbol = *ctx.rng.choice(&["|", "/"]);
+                 } else {
+                     let delta = *ctx.rng.choice(&[-1i64, 1]);
+                     column += delta;
+                     symbol = if delta == 1 { "\\" } else { "/" };
+                 }
+             } else {
+-                symbol = ctx.rng.choice(&["\\", "/", "|"]);
++                symbol = *ctx.rng.choice(&["\\", "/", "|"]);
+             }
+ 
+             let strike_char = self.get_next_strike_char(ctx);
+diff --git a/src/lib.rs b/src/lib.rs
+index 54be714..575b10e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -3,6 +3,9 @@ pub mod effects;
+ pub mod engine;
+ pub mod utils;
+ 
++// Compile-timing probe: invalidates only the ttfx crate, with no runtime effect.
++const _CACHED_INVALIDATION_PROBE: () = ();
++
+ use std::sync::atomic::{AtomicBool, Ordering};
+ 
+ static INTERRUPTED: AtomicBool = AtomicBool::new(false);

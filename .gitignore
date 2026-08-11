@@ -1,0 +1,5 @@
+# Reproducibly downloaded Rust reference; see tools/setup/download_ttfx.sh.
+third_party/
+PERFORMANCE_METHODOLOGY.md
+src.bin
+otfx
