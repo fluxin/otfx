@@ -203,14 +203,14 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 				e.chars.input_coord[id],
 				ease.ease(s.config.movement_easing, progress),
 			)
-			e.chars.visual_symbol[id] = s.drop_symbols[i]
-			e.chars.visual_fg[id] = s.drop_colors[i]
+			e.chars.visual[id].symbol = s.drop_symbols[i]
+			e.chars.visual[id].fg = s.drop_colors[i]
 			continue
 		}
 		e.chars.current_coord[id] = e.chars.input_coord[id]
-		e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+		e.chars.visual[id].symbol = e.chars.input_symbol[id]
 		fade_tick := age - (s.max_steps[i] - 1)
-		e.chars.visual_fg[id] = engine.gradient_between_step(
+		e.chars.visual[id].fg = engine.gradient_between_step(
 			s.drop_colors[i],
 			s.final_colors[i],
 			7,

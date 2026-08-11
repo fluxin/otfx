@@ -180,9 +180,9 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 				start := s.typing_start_ticks[i]
 				if start < 0 do continue
 				frame := min((s.typing_tick - start) / 2, Decrypt_Typing_Frames - 1)
-				e.chars.visual_symbol[id] =
+				e.chars.visual[id].symbol =
 					frame < Decrypt_Typing_Frames - 1 ? blocks[frame] : s.encrypted_symbols[int(s.typing_symbols[i])]
-				e.chars.visual_fg[id] = s.typing_colors[i * Decrypt_Typing_Frames + frame]
+				e.chars.visual[id].fg = s.typing_colors[i * Decrypt_Typing_Frames + frame]
 			}
 			s.typing_tick += 1
 			engine.frame(e, s.characters[:])
@@ -193,9 +193,9 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 		if s.decrypt_tick == s.decrypt_finish_tick do return false
 		for id, i in s.characters {
 			if s.decrypt_tick < Decrypt_Fast_Ticks {
-				e.chars.visual_symbol[id] =
+				e.chars.visual[id].symbol =
 					s.encrypted_symbols[int(s.fast_symbols[i * Decrypt_Fast_Frames + s.decrypt_tick / 2])]
-				e.chars.visual_fg[id] = s.decrypt_colors[i]
+				e.chars.visual[id].fg = s.decrypt_colors[i]
 				continue
 			}
 			slow_tick := s.decrypt_tick - Decrypt_Fast_Ticks
@@ -206,14 +206,14 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 				s.slow_frame[i] = u8(frame)
 			}
 			if frame < int(s.slow_counts[i]) {
-				e.chars.visual_symbol[id] =
+				e.chars.visual[id].symbol =
 					s.encrypted_symbols[int(s.slow_symbols[i * Decrypt_Slow_Max_Frames + frame])]
-				e.chars.visual_fg[id] = s.decrypt_colors[i]
+				e.chars.visual[id].fg = s.decrypt_colors[i]
 				continue
 			}
 			discovered_tick := slow_tick - s.slow_totals[i]
-			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
-			e.chars.visual_fg[id] =
+			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			e.chars.visual[id].fg =
 				discovered_tick < Decrypt_Discovered_Ticks ? engine.gradient_between_step(engine.Color{0xff, 0xff, 0xff}, s.final_colors[i], 10, min(discovered_tick / 5, 10)) : s.final_colors[i]
 		}
 		s.decrypt_tick += 1

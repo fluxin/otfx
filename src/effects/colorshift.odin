@@ -121,7 +121,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	}
 	input_coords := e.chars.input_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	n := len(s.gradient)
 
 	for id, i in ids {
@@ -156,7 +156,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		}
 		if k == n do k = 0
 		s.shifts[i] = k
-		visual_fg[id] = s.gradient[k]
+		visual_fg[id].fg = s.gradient[k]
 		if len(s.final_colors) != 0 {
 			s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		}
@@ -165,7 +165,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 
 colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 	ids := e.character_sets.input[:]
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	n := len(s.gradient)
 	frames := s.config.gradient_frames
 	cycle_ticks := s.config.cycles * n * frames
@@ -173,7 +173,7 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 		for id, i in ids {
 			index := s.shifts[i] + s.palette_index
 			if index >= n do index -= n
-			visual_fg[id] = s.gradient[index]
+			visual_fg[id].fg = s.gradient[index]
 		}
 		s.palette_tick += 1
 		if s.palette_tick == frames {
@@ -191,7 +191,7 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 			start_index := s.shifts[i] - 1
 			if start_index < 0 do start_index += n
 			start := s.gradient[start_index]
-			visual_fg[id] = engine.gradient_between_step(
+			visual_fg[id].fg = engine.gradient_between_step(
 				start,
 				s.final_colors[i],
 				transition_steps,

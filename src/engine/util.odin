@@ -464,40 +464,12 @@ easing_parse :: proc(s: string) -> (ease.Ease, bool) {
 	return k, true
 }
 
-// Shared dense-timeline sampler used by scene playback and effects that keep
-// start ticks instead of materializing one Scene per character.
+// Shared dense-timeline sampler used by effects that keep start ticks.
 eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease) -> int {
 	assert(total_steps >= 1)
 	ratio := f64(step) / f64(total_steps)
 	factor := ease.ease(fn, ratio)
 	return clamp(round_half_even(factor * f64(total_steps - 1)), 0, total_steps - 1)
-}
-
-Easing_Tracker :: struct {
-	fn:               ease.Ease,
-	total_steps:      int,
-	current_step:     int,
-	eased_value:      f64,
-	last_eased_value: f64,
-	step_delta:       f64,
-}
-
-tracker_step :: proc(t: ^Easing_Tracker) -> f64 {
-	if t.current_step < t.total_steps {
-		t.current_step += 1
-		t.eased_value = ease.ease(t.fn, f64(t.current_step) / f64(t.total_steps))
-		t.step_delta = t.eased_value - t.last_eased_value
-		t.last_eased_value = t.eased_value
-	}
-	return t.eased_value
-}
-
-tracker_reset :: proc(t: ^Easing_Tracker) {
-	t.current_step, t.eased_value, t.last_eased_value, t.step_delta = 0, 0, 0, 0
-}
-
-tracker_complete :: proc(t: Easing_Tracker) -> bool {
-	return t.current_step >= t.total_steps
 }
 
 // ---------------------------------------------------------------------------

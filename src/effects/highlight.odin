@@ -61,7 +61,7 @@ highlight_parse :: proc(cfg: ^Highlight_Config, args: []string) -> bool {
 
 Highlight_State :: struct {
 	config:       Highlight_Config,
-	easer:        engine.Sequence_Easer,
+	reveal:       engine.Group_Reveal,
 	characters:   [dynamic]engine.Char_Id,
 	index_by_id:  [dynamic]int,
 	palette:      [dynamic]engine.Color,
@@ -77,10 +77,10 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		engine.filter_input(),
 		s.config.highlight_direction,
 	)
-	s.easer.groups = groups
-	s.easer.tracker = engine.Easing_Tracker {
-		fn          = .Circular_In_Out,
-		total_steps = 100,
+	s.reveal = engine.Group_Reveal {
+		groups   = groups,
+		ease     = .Circular_In_Out,
+		duration = 100,
 	}
 
 	spectrum := engine.gradient_make(
@@ -125,12 +125,12 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 }
 
 highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
-	if len(s.active_slots) == 0 && engine.seq_complete(s.easer) {
+	if len(s.active_slots) == 0 && engine.group_reveal_complete(s.reveal) {
 		return false
 	}
-	r := engine.seq_step(&s.easer)
-	for gi in r.added_start ..< r.added_end {
-		for id in engine.group_slice(s.easer.groups, gi) {
+	change := engine.group_reveal_step(&s.reveal)
+	for gi in change.added.start ..< change.added.start + change.added.len {
+		for id in engine.group_members(s.reveal.groups, gi) {
 			slot := s.index_by_id[id]
 			s.start_ticks[slot] = s.tick
 			append(&s.active_slots, slot)
@@ -141,7 +141,7 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
 		age := s.tick - s.start_ticks[slot]
 		if age >= s.palette_len * 2 do continue
 		id := s.characters[slot]
-		e.chars.visual_fg[id] = s.palette[slot * s.palette_len + age / 2]
+		e.chars.visual[id].fg = s.palette[slot * s.palette_len + age / 2]
 		if age + 1 < s.palette_len * 2 {s.active_slots[write] = slot; write += 1}
 	}
 	resize(&s.active_slots, write)

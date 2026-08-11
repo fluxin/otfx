@@ -161,9 +161,9 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	case .Vertical:
 		groups := engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
 		defer engine.groups_delete(&groups)
-		count := engine.group_count(groups)
+		count := len(groups.spans)
 		for group_index in 0 ..< count {
-			for id in engine.group_slice(groups, group_index) {
+			for id in engine.group_members(groups, group_index) {
 				coord := e.chars.input_coord[id]
 				if coord.column <= e.canvas.text_center.column {
 					slice_schedule(
@@ -176,7 +176,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 					)
 				}
 			}
-			for id in engine.group_slice(groups, count - group_index - 1) {
+			for id in engine.group_members(groups, count - group_index - 1) {
 				coord := e.chars.input_coord[id]
 				if coord.column > e.canvas.text_center.column {
 					slice_schedule(
@@ -194,9 +194,9 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		speed *= 2
 		groups := engine.get_characters_grouped(query, engine.filter_all_fills(), .Column_R2L)
 		defer engine.groups_delete(&groups)
-		count := engine.group_count(groups)
+		count := len(groups.spans)
 		for group_index in 0 ..< count {
-			for id in engine.group_slice(groups, group_index) {
+			for id in engine.group_members(groups, group_index) {
 				coord := e.chars.input_coord[id]
 				if coord.column < e.canvas.text_left ||
 				   coord.column > e.canvas.text_right ||
@@ -215,7 +215,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 					)
 				}
 			}
-			for id in engine.group_slice(groups, count - group_index - 1) {
+			for id in engine.group_members(groups, count - group_index - 1) {
 				coord := e.chars.input_coord[id]
 				if coord.column < e.canvas.text_left ||
 				   coord.column > e.canvas.text_right ||
@@ -238,18 +238,18 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	case .Diagonal:
 		groups := engine.get_characters_grouped(query, engine.filter_input(), .Diagonal_BL2TR)
 		defer engine.groups_delete(&groups)
-		count := engine.group_count(groups)
+		count := len(groups.spans)
 		middle := count / 2
 		left_index, right_index := 0, middle
 		for left_index < middle || right_index < count {
 			if left_index < middle {
-				group := engine.group_slice(groups, left_index)
+				group := engine.group_members(groups, left_index)
 				origin := engine.coord(e.chars.input_coord[group[0]].column, e.canvas.bottom - 1)
 				for id in group do slice_schedule(s, e, slots[:], id, origin, speed)
 				left_index += 1
 			}
 			if right_index < count {
-				group := engine.group_slice(groups, right_index)
+				group := engine.group_members(groups, right_index)
 				origin := engine.coord(
 					e.chars.input_coord[group[len(group) - 1]].column,
 					e.canvas.top + 1,

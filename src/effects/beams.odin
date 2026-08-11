@@ -2,6 +2,7 @@ package effects
 
 import engine "../engine"
 import rand "core:math/rand"
+import "core:slice"
 
 import "core:fmt"
 
@@ -177,7 +178,7 @@ beams_make_group :: proc(
 	speed := f64(rand.int_range(rng.lo, rng.hi + 1)) * 0.1
 	// get_characters_grouped already orders row groups by column and column
 	// groups by row. Consume that producer contract instead of sorting again.
-	if rand.int_max(2) == 0 do engine.reverse_slice(g)
+	if rand.int_max(2) == 0 do slice.reverse(g)
 	span := engine.Span {
 		start = len(group_chars),
 		len   = len(g),
@@ -245,8 +246,8 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 		engine.filter_all_fills(),
 		.Row_B2T,
 	)
-	for gi in 0 ..< engine.group_count(row_groups) {
-		g := engine.group_slice(row_groups, gi)
+	for gi in 0 ..< len(row_groups.spans) {
+		g := engine.group_members(row_groups, gi)
 		append(&s.groups, beams_make_group(&s.group_chars, g, .Row, s.config.beam_row_speed_range))
 	}
 	engine.groups_delete(&row_groups)
@@ -255,8 +256,8 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 		engine.filter_all_fills(),
 		.Column_L2R,
 	)
-	for gi in 0 ..< engine.group_count(col_groups) {
-		g := engine.group_slice(col_groups, gi)
+	for gi in 0 ..< len(col_groups.spans) {
+		g := engine.group_members(col_groups, gi)
 		append(
 			&s.groups,
 			beams_make_group(&s.group_chars, g, .Column, s.config.beam_column_speed_range),
@@ -310,11 +311,11 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 				palette_index := age / s.config.beam_gradient_frames
 				if palette_index < len(s.beam_palette) {
 					symbols := s.beam_modes[id] == .Row ? s.row_symbols : s.column_symbols
-					e.chars.visual_symbol[id] = symbols[palette_index]
-					e.chars.visual_fg[id] = s.beam_palette[palette_index]
+					e.chars.visual[id].symbol = symbols[palette_index]
+					e.chars.visual[id].fg = s.beam_palette[palette_index]
 				} else {
-					e.chars.visual_symbol[id] = e.chars.input_symbol[id]
-					e.chars.visual_fg[id] = engine.gradient_between_step(
+					e.chars.visual[id].symbol = e.chars.input_symbol[id]
+					e.chars.visual[id].fg = engine.gradient_between_step(
 						s.final_colors[id],
 						s.faded_colors[id],
 						10,
@@ -328,8 +329,8 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 		if wipe_start >= 0 {
 			age := s.tick - wipe_start
 			if age < 11 * s.config.final_gradient_frames {
-				e.chars.visual_symbol[id] = e.chars.input_symbol[id]
-				e.chars.visual_fg[id] = engine.gradient_between_step(
+				e.chars.visual[id].symbol = e.chars.input_symbol[id]
+				e.chars.visual[id].fg = engine.gradient_between_step(
 					s.faded_colors[id],
 					s.final_colors[id],
 					10,
@@ -384,10 +385,10 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 			s.phase = .Final_Wipe
 		}
 	case .Final_Wipe:
-		if s.final_wipe_idx < engine.group_count(s.final_wipe_groups) {
+		if s.final_wipe_idx < len(s.final_wipe_groups.spans) {
 			for _ in 0 ..< s.config.final_wipe_speed {
-				if s.final_wipe_idx >= engine.group_count(s.final_wipe_groups) do break
-				g := engine.group_slice(s.final_wipe_groups, s.final_wipe_idx)
+				if s.final_wipe_idx >= len(s.final_wipe_groups.spans) do break
+				g := engine.group_members(s.final_wipe_groups, s.final_wipe_idx)
 				s.final_wipe_idx += 1
 				for id in g {
 					s.wipe_start_ticks[id] = s.tick

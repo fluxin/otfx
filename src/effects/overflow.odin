@@ -143,7 +143,7 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 
 	input_rows := engine.get_characters_grouped(query, engine.filter_input(), .Row_T2B)
 	defer engine.groups_delete(&input_rows)
-	row_order := make([]int, engine.group_count(input_rows), context.temp_allocator)
+	row_order := make([]int, len(input_rows.spans), context.temp_allocator)
 	for &row_index, i in row_order do row_index = i
 	cycles := rand.int_range(
 		s.config.overflow_cycles_range.lo,
@@ -152,7 +152,7 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 	for _ in 0 ..< cycles {
 		rand.shuffle(row_order)
 		for row_index in row_order {
-			source := engine.group_slice(input_rows, row_index)
+			source := engine.group_members(input_rows, row_index)
 			start := len(s.row_characters)
 			for id in source {
 				copy_id := engine.add_character(
@@ -169,14 +169,14 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 	query = {e.character_sets, e.chars.input_coord[:], e.canvas}
 	final_rows := engine.get_characters_grouped(query, engine.filter_all_fills(), .Row_T2B)
 	defer engine.groups_delete(&final_rows)
-	for row_index in 0 ..< engine.group_count(final_rows) {
-		row := engine.group_slice(final_rows, row_index)
+	for row_index in 0 ..< len(final_rows.spans) {
+		row := engine.group_members(final_rows, row_index)
 		for id in row {
 			if id < engine.Char_Id(len(final_colors)) {
 				engine.character_set_visual(
 					&e.chars,
 					id,
-					{symbol = e.chars.visual_symbol[id], fg = final_colors[id]},
+					{symbol = e.chars.visual[id].symbol, fg = final_colors[id]},
 				)
 			}
 		}

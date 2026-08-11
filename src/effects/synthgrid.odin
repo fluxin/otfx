@@ -149,7 +149,7 @@ synthgrid_add_grid_line :: proc(
 			id := engine.add_character(e, symbol, position)
 			e.chars.layer[id] = 2
 			e.chars.is_visible[id] = false
-			e.chars.visual_fg[id] = engine.gradient_sample(sampler, spectrum, position)
+			e.chars.visual[id].fg = engine.gradient_sample(sampler, spectrum, position)
 			append(&s.grid_ids, id)
 		}
 	} else {
@@ -160,7 +160,7 @@ synthgrid_add_grid_line :: proc(
 			id := engine.add_character(e, symbol, position)
 			e.chars.layer[id] = 2
 			e.chars.is_visible[id] = false
-			e.chars.visual_fg[id] = engine.gradient_sample(sampler, spectrum, position)
+			e.chars.visual[id].fg = engine.gradient_sample(sampler, spectrum, position)
 			append(&s.grid_ids, id)
 		}
 	}
@@ -280,20 +280,20 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 
 	// Blocks follow the grid boundaries, not radial distance. Preserve them as
 	// contiguous character slices and shuffle only the small group-order column.
-	append(&s.groups.offsets, 0)
 	previous_row := bottom
 	for row_end in row_ends {
 		previous_column := left
 		for column_end in column_ends {
+			start := len(s.groups.members)
 			for row in previous_row ..< row_end {
 				for column in previous_column ..< column_end {
 					append(
-						&s.groups.chars,
+						&s.groups.members,
 						cell_ids[(row - bottom) * e.canvas.width + (column - left)],
 					)
 				}
 			}
-			append(&s.groups.offsets, len(s.groups.chars))
+			append(&s.groups.spans, engine.Span{start, len(s.groups.members) - start})
 			previous_column = column_end
 		}
 		previous_row = row_end
@@ -322,12 +322,12 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 			s.generation_colors[base + frame] = text_spectrum[rand.int_max(len(text_spectrum))]
 		}
 	}
-	group_count := engine.group_count(s.groups)
+	group_count := len(s.groups.spans)
 	s.group_remaining = make([dynamic]int, group_count)
 	s.group_order = make([dynamic]int, group_count)
 	for group in 0 ..< group_count {
 		s.group_order[group] = group
-		for id in engine.group_slice(s.groups, group) do s.group_by_id[id] = group
+		for id in engine.group_members(s.groups, group) do s.group_by_id[id] = group
 	}
 	rand.shuffle(s.group_order[:])
 
@@ -336,8 +336,8 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 
 synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 	visible := e.chars.is_visible
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	input_symbols := e.chars.input_symbol
 	if s.phase == .Grid_Expand {
 		all_extended := true
@@ -359,9 +359,9 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 	}
 
 	if s.phase == .Text {
-		for s.next_group < engine.group_count(s.groups) && s.active_count < s.active_limit {
+		for s.next_group < len(s.groups.spans) && s.active_count < s.active_limit {
 			group := s.group_order[s.next_group]
-			members := engine.group_slice(s.groups, group)
+			members := engine.group_members(s.groups, group)
 			s.group_remaining[group] = len(members)
 			for id in members {
 				s.start_ticks[id] = s.tick
@@ -380,11 +380,11 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 			frame := age / 2
 			if frame < frame_count {
 				index := slot * SYNTHGRID_MAX_GENERATION_FRAMES + frame
-				visual_symbols[id] = s.generation_symbols[index]
-				visual_fg[id] = s.generation_colors[index]
+				visual_symbols[id].symbol = s.generation_symbols[index]
+				visual_fg[id].fg = s.generation_colors[index]
 			} else {
-				visual_symbols[id] = input_symbols[id]
-				visual_fg[id] = is_fill[id] ? nil : s.final_colors[id]
+				visual_symbols[id].symbol = input_symbols[id]
+				visual_fg[id].fg = is_fill[id] ? nil : s.final_colors[id]
 				if age == frame_count * 2 {
 					s.start_ticks[id] = -2
 					group := s.group_by_id[id]
@@ -394,7 +394,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 			}
 		}
 		s.tick += 1
-		if s.next_group == engine.group_count(s.groups) && s.active_count == 0 {
+		if s.next_group == len(s.groups.spans) && s.active_count == 0 {
 			s.phase = .Grid_Collapse
 		}
 		engine.frame(e)

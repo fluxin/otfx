@@ -145,19 +145,22 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	}
 
 	swarm_size := max(engine.round_half_even(f64(n) * s.config.swarm_size), 1)
-	append(&s.swarms.offsets, 0)
 	for start := 0; start < n; start += swarm_size {
 		end := min(start + swarm_size, n)
-		append(&s.swarms.chars, ..s.characters[start:end])
-		append(&s.swarms.offsets, len(s.swarms.chars))
+		span_start := len(s.swarms.members)
+		append(&s.swarms.members, ..s.characters[start:end])
+		append(&s.swarms.spans, engine.Span{span_start, end - start})
 	}
-	// Merge a tiny final group, matching the reference effect's visible rhythm.
-	groups := engine.group_count(s.swarms)
+	// Exclude a tiny final group, matching the prior offset representation's
+	// visible rhythm. Its characters remain in the member pool but have no span.
+	groups := len(s.swarms.spans)
 	if groups > 1 {
-		last_count := s.swarms.offsets[groups] - s.swarms.offsets[groups - 1]
-		if last_count < math.floor_div(swarm_size, 2) do resize(&s.swarms.offsets, groups)
+		last := &s.swarms.spans[groups - 1]
+		if last.len < math.floor_div(swarm_size, 2) {
+			resize(&s.swarms.spans, groups - 1)
+		}
 	}
-	groups = engine.group_count(s.swarms)
+	groups = len(s.swarms.spans)
 	s.group_stage_counts = make([dynamic]int, groups)
 	s.group_colors = make([dynamic]engine.Color, groups)
 	s.group_area_stages = make([dynamic]int, groups)
@@ -166,7 +169,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	s.group_by_index = make([dynamic]int, n)
 
 	for group in 0 ..< groups {
-		for id in engine.group_slice(s.swarms, group) do s.group_by_index[s.index_by_id[id]] = group
+		for id in engine.group_members(s.swarms, group) do s.group_by_index[s.index_by_id[id]] = group
 		area_count := rand.int_range(
 			s.config.swarm_area_count_range.lo,
 			s.config.swarm_area_count_range.hi + 1,
@@ -200,7 +203,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 			area_coords[area] = engine.find_coords_in_circle(last_focus, area_radius)
 			last_focus = next_focus
 		}
-		for id in engine.group_slice(s.swarms, group) {
+		for id in engine.group_members(s.swarms, group) {
 			i := s.index_by_id[id]
 			current_coords[id] = spawn
 			for area in 0 ..< area_count {
@@ -307,7 +310,7 @@ swarm_plan_coordinate_area :: proc(
 	group := s.group_by_index[leader]
 	if stage <= s.group_area_stages[group] do return
 	s.group_area_stages[group] = stage
-	for id in engine.group_slice(s.swarms, group) {
+	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		if i == leader || plan_stages[i] < 0 || plan_stages[i] >= stage do continue
 		if rand.float64() >= s.config.swarm_coordination do continue
@@ -326,7 +329,7 @@ swarm_plan_group :: proc(s: ^Swarm_State, group, start_tick: int) {
 	events: [dynamic]Swarm_Plan_Event
 	defer delete(events[:])
 	s.group_area_stages[group] = 0
-	for id in engine.group_slice(s.swarms, group) {
+	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		plan_stages[i] = 0
 		swarm_plan_segment(s, i, 0, start_tick, s.group_spawns[group], &events)
@@ -355,10 +358,10 @@ swarm_plan_lanes :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	defer delete(finish_ticks[:])
 	start_tick := 0
 	launched := 0
-	for group := engine.group_count(s.swarms) - 1; group >= 0; group -= 1 {
+	for group := len(s.swarms.spans) - 1; group >= 0; group -= 1 {
 		s.group_start_ticks[group] = start_tick
 		swarm_plan_group(s, group, start_tick)
-		members := engine.group_slice(s.swarms, group)
+		members := engine.group_members(s.swarms, group)
 		for id in members do append(&finish_ticks, s.lane_finish[s.index_by_id[id]])
 		launched += len(members)
 		if group > 0 {
@@ -368,14 +371,14 @@ swarm_plan_lanes :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 			start_tick = finish_ticks[finished_needed - 1] + 1
 		}
 	}
-	s.next_launch_group = engine.group_count(s.swarms) - 1
+	s.next_launch_group = len(s.swarms.spans) - 1
 }
 
 swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	if s.next_launch_group < 0 do return
 	group := s.next_launch_group
 	s.next_launch_group -= 1
-	for id in engine.group_slice(s.swarms, group) {
+	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		s.character_stages[i] = 0
 		e.chars.current_coord[id] = s.lane_origins[swarm_lane_index(i, 0)]
@@ -390,8 +393,8 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	write := 0
 	for i in s.active_indexes {
 		group := s.group_by_index[i]
@@ -409,11 +412,11 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 				continue
 			}
 			if s.tick >= s.lane_finish[i] {
-				visual_fg[id] = s.final_colors[i]
+				visual_fg[id].fg = s.final_colors[i]
 				continue
 			}
 			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
-			visual_fg[id] = engine.gradient_between_step(
+			visual_fg[id].fg = engine.gradient_between_step(
 				s.config.flash_color,
 				s.final_colors[i],
 				10,
@@ -435,12 +438,12 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 					progress,
 				),
 			)
-			visual_symbols[id] = input_symbols[id]
+			visual_symbols[id].symbol = input_symbols[id]
 			if stage + 1 == stage_count {
-				visual_fg[id] = s.config.flash_color
+				visual_fg[id].fg = s.config.flash_color
 			} else {
 				flash_step := min(s.tick - s.lane_starts[row], 6)
-				visual_fg[id] = engine.gradient_between_step(
+				visual_fg[id].fg = engine.gradient_between_step(
 					s.group_colors[group],
 					s.config.flash_color,
 					6,

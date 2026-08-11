@@ -129,8 +129,8 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 
 	groups := engine.get_characters_grouped(query, engine.filter_all_fills(), .Row_T2B)
 	defer engine.groups_delete(&groups)
-	for group_index in 0 ..< engine.group_count(groups) {
-		group := engine.group_slice(groups, group_index)
+	for group_index in 0 ..< len(groups.spans) {
+		group := engine.group_members(groups, group_index)
 		all_fill := print_row_all_fill(&e.chars, group)
 		right_extent := 0
 		if !all_fill {
@@ -217,13 +217,13 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 		frame := min(age / 3, 5)
 		if frame < 4 {
 			symbols := [4]string{"█", "█", "▓", "▒"}
-			e.chars.visual_symbol[id] = symbols[frame]
+			e.chars.visual[id].symbol = symbols[frame]
 		} else if frame == 4 {
-			e.chars.visual_symbol[id] = "░"
+			e.chars.visual[id].symbol = "░"
 		} else {
-			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+			e.chars.visual[id].symbol = e.chars.input_symbol[id]
 		}
-		e.chars.visual_fg[id] = engine.gradient_between_step(white, s.final_colors[id], 5, frame)
+		e.chars.visual[id].fg = engine.gradient_between_step(white, s.final_colors[id], 5, frame)
 		if age + 1 < 18 {
 			s.active_chars[write] = id
 			write += 1

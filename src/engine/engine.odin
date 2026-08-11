@@ -180,23 +180,16 @@ Visual :: struct {
 Frame :: struct {
 	visual:   Visual,
 	duration: int,
-	ticks:    int,
 }
 
 Scene :: struct {
-	// Consumers differ: ordinary playback touches three narrow columns, eased
-	// playback reads only visuals, and reset writes only ticks.
-	frames:              #soa[dynamic]Frame,
-	frame_index_map:     [dynamic]int, // tick -> frame index for eased scenes
-	played:              int, // frames retired since reset
-	looping:             bool,
-	ease:                Maybe(ease.Ease),
-	easing_total_steps:  int,
-	easing_current_step: int,
+	frames:      #soa[dynamic]Frame,
+	frame_index: int,
+	frame_tick:  int,
 }
 
 scene_complete :: proc(s: Scene) -> bool {
-	return !s.looping && s.played >= len(s.frames)
+	return s.frame_index >= len(s.frames)
 }
 
 scene_add_frame :: proc(
@@ -207,25 +200,7 @@ scene_add_frame :: proc(
 	bold: bool,
 ) {
 	assert(duration >= 1)
-	idx := len(s.frames)
-	append(&s.frames, Frame{Visual{symbol, fg, bg, bold}, duration, 0})
-	if s.ease != nil {
-		for _ in 0 ..< duration {
-			append(&s.frame_index_map, idx)
-			s.easing_total_steps += 1
-		}
-	}
-}
-
-scene_add_frame_visual :: proc(s: ^Scene, v: Visual, duration: int) {
-	idx := len(s.frames)
-	append(&s.frames, Frame{v, duration, 0})
-	if s.ease != nil {
-		for _ in 0 ..< duration {
-			append(&s.frame_index_map, idx)
-			s.easing_total_steps += 1
-		}
-	}
+	append(&s.frames, Frame{Visual{symbol, fg, bg, bold}, duration})
 }
 
 // Upstream apply_gradient_to_symbols over a fg/bg spectrum pair.
@@ -343,66 +318,58 @@ gradient_pairs :: proc(fg, bg: []Color) -> [dynamic]Color_Pair {
 }
 
 scene_reset :: proc(s: ^Scene) {
-	s.played = 0
-	s.easing_current_step = 0
-	for i in 0 ..< len(s.frames) do s.frames.ticks[i] = 0
+	s.frame_index, s.frame_tick = 0, 0
 }
 
 // First visual of the remaining queue (resume semantics).
 scene_first_visual :: proc(s: Scene) -> Visual {
 	assert(len(s.frames) > 0)
-	return s.frames[s.played].visual
+	return s.frames[s.frame_index].visual
 }
 
 scene_next_visual :: proc(s: ^Scene) -> Visual {
-	n := len(s.frames)
-	i := s.played
+	i := s.frame_index
 	v := s.frames[i].visual
-	s.frames.ticks[i] += 1
-	if s.frames.ticks[i] == s.frames.duration[i] {
-		s.frames.ticks[i] = 0
-		s.played += 1
-		if s.looping && s.played == n do s.played = 0
+	s.frame_tick += 1
+	if s.frame_tick == s.frames.duration[i] {
+		s.frame_tick = 0
+		s.frame_index += 1
 	}
 	return v
 }
 
+scene_reset_if_complete :: proc(s: ^Scene) -> bool {
+	if !scene_complete(s^) do return false
+	scene_reset(s)
+	return true
+}
+
+step_animation :: proc(s: ^Scene) -> (Visual, bool) {
+	assert(len(s.frames) > 0, "step_animation: empty scene")
+	visual := scene_next_visual(s)
+	return visual, scene_reset_if_complete(s)
+}
+
 Character :: struct {
-	character_id:         int,
-	input_symbol:         string,
-	input_coord:          Coord,
-	is_visible:           bool,
-	is_fill:              bool,
-	layer:                int,
-	current_coord:        Coord,
-	active_scene:         int,
-	// Current appearance is split into the columns its consumers actually read.
-	// Scene-owned Visual rows remain AoS because animation consumes whole rows.
-	visual_symbol:        string,
-	visual_fg:            Maybe(Color),
-	visual_bg:            Maybe(Color),
-	visual_bold:          bool,
+	character_id:    int,
+	input_symbol:    string,
+	input_coord:     Coord,
+	is_visible:      bool,
+	is_fill:         bool,
+	layer:           int,
+	current_coord:   Coord,
+	visual:          Visual,
 	// Allocation-free derived render column. Logical appearance remains in the
-	// columns above; this stores the current SGR + symbol + reset bytes.
-	render_code:          [64]byte,
-	render_code_len:      u8,
-	render_cached_symbol: string,
-	render_cached_fg:     Maybe(Color),
-	render_cached_bg:     Maybe(Color),
-	render_cached_bold:   bool,
+	// visual above; cached records which visual render_code was built from.
+	render_code:     [64]byte,
+	render_code_len: u8,
+	cached:          Visual,
 }
 
 Character_Storage :: #soa[dynamic]Character
 
 character_set_visual :: proc(chars: ^Character_Storage, id: Char_Id, visual: Visual) {
-	chars.visual_symbol[id] = visual.symbol
-	chars.visual_fg[id] = visual.fg
-	chars.visual_bg[id] = visual.bg
-	chars.visual_bold[id] = visual.bold
-}
-
-char_is_active :: proc(active_scene: int, scenes: []Scene) -> bool {
-	return active_scene >= 0 && !scene_complete(scenes[active_scene])
+	chars.visual[id] = visual
 }
 
 // ---------------------------------------------------------------------------
@@ -486,11 +453,8 @@ Engine :: struct {
 	input_line_widths: [dynamic]int,
 	resize_seen_at:    Maybe(time.Tick),
 	chars:             Character_Storage, // struct-of-arrays arena
-	scenes:            [dynamic]Scene,
 	wall_start:        f64,
 	mono_start:        time.Tick,
-	active:            [dynamic]Char_Id,
-	in_active:         [dynamic]u8,
 	character_sets:    Character_Sets,
 	next_character_id: int,
 	visible_top:       int,
@@ -601,7 +565,6 @@ engine_make :: proc(
 		e.render_cells[(c.row - 1) * e.canvas.right + (c.column - 1)] = i32(id)
 	}
 	make_fill_characters(&e)
-	e.in_active = make([dynamic]u8, len(e.chars))
 	return e
 }
 
@@ -940,8 +903,7 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			c.input_symbol = sym
 			c.input_coord = coord(col0 + 1, input_height - row_index)
 			c.current_coord = c.input_coord
-			c.active_scene = -1
-			c.visual_symbol = sym
+			c.visual.symbol = sym
 			append(&e.chars, c)
 			append(&e.character_sets.input, Char_Id(len(e.chars) - 1))
 		}
@@ -1028,9 +990,8 @@ make_fill_characters :: proc(e: ^Engine) {
 			c.input_symbol = " "
 			c.input_coord = coord(column, row)
 			c.current_coord = c.input_coord
-			c.active_scene = -1
 			c.is_fill = true
-			c.visual_symbol = " "
+			c.visual.symbol = " "
 			append(&e.chars, c)
 			if canvas_in_text(e.canvas, coord(column, row)) {
 				append(&e.character_sets.inner_fill, Char_Id(len(e.chars) - 1))
@@ -1048,12 +1009,10 @@ add_character :: proc(e: ^Engine, symbol: string, position: Coord) -> Char_Id {
 	c.input_symbol = symbol
 	c.input_coord = position
 	c.current_coord = position
-	c.active_scene = -1
-	c.visual_symbol = symbol
+	c.visual.symbol = symbol
 	append(&e.chars, c)
 	id := Char_Id(len(e.chars) - 1)
 	append(&e.character_sets.added, id)
-	append(&e.in_active, 0)
 	return id
 }
 
@@ -1119,24 +1078,19 @@ span_slice :: proc(pool: []$T, sp: Span) -> []T {
 	return pool[sp.start:sp.start + sp.len]
 }
 
-// Groups are one flat character pool with group-start offsets — a handle into
-// the pool, not nested dynamic arrays.
+// Groups are one flat character pool with explicit spans into that pool.
 Char_Groups :: struct {
-	chars:   [dynamic]Char_Id,
-	offsets: [dynamic]int, // offsets[i] = start of group i; len = group_count + 1
+	members: [dynamic]Char_Id,
+	spans:   [dynamic]Span,
 }
 
-group_count :: proc(g: Char_Groups) -> int {
-	return len(g.offsets) - 1
-}
-
-group_slice :: proc(g: Char_Groups, i: int) -> []Char_Id {
-	return g.chars[g.offsets[i]:g.offsets[i + 1]]
+group_members :: proc(g: Char_Groups, i: int) -> []Char_Id {
+	return span_slice(g.members[:], g.spans[i])
 }
 
 groups_delete :: proc(g: ^Char_Groups) {
-	delete(g.chars[:])
-	delete(g.offsets[:])
+	delete(g.members[:])
+	delete(g.spans[:])
 }
 
 get_characters_grouped :: proc(
@@ -1186,20 +1140,18 @@ get_characters_grouped :: proc(
 	})
 
 	out: Char_Groups
-	reserve(&out.chars, len(rows))
-	append(&out.offsets, 0)
+	reserve(&out.members, len(rows))
+	reserve(&out.spans, len(rows))
+	group_start := 0
 	for row, i in rows {
-		append(&out.chars, row.id)
+		append(&out.members, row.id)
 		if i > 0 && row.group_key != rows[i - 1].group_key {
-			append(&out.offsets, i)
+			append(&out.spans, Span{group_start, i - group_start})
+			group_start = i
 		}
 	}
-	append(&out.offsets, len(rows))
+	if len(rows) > 0 do append(&out.spans, Span{group_start, len(rows) - group_start})
 	return out
-}
-
-reverse_slice :: proc(s: []$T) {
-	for i, j := 0, len(s) - 1; i < j; i, j = i + 1, j - 1 do s[i], s[j] = s[j], s[i]
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,24 +1238,16 @@ update_render_cells :: proc(e: ^Engine, candidates: []Char_Id = nil) -> (int, in
 
 // A stable character can still change its terminal bytes: color effects and
 // scene playback commonly update a visual in place. The cell id alone is not
-// a sufficient dirty key, so compare its current SoA visual columns with the
-// per-character code cache used by the renderer.
+// a sufficient dirty key, so compare its visual with the per-character code
+// cache used by the renderer.
 render_cell_dirty :: #force_inline proc(
 	cell, previous_cell: i32,
-	visual_symbols, render_cached_symbols: [^]string,
-	visual_fg, render_cached_fg: [^]Maybe(Color),
-	visual_bg, render_cached_bg: [^]Maybe(Color),
-	visual_bold, render_cached_bold: [^]bool,
+	visuals, cached: [^]Visual,
 ) -> bool {
 	if cell != previous_cell do return true
 	if cell == EMPTY_CELL do return false
 	id := int(cell)
-	return(
-		visual_symbols[id] != render_cached_symbols[id] ||
-		visual_fg[id] != render_cached_fg[id] ||
-		visual_bg[id] != render_cached_bg[id] ||
-		visual_bold[id] != render_cached_bold[id] \
-	)
+	return visuals[id] != cached[id]
 }
 
 // Build the frame into e.out_buf, top row first.
@@ -1313,16 +1257,10 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 	clear(buf)
 	min_cap := width * height
 	if cap(buf^) < min_cap do reserve(buf, min_cap)
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
-	visual_bg := e.chars.visual_bg
-	visual_bold := e.chars.visual_bold
+	visuals := e.chars.visual
 	render_codes := e.chars.render_code
 	render_code_lens := e.chars.render_code_len
-	render_cached_symbols := e.chars.render_cached_symbol
-	render_cached_fg := e.chars.render_cached_fg
-	render_cached_bg := e.chars.render_cached_bg
-	render_cached_bold := e.chars.render_cached_bold
+	cached := e.chars.cached
 	previous := e.previous_cells[:width * height]
 	cursor_row, cursor_column := 0, 0
 	for screen_row in 0 ..< height {
@@ -1332,18 +1270,7 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 		column := 0
 		for column < width {
 			for column < width {
-				if render_cell_dirty(
-					row_cells[column],
-					previous_row[column],
-					visual_symbols,
-					render_cached_symbols,
-					visual_fg,
-					render_cached_fg,
-					visual_bg,
-					render_cached_bg,
-					visual_bold,
-					render_cached_bold,
-				) {
+				if render_cell_dirty(row_cells[column], previous_row[column], visuals, cached) {
 					break
 				}
 				column += 1
@@ -1364,34 +1291,21 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 			}
 
 			for column < width &&
-			    render_cell_dirty(
-				    row_cells[column],
-				    previous_row[column],
-				    visual_symbols,
-				    render_cached_symbols,
-				    visual_fg,
-				    render_cached_fg,
-				    visual_bg,
-				    render_cached_bg,
-				    visual_bold,
-				    render_cached_bold,
-			    ) {
+			    render_cell_dirty(row_cells[column], previous_row[column], visuals, cached) {
 				cell := row_cells[column]
 				previous_row[column] = cell
 				if cell == EMPTY_CELL {
 					append(buf, ' ')
 				} else {
 					id := int(cell)
-					symbol := visual_symbols[id]
+					visual := visuals[id]
+					symbol := visual.symbol
 					if e.cfg.no_color {
 						append(buf, ..transmute([]byte)symbol)
 						continue
 					}
-					fg, bg, bold := visual_fg[id], visual_bg[id], visual_bold[id]
-					if symbol != render_cached_symbols[id] ||
-					   fg != render_cached_fg[id] ||
-					   bg != render_cached_bg[id] ||
-					   bold != render_cached_bold[id] {
+					fg, bg, bold := visual.fg, visual.bg, visual.bold
+					if visual != cached[id] {
 						code: [dynamic; 64]byte
 						styled := false
 						if bold {
@@ -1414,10 +1328,7 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 						assert(len(code) <= len(render_codes[id]))
 						copy(render_codes[id][:], code[:])
 						render_code_lens[id] = u8(len(code))
-						render_cached_symbols[id] = symbol
-						render_cached_fg[id] = fg
-						render_cached_bg[id] = bg
-						render_cached_bold[id] = bold
+						cached[id] = visual
 					}
 					code_len := int(render_code_lens[id])
 					append(buf, ..render_codes[id][:code_len])

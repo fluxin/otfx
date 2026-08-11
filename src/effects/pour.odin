@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 import ease "core:math/ease"
 import rand "core:math/rand"
+import "core:slice"
 
 import "core:fmt"
 
@@ -156,9 +157,9 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	input_symbols := e.chars.input_symbol[:]
 	visible := e.chars.is_visible[:]
 
-	for gi in 0 ..< engine.group_count(groups) {
-		g := engine.group_slice(groups, gi)
-		if gi % 2 == 1 do engine.reverse_slice(g) // pour direction alternates
+	for gi in 0 ..< len(groups.spans) {
+		g := engine.group_members(groups, gi)
+		if gi % 2 == 1 do slice.reverse(g) // pour direction alternates
 		append(&s.group_spans, engine.Span{start = len(s.pool), len = len(g)})
 		for id in g {
 			slot := len(s.pool)
@@ -240,14 +241,14 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 		}
 		if age < color_ticks {
-			e.chars.visual_fg[id] = engine.gradient_between_step(
+			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.config.starting_color,
 				s.final_colors[slot],
 				s.color_steps,
 				min(age / s.config.final_gradient_frames, s.color_steps),
 			)
 		} else {
-			e.chars.visual_fg[id] = s.final_colors[slot]
+			e.chars.visual[id].fg = s.final_colors[slot]
 		}
 		if age + 1 < life {s.active_slots[write] = slot; write += 1}
 	}

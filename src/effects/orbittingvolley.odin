@@ -149,7 +149,7 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	defer engine.groups_delete(&center_groups)
 	counts: [4]int
 	launcher := 0
-	for _ in center_groups.chars {
+	for _ in center_groups.members {
 		counts[launcher] += 1
 		launcher += 1
 		if launcher == 4 do launcher = 0
@@ -165,7 +165,7 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	index_by_id := make([dynamic]int, len(e.chars), context.temp_allocator)
 	for id, i in s.characters do index_by_id[id] = i
 	launcher = 0
-	for id in center_groups.chars {
+	for id in center_groups.members {
 		s.magazines[cursors[launcher]] = index_by_id[id]
 		cursors[launcher] += 1
 		launcher += 1
@@ -219,8 +219,8 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 		id := s.launcher_ids[i]
 		p := s.launcher_positions[i]
 		e.chars.current_coord[id] = p
-		e.chars.visual_symbol[id] = s.launcher_symbols[i]
-		e.chars.visual_fg[id] = engine.gradient_sample(
+		e.chars.visual[id].symbol = s.launcher_symbols[i]
+		e.chars.visual[id].fg = engine.gradient_sample(
 			s.launcher_sampler,
 			s.launcher_spectrum[:],
 			p,
@@ -282,7 +282,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	for id, i in s.characters {
 		start := s.launch_starts[i]
 		if start < 0 do continue
@@ -295,7 +295,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			)
 		}
-		visual_fg[id] = s.final_colors[i]
+		visual_fg[id].fg = s.final_colors[i]
 		if age >= steps do e.chars.layer[id] = 0
 	}
 	s.tick += 1

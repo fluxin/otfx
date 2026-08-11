@@ -179,12 +179,12 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	append(&s.render_ids, ..chars[:])
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	for id, slot in chars {
 		s.final_colors[slot] = engine.gradient_sample(sampler, final_spectrum[:], input_coords[id])
 		s.ring_by_slot[slot] = -1
-		visual_fg[id] = s.final_colors[slot]
+		visual_fg[id].fg = s.final_colors[slot]
 		visible[id] = true
 	}
 
@@ -292,32 +292,32 @@ rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) {
 }
 
 rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	for slot in 0 ..< len(s.ids) {
 		ring_index := s.ring_by_slot[slot]
 		if ring_index < 0 {
-			if s.phase == .Final do visual_fg[s.ids[slot]] = s.final_colors[slot]
+			if s.phase == .Final do visual_fg[s.ids[slot]].fg = s.final_colors[slot]
 			continue
 		}
 		ring_color := s.rings[ring_index].color
 		id := s.ids[slot]
 		switch s.phase {
 		case .Disperse:
-			visual_fg[id] = engine.gradient_between_step(
+			visual_fg[id].fg = engine.gradient_between_step(
 				ring_color,
 				s.final_colors[slot],
 				8,
 				min(s.color_tick / 10, 8),
 			)
 		case .Spin:
-			visual_fg[id] = engine.gradient_between_step(
+			visual_fg[id].fg = engine.gradient_between_step(
 				s.final_colors[slot],
 				ring_color,
 				8,
 				min(s.color_tick / 3, 8),
 			)
 		case .Final:
-			visual_fg[id] = s.final_colors[slot]
+			visual_fg[id].fg = s.final_colors[slot]
 		case .Start, .Complete:
 		}
 	}

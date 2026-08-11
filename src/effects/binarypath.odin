@@ -166,7 +166,7 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 			s.bit_colors[i * 8 + bit] = color
 			e.chars.is_visible[bit_id] = false
 			e.chars.layer[bit_id] = 1
-			e.chars.visual_fg[bit_id] = color
+			e.chars.visual[bit_id].fg = color
 			append(&s.render_ids, bit_id)
 		}
 	}
@@ -187,17 +187,17 @@ binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int
 
 binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 	if s.wiping {
-		groups := engine.group_count(s.final_wipe)
+		groups := len(s.final_wipe.spans)
 		if s.wipe_group >= groups do return false
 		input_symbols := e.chars.input_symbol
-		visual_symbols := e.chars.visual_symbol
-		visual_fg := e.chars.visual_fg
+		visual_symbols := e.chars.visual
+		visual_fg := e.chars.visual
 		visible := e.chars.is_visible
 		for _ in 0 ..< 2 {
 			if s.wipe_group == groups do break
-			for id in engine.group_slice(s.final_wipe, s.wipe_group) {
-				visual_symbols[id] = input_symbols[id]
-				visual_fg[id] = s.final_colors_by_id[id]
+			for id in engine.group_members(s.final_wipe, s.wipe_group) {
+				visual_symbols[id].symbol = input_symbols[id]
+				visual_fg[id].fg = s.final_colors_by_id[id]
 				visible[id] = true
 			}
 			s.wipe_group += 1
@@ -219,8 +219,8 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 
 	current_coords := e.chars.current_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual_fg
-	visual_symbols := e.chars.visual_symbol
+	visual_fg := e.chars.visual
+	visual_symbols := e.chars.visual
 	input_symbols := e.chars.input_symbol
 	any_collapse := false
 	write := 0
@@ -241,7 +241,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 			s.states[rep] = .Collapse
 			s.starts[rep] = s.tick
 			id := s.characters[rep]
-			visual_symbols[id] = input_symbols[id]
+			visual_symbols[id].symbol = input_symbols[id]
 			visible[id] = true
 		}
 	}
@@ -252,7 +252,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 		age := s.tick - s.starts[i]
 		if age < 21 {
 			dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
-			visual_fg[id] = engine.gradient_between_step(
+			visual_fg[id].fg = engine.gradient_between_step(
 				engine.Color{0xFF, 0xFF, 0xFF},
 				dim,
 				6,

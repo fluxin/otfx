@@ -222,14 +222,14 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 			e.chars.layer[id] = 0
 		}
 		if age < 160 {
-			e.chars.visual_fg[id] = engine.gradient_between_step(
+			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.start_colors[i],
 				s.final_colors[i],
 				7,
 				min(age / 20, 7),
 			)
 		} else {
-			e.chars.visual_fg[id] = s.final_colors[i]
+			e.chars.visual[id].fg = s.final_colors[i]
 		}
 	}
 	s.tick += 1

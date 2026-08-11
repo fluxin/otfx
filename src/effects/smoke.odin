@@ -122,7 +122,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	within_text := !s.config.use_whole_canvas
 	origin := engine.canvas_random_coord(e.canvas, false, within_text)
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		p := input_coords[id]
@@ -132,7 +132,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 		s.arrivals[i] = arrival
 		s.last_tick = max(s.last_tick, arrival)
 		s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
-		visual_fg[id] = s.config.starting_color
+		visual_fg[id].fg = s.config.starting_color
 		visible[id] = true
 	}
 
@@ -171,19 +171,19 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
 	smoke_ticks := len(s.smoke_palette) * 3
 	paint_entries := 1 + 5 * len(s.config.final_gradient_stops)
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	for id, i in s.characters {
 		age := s.tick - s.arrivals[i]
 		if age < 0 do continue
 		if age < smoke_ticks {
-			visual_symbols[id] =
+			visual_symbols[id].symbol =
 				s.config.smoke_symbols[min(age / 3, len(s.config.smoke_symbols) - 1)]
-			visual_fg[id] = s.smoke_palette[age / 3]
+			visual_fg[id].fg = s.smoke_palette[age / 3]
 		} else {
 			paint_entry := min((age - smoke_ticks) / 5, paint_entries - 1)
-			visual_symbols[id] = input_symbols[id]
-			visual_fg[id] = smoke_paint_color(
+			visual_symbols[id].symbol = input_symbols[id]
+			visual_fg[id].fg = smoke_paint_color(
 				s.config.final_gradient_stops[:],
 				s.final_colors[i],
 				s.paint_pairs[paint_entry],

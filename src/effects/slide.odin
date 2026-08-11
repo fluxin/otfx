@@ -4,6 +4,7 @@ import engine "../engine"
 
 import "core:fmt"
 import ease "core:math/ease"
+import "core:slice"
 
 // slide — characters slide in from outside the canvas, group by group.
 
@@ -159,18 +160,18 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 
 	// Starting positions and fixed direct-motion rows. Reversals happen on the
 	// flat group slice, matching the source ordering without path objects.
-	for gi in 0 ..< engine.group_count(s.groups) {
-		g := engine.group_slice(s.groups, gi)
+	for gi in 0 ..< len(s.groups.spans) {
+		g := engine.group_members(s.groups, gi)
 		switch s.config.grouping {
 		case .Row:
 			start_col := e.canvas.left - 1
 			if s.config.merge && gi % 2 == 0 {
 				start_col = e.canvas.right + 1
 			} else {
-				engine.reverse_slice(g)
+				slice.reverse(g)
 			}
 			if s.config.reverse_direction && !s.config.merge {
-				engine.reverse_slice(g)
+				slice.reverse(g)
 				start_col = e.canvas.right + 1
 			}
 			for id in g do e.chars.current_coord[id] = engine.coord(start_col, e.chars.input_coord[id].row)
@@ -179,10 +180,10 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 			if s.config.merge && gi % 2 == 0 {
 				start_row = e.canvas.bottom - 1
 			} else {
-				engine.reverse_slice(g)
+				slice.reverse(g)
 			}
 			if s.config.reverse_direction && !s.config.merge {
-				engine.reverse_slice(g)
+				slice.reverse(g)
 				start_row = e.canvas.bottom - 1
 			}
 			for id in g do e.chars.current_coord[id] = engine.coord(e.chars.input_coord[id].column, start_row)
@@ -191,13 +192,13 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 			d := last.row - (e.canvas.bottom - 1)
 			start := engine.coord(last.column - d, last.row - d)
 			if s.config.merge && gi % 2 == 0 {
-				engine.reverse_slice(g)
+				slice.reverse(g)
 				first := e.chars.input_coord[g[0]]
 				d := (e.canvas.top + 1) - first.row
 				start = engine.coord(first.column + d, first.row + d)
 			}
 			if s.config.reverse_direction && !s.config.merge {
-				engine.reverse_slice(g)
+				slice.reverse(g)
 				first := e.chars.input_coord[g[0]]
 				d := (e.canvas.top + 1) - first.row
 				start = engine.coord(first.column + d, first.row + d)
@@ -216,22 +217,22 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 			)
 		}
 	}
-	s.heads = make([dynamic]int, engine.group_count(s.groups))
+	s.heads = make([dynamic]int, len(s.groups.spans))
 }
 
 slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
-	if s.next_group >= engine.group_count(s.groups) && len(s.active_slots) == 0 {
+	if s.next_group >= len(s.groups.spans) && len(s.active_slots) == 0 {
 		return false
 	}
-	if s.current_gap == s.config.gap && s.next_group < engine.group_count(s.groups) {
+	if s.current_gap == s.config.gap && s.next_group < len(s.groups.spans) {
 		s.next_group += 1
 		s.current_gap = 0
-	} else if s.next_group < engine.group_count(s.groups) {
+	} else if s.next_group < len(s.groups.spans) {
 		s.current_gap += 1
 	}
 	// release the front character of every active group
 	for gi in 0 ..< s.next_group {
-		g := engine.group_slice(s.groups, gi)
+		g := engine.group_members(s.groups, gi)
 		if s.heads[gi] < len(g) {
 			next := g[s.heads[gi]]
 			s.heads[gi] += 1
@@ -240,8 +241,8 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	// drop exhausted groups from the front
-	for s.next_group < engine.group_count(s.groups) {
-		g := engine.group_slice(s.groups, s.next_group)
+	for s.next_group < len(s.groups.spans) {
+		g := engine.group_members(s.groups, s.next_group)
 		if s.heads[s.next_group] >= len(g) {
 			s.next_group += 1
 		} else {
@@ -263,7 +264,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 			)
 		}
 		gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
-		e.chars.visual_fg[id] = engine.gradient_between_step(
+		e.chars.visual[id].fg = engine.gradient_between_step(
 			base_color,
 			s.final_colors[i],
 			10,
@@ -275,7 +276,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 			write += 1
 		} else {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual_fg[id] = s.final_colors[i]
+			e.chars.visual[id].fg = s.final_colors[i]
 		}
 	}
 	resize(&s.active_slots, write)

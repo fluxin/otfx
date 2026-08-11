@@ -175,13 +175,13 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 }
 
 waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
-	group_count := engine.group_count(s.pending_cols)
+	group_count := len(s.pending_cols.spans)
 	if s.col_idx >= group_count && s.active_count == 0 {
 		return false
 	}
 	visible := e.chars.is_visible
 	if s.col_idx < group_count {
-		for id in engine.group_slice(s.pending_cols, s.col_idx) {
+		for id in engine.group_members(s.pending_cols, s.col_idx) {
 			visible[id] = true
 			s.start_ticks[id] = s.tick
 			append(&s.revealed, id)
@@ -198,8 +198,8 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 	final_ticks := (final_steps + 1) * 10
 	last_wave := s.wave_colors[wave_frames - 1]
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	for id in e.character_sets.input {
 		start_tick := s.start_ticks[id]
 		if start_tick < 0 do continue
@@ -207,13 +207,13 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 		if age < wave_ticks - 1 {
 			eased_tick := engine.eased_timeline_index(age, wave_ticks, s.config.wave_easing)
 			frame_index := eased_tick / wave_length
-			visual_symbols[id] = s.wave_symbols[frame_index]
-			visual_fg[id] = s.wave_colors[frame_index]
+			visual_symbols[id].symbol = s.wave_symbols[frame_index]
+			visual_fg[id].fg = s.wave_colors[frame_index]
 		} else {
 			final_age := age - (wave_ticks - 1)
 			final_step := final_age == 0 ? 0 : min((final_age - 1) / 10, final_steps)
-			visual_symbols[id] = input_symbols[id]
-			visual_fg[id] = engine.gradient_between_step(
+			visual_symbols[id].symbol = input_symbols[id]
+			visual_fg[id].fg = engine.gradient_between_step(
 				last_wave,
 				s.final_colors[id],
 				final_steps,

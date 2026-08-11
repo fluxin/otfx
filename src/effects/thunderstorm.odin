@@ -201,7 +201,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	for i in 0 ..< len(s.input_at_cell) do s.input_at_cell[i] = -1
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		p := input_coords[id]
@@ -211,7 +211,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		s.glow_starts[i] = -1
 		s.input_slot_by_id[id] = i
 		s.input_at_cell[thunderstorm_cell_index(e.canvas, p)] = i32(id)
-		visual_fg[id] = final
+		visual_fg[id].fg = final
 		visible[id] = true
 	}
 	// Input glyphs are the permanent render prefix. Weather rows append only
@@ -284,9 +284,9 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		)
 		id := s.rain_ids[slot]
 		e.chars.current_coord[id] = origin
-		e.chars.visual_symbol[id] =
+		e.chars.visual[id].symbol =
 			s.config.raindrop_symbols[rand.int_max(len(s.config.raindrop_symbols))]
-		e.chars.visual_fg[id] = engine.Color{0xAA, 0xAA, 0xFF}
+		e.chars.visual[id].fg = engine.Color{0xAA, 0xAA, 0xFF}
 		e.chars.is_visible[id] = true
 		append(&s.rain_active, slot)
 	}
@@ -303,8 +303,8 @@ thunderstorm_append_strike_segment :: proc(
 	assert(segment < len(s.strike_ids))
 	id := s.strike_ids[segment]
 	e.chars.current_coord[id] = engine.coord(column, row)
-	e.chars.visual_symbol[id] = symbol
-	e.chars.visual_fg[id] = s.config.lightning_color
+	e.chars.visual[id].symbol = symbol
+	e.chars.visual[id].fg = s.config.lightning_color
 	e.chars.is_visible[id] = false
 	append(&s.strike_pending, id)
 }
@@ -388,9 +388,9 @@ thunderstorm_spawn_sparks :: proc(
 		)
 		id := s.spark_ids[slot]
 		e.chars.current_coord[id] = impact
-		e.chars.visual_symbol[id] =
+		e.chars.visual[id].symbol =
 			s.config.spark_symbols[rand.int_max(len(s.config.spark_symbols))]
-		e.chars.visual_fg[id] = s.config.spark_glow_color
+		e.chars.visual[id].fg = s.config.spark_glow_color
 		e.chars.is_visible[id] = true
 		append(&s.spark_active, slot)
 	}
@@ -428,7 +428,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			7,
 			step,
 		)
-		for id in s.strike_pending do e.chars.visual_fg[id] = color
+		for id in s.strike_pending do e.chars.visual[id].fg = color
 	} else if age < 54 {
 		step := min((age - 42) / 2, 6)
 		color := engine.gradient_between_step(
@@ -437,7 +437,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			6,
 			step,
 		)
-		for id in s.strike_pending do e.chars.visual_fg[id] = color
+		for id in s.strike_pending do e.chars.visual[id].fg = color
 	} else {
 		for id in s.strike_pending {
 			e.chars.is_visible[id] = false
@@ -504,7 +504,7 @@ thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 				append(&s.spark_free, slot)
 				continue
 			}
-			e.chars.visual_fg[id] = engine.gradient_between_step(
+			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.config.spark_glow_color,
 				e.cfg.terminal_background_color,
 				7,
@@ -518,7 +518,7 @@ thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 }
 
 thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	write := 0
 	for i in s.glow_active {
 		id := s.characters[i]
@@ -526,10 +526,10 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		step := (s.tick - start) / s.config.text_glow_time
 		if step > 7 {
 			s.glow_starts[i] = -1
-			visual_fg[id] = s.storm_colors[i]
+			visual_fg[id].fg = s.storm_colors[i]
 			continue
 		}
-		visual_fg[id] = engine.gradient_between_step(
+		visual_fg[id].fg = engine.gradient_between_step(
 			s.config.glowing_text_color,
 			s.storm_colors[i],
 			7,
@@ -553,7 +553,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / 12, 7)
-		for id, i in s.characters do e.chars.visual_fg[id] = engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step)
+		for id, i in s.characters do e.chars.visual[id].fg = engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step)
 		s.phase_tick += 1
 		if s.phase_tick > 84 {
 			s.phase = .Storm
@@ -578,7 +578,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
 		}
 	case .Poststorm:
 		step := min(s.phase_tick / 12, 7)
-		for id, i in s.characters do e.chars.visual_fg[id] = engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step)
+		for id, i in s.characters do e.chars.visual[id].fg = engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step)
 		s.phase_tick += 1
 		if s.phase_tick > 84 do return false
 	}

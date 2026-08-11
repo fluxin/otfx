@@ -131,12 +131,12 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	s.dark_colors = make([dynamic]engine.Color, n)
 	input_coords := e.chars.input_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	for id, i in s.characters {
 		bright := engine.gradient_sample(sampler, spectrum[:], input_coords[id])
 		s.bright_colors[i] = bright
 		s.dark_colors[i] = engine.adjust_color_brightness(bright, 0.2)
-		visual_fg[id] = s.dark_colors[i]
+		visual_fg[id].fg = s.dark_colors[i]
 		visible[id] = true
 	}
 
@@ -213,13 +213,13 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 	}
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	for id, i in s.characters {
 		p := input_coords[id]
 		nearest := engine.line_length(s.spot_positions[0], p, true)
 		for j in 1 ..< len(s.spot_positions) do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
 		if nearest > f64(s.illuminate_range) {
-			visual_fg[id] = s.dark_colors[i]
+			visual_fg[id].fg = s.dark_colors[i]
 			continue
 		}
 		bright := s.bright_colors[i]
@@ -230,9 +230,9 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 				1 - (nearest - start) / (f64(s.illuminate_range) * s.config.beam_falloff),
 				0.2,
 			)
-			visual_fg[id] = engine.adjust_color_brightness(bright, factor)
+			visual_fg[id].fg = engine.adjust_color_brightness(bright, factor)
 		} else {
-			visual_fg[id] = bright
+			visual_fg[id].fg = bright
 		}
 	}
 	engine.frame(e, s.characters[:])

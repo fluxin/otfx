@@ -122,13 +122,13 @@ randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool
 		slot := s.index_by_id[next]
 		s.start_ticks[slot] = s.tick
 		append(&s.active_slots, slot)
-		e.chars.visual_symbol[next] = e.chars.input_symbol[next]
+		e.chars.visual[next].symbol = e.chars.input_symbol[next]
 	}
 	write := 0
 	for slot in s.active_slots {
 		age := s.tick - s.start_ticks[slot]
 		id := s.characters[slot]
-		e.chars.visual_fg[id] =
+		e.chars.visual[id].fg =
 			s.palette[slot * s.palette_len + age / s.config.final_gradient_frames]
 		if age + 1 < s.palette_len * s.config.final_gradient_frames {
 			s.active_slots[write] = slot

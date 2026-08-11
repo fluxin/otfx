@@ -108,7 +108,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	s.vacuum_order = make([dynamic]int, n)
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	dust_choices := Crumble_Dust_Symbols
 	for id, i in s.characters {
@@ -143,7 +143,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		for j in 0 ..< 5 do s.dust_symbols[i * 5 + j] = dust_choices[rand.int_max(len(dust_choices))]
 		s.fall_order[i] = i
 		s.vacuum_order[i] = i
-		visual_fg[id] = s.weak_colors[i]
+		visual_fg[id].fg = s.weak_colors[i]
 		visible[id] = true
 	}
 	rand.shuffle(s.fall_order[:])
@@ -172,8 +172,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 
 	for {
 		switch s.phase {
@@ -210,8 +210,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				age := s.phase_tick - start
 				if age >= 40 + s.fall_steps[i] do continue
 				if age < 40 {
-					visual_symbols[id] = input_symbols[id]
-					visual_fg[id] = engine.gradient_between_step(
+					visual_symbols[id].symbol = input_symbols[id]
+					visual_fg[id].fg = engine.gradient_between_step(
 						s.weak_colors[i],
 						s.dust_colors[i],
 						9,
@@ -230,8 +230,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 					ease.ease(.Bounce_Out, progress),
 				)
 				dust_index := min((fall_age * 5) / s.fall_steps[i], 4)
-				visual_symbols[id] = s.dust_symbols[i * 5 + dust_index]
-				visual_fg[id] = s.dust_colors[i]
+				visual_symbols[id].symbol = s.dust_symbols[i * 5 + dust_index]
+				visual_fg[id].fg = s.dust_colors[i]
 				s.fall_active[fall_write] = i
 				fall_write += 1
 			}
@@ -287,21 +287,21 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 						input,
 						f64(s.phase_tick + 1) / f64(steps),
 					)
-					visual_symbols[id] = input_symbols[id]
-					visual_fg[id] = s.dust_colors[i]
+					visual_symbols[id].symbol = input_symbols[id]
+					visual_fg[id].fg = s.dust_colors[i]
 					continue
 				}
 				flash_age := s.phase_tick - steps
-				visual_symbols[id] = input_symbols[id]
+				visual_symbols[id].symbol = input_symbols[id]
 				if flash_age < 28 {
-					visual_fg[id] = engine.gradient_between_step(
+					visual_fg[id].fg = engine.gradient_between_step(
 						s.final_colors[i],
 						engine.Color{0xFF, 0xFF, 0xFF},
 						6,
 						flash_age / 4,
 					)
 				} else {
-					visual_fg[id] = engine.gradient_between_step(
+					visual_fg[id].fg = engine.gradient_between_step(
 						engine.Color{0xFF, 0xFF, 0xFF},
 						s.final_colors[i],
 						9,

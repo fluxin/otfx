@@ -115,7 +115,7 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 			e.chars.input_coord[id],
 			factor,
 		)
-		e.chars.visual_fg[id] = engine.gradient_between_step(
+		e.chars.visual[id].fg = engine.gradient_between_step(
 			s.config.final_gradient_stops[0],
 			s.final_colors[i],
 			10,
@@ -123,7 +123,7 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 		)
 		if s.tick + 1 >= maximum {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual_fg[id] = s.final_colors[i]
+			e.chars.visual[id].fg = s.final_colors[i]
 			e.chars.layer[id] = 0
 		}
 	}

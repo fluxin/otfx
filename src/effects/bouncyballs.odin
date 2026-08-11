@@ -134,12 +134,10 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 
 bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 	active :=
-		s.next_group < engine.group_count(s.row_groups) ||
-		len(s.pending) > 0 ||
-		len(s.active_slots) > 0
+		s.next_group < len(s.row_groups.spans) || len(s.pending) > 0 || len(s.active_slots) > 0
 	if !active do return false
-	if len(s.pending) == 0 && s.next_group < engine.group_count(s.row_groups) {
-		append(&s.pending, ..engine.group_slice(s.row_groups, s.next_group))
+	if len(s.pending) == 0 && s.next_group < len(s.row_groups.spans) {
+		append(&s.pending, ..engine.group_members(s.row_groups, s.next_group))
 		s.next_group += 1
 	}
 	if len(s.pending) > 0 {
@@ -171,13 +169,13 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 				e.chars.input_coord[id],
 				ease.ease(s.config.movement_easing, progress),
 			)
-			e.chars.visual_symbol[id] = s.ball_symbols[slot]
-			e.chars.visual_fg[id] = s.ball_colors[slot]
+			e.chars.visual[id].symbol = s.ball_symbols[slot]
+			e.chars.visual[id].fg = s.ball_colors[slot]
 		} else {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+			e.chars.visual[id].symbol = e.chars.input_symbol[id]
 			fade_tick := age - (s.max_steps[slot] - 1)
-			e.chars.visual_fg[id] = engine.gradient_between_step(
+			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.ball_colors[slot],
 				s.final_colors[slot],
 				10,

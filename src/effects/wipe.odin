@@ -63,11 +63,13 @@ wipe_parse :: proc(cfg: ^Wipe_Config, args: []string) -> bool {
 }
 
 Wipe_State :: struct {
-	config:        Wipe_Config,
-	final_colors:  [dynamic]engine.Color_Pair,
-	scene_handles: [dynamic]int,
-	easer:         engine.Sequence_Easer,
-	wipe_delay:    int,
+	config:       Wipe_Config,
+	final_colors: [dynamic]engine.Color_Pair,
+	scenes:       [dynamic]engine.Scene,
+	active:       [dynamic]engine.Char_Id,
+	active_by_id: [dynamic]u8,
+	reveal:       engine.Group_Reveal,
+	wipe_delay:   int,
 }
 
 wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
@@ -76,10 +78,10 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		engine.filter_input(),
 		s.config.wipe_direction,
 	)
-	s.easer.groups = groups
-	s.easer.tracker = engine.Easing_Tracker {
-		fn          = s.config.wipe_ease,
-		total_steps = 100,
+	s.reveal = engine.Group_Reveal {
+		groups   = groups,
+		ease     = s.config.wipe_ease,
+		duration = 100,
 	}
 
 	spectrum := engine.gradient_make(
@@ -105,8 +107,8 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 	max_slot := 0
 	for id in chars do max_slot = max(max_slot, int(id))
 	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.scene_handles[i] = -1
+	s.scenes = make([dynamic]engine.Scene, max_slot + 1)
+	s.active_by_id = make([dynamic]u8, max_slot + 1)
 
 	for id in chars {
 		c := e.chars.input_coord[id]
@@ -115,7 +117,6 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 			bg = nil,
 		}
 		s.final_colors[id] = final
-		sc := engine.new_scene(e, false, {})
 		// wipe gradient from spectrum[0] to the final fg color
 		wg := engine.gradient_make(
 			[]engine.Color{spectrum[0], final.fg.?},
@@ -124,34 +125,37 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		)
 		defer delete(wg[:])
 		engine.scene_add_gradient(
-			&e.scenes[sc],
+			&s.scenes[id],
 			[]string{e.chars.input_symbol[id]},
 			s.config.final_gradient_frames,
 			wg[:],
 			nil,
 		)
-		s.scene_handles[id] = sc
 	}
 	s.wipe_delay = s.config.wipe_delay
 }
 
 wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
-	if len(e.active) == 0 && engine.seq_complete(s.easer) {
+	if len(s.active) == 0 && engine.group_reveal_complete(s.reveal) {
 		return false
 	}
 	if s.wipe_delay == 0 {
-		r := engine.seq_step(&s.easer)
-		for gi in r.added_start ..< r.added_end {
-			for id in engine.group_slice(s.easer.groups, gi) {
-				engine.activate_scene(e, id, s.scene_handles[id])
+		change := engine.group_reveal_step(&s.reveal)
+		for gi in change.added.start ..< change.added.start + change.added.len {
+			for id in engine.group_members(s.reveal.groups, gi) {
+				scene := &s.scenes[id]
+				engine.character_set_visual(&e.chars, id, engine.scene_first_visual(scene^))
 				e.chars.is_visible[id] = true
-				engine.active_insert(e, id)
+				if s.active_by_id[id] == 0 {
+					s.active_by_id[id] = 1
+					append(&s.active, id)
+				}
 			}
 		}
-		for gi in r.removed_start ..< r.removed_end {
-			for id in engine.group_slice(s.easer.groups, gi) {
-				e.chars.active_scene[id] = -1
-				engine.scene_reset(&e.scenes[s.scene_handles[id]])
+		for gi in change.removed.start ..< change.removed.start + change.removed.len {
+			for id in engine.group_members(s.reveal.groups, gi) {
+				s.active_by_id[id] = 0
+				engine.scene_reset(&s.scenes[id])
 				e.chars.is_visible[id] = false
 			}
 		}
@@ -159,7 +163,19 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 	} else {
 		s.wipe_delay -= 1
 	}
-	engine.update(e)
+	write := 0
+	for id in s.active {
+		if s.active_by_id[id] == 0 do continue
+		visual, complete := engine.step_animation(&s.scenes[id])
+		engine.character_set_visual(&e.chars, id, visual)
+		if complete {
+			s.active_by_id[id] = 0
+		} else {
+			s.active[write] = id
+			write += 1
+		}
+	}
+	resize(&s.active, write)
 	engine.frame(e)
 	return true
 }

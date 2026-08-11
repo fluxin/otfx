@@ -72,9 +72,11 @@ gray_shades: [5]engine.Color = {
 Sweep_State :: struct {
 	config:        Sweep_Config,
 	final_colors:  [dynamic]engine.Color_Pair,
-	scene_handles: [dynamic]int, // initial_sweep per slot
-	second_scenes: [dynamic]int, // second_sweep per slot
-	easer:         engine.Sequence_Easer,
+	first_scenes:  [dynamic]engine.Scene,
+	second_scenes: [dynamic]engine.Scene,
+	active:        [dynamic]engine.Char_Id,
+	active_phase:  [dynamic]i8, // -1 inactive, 0 first scene, 1 second scene
+	reveal:        engine.Group_Reveal,
 	second_groups: engine.Char_Groups,
 	first_phase:   bool,
 	complete:      bool,
@@ -104,9 +106,10 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	max_slot := 0
 	for id in chars do max_slot = max(max_slot, int(id))
 	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	s.second_scenes = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.scene_handles[i], s.second_scenes[i] = -1, -1
+	s.first_scenes = make([dynamic]engine.Scene, max_slot + 1)
+	s.second_scenes = make([dynamic]engine.Scene, max_slot + 1)
+	s.active_phase = make([dynamic]i8, max_slot + 1)
+	for i in 0 ..= max_slot do s.active_phase[i] = -1
 
 	for id in chars {
 		c := e.chars.input_coord[id]
@@ -125,33 +128,27 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		sym := e.chars.input_symbol[id]
 
 		// initial sweep: gray shimmer then a neutral final frame
-		sc1 := engine.new_scene(e, false, {})
 		for symbol in s.config.sweep_symbols {
 			gray := gray_shades[rand.int_max(5)]
-			engine.scene_add_frame(&e.scenes[sc1], symbol, 5, gray, nil, false)
+			engine.scene_add_frame(&s.first_scenes[id], symbol, 5, gray, nil, false)
 		}
-		engine.scene_add_frame(&e.scenes[sc1], sym, 1, gray_shades[1], nil, false)
-		s.scene_handles[id] = sc1
+		engine.scene_add_frame(&s.first_scenes[id], sym, 1, gray_shades[1], nil, false)
 
 		// second sweep: final gradient colors then the final frame
-		sc2 := engine.new_scene(e, false, {})
 		for symbol in s.config.sweep_symbols {
 			col := spectrum[rand.int_max(len(spectrum))]
-			engine.scene_add_frame(&e.scenes[sc2], symbol, 5, col, nil, false)
+			engine.scene_add_frame(&s.second_scenes[id], symbol, 5, col, nil, false)
 		}
-		engine.scene_add_frame(&e.scenes[sc2], sym, 1, s.final_colors[id].fg, nil, false)
-		s.second_scenes[id] = sc2
+		engine.scene_add_frame(&s.second_scenes[id], sym, 1, s.final_colors[id].fg, nil, false)
 	}
 
-	s.easer.groups = engine.get_characters_grouped(
+	s.reveal.groups = engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_all_fills(),
 		s.config.first_sweep_direction,
 	)
-	s.easer.tracker = engine.Easing_Tracker {
-		fn          = .Circular_In_Out,
-		total_steps = 100,
-	}
+	s.reveal.ease = .Circular_In_Out
+	s.reveal.duration = 100
 	s.second_groups = engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_all_fills(),
@@ -161,29 +158,49 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 }
 
 sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
-	if len(e.active) == 0 && s.complete {
+	if len(s.active) == 0 && s.complete {
 		return false
 	}
-	r := engine.seq_step(&s.easer)
-	for gi in r.added_start ..< r.added_end {
-		for id in engine.group_slice(s.easer.groups, gi) {
+	change := engine.group_reveal_step(&s.reveal)
+	for gi in change.added.start ..< change.added.start + change.added.len {
+		for id in engine.group_members(s.reveal.groups, gi) {
 			if s.first_phase do e.chars.is_visible[id] = true
-			handle := s.first_phase ? s.scene_handles[id] : s.second_scenes[id]
-			engine.activate_scene(e, id, handle)
-			engine.active_insert(e, id)
+			phase: i8 = 0
+			scene := &s.first_scenes[id]
+			if !s.first_phase {
+				phase = 1
+				scene = &s.second_scenes[id]
+			}
+			engine.character_set_visual(&e.chars, id, engine.scene_first_visual(scene^))
+			if s.active_phase[id] < 0 do append(&s.active, id)
+			s.active_phase[id] = phase
 		}
 	}
-	if engine.seq_complete(s.easer) {
+	if engine.group_reveal_complete(s.reveal) {
 		if s.first_phase {
-			engine.groups_delete(&s.easer.groups)
-			s.easer.groups = s.second_groups
-			engine.tracker_reset(&s.easer.tracker)
+			engine.groups_delete(&s.reveal.groups)
+			s.reveal.groups = s.second_groups
+			engine.group_reveal_reset(&s.reveal)
 			s.first_phase = false
 		} else {
 			s.complete = true
 		}
 	}
-	engine.update(e)
+	write := 0
+	for id in s.active {
+		phase := s.active_phase[id]
+		if phase < 0 do continue
+		scene := phase == 0 ? &s.first_scenes[id] : &s.second_scenes[id]
+		visual, scene_complete := engine.step_animation(scene)
+		engine.character_set_visual(&e.chars, id, visual)
+		if scene_complete {
+			s.active_phase[id] = -1
+		} else {
+			s.active[write] = id
+			write += 1
+		}
+	}
+	resize(&s.active, write)
 	engine.frame(e)
 	return true
 }

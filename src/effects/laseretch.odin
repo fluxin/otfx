@@ -147,7 +147,7 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	if group, has_group := s.config.etch_pattern.?; has_group {
 		grouped := engine.get_characters_grouped(query, engine.filter_input(), group)
 		defer engine.groups_delete(&grouped)
-		append(&s.pending, ..grouped.chars[:])
+		append(&s.pending, ..grouped.members[:])
 	} else {
 		append(&s.pending, ..s.characters[:])
 		rand.shuffle(s.pending[:])
@@ -244,8 +244,8 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 	}
 
 	current_coords := e.chars.current_coord
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	input_symbols := e.chars.input_symbol
 	// Only the short cooling tail needs updates. Completed source glyphs retain
 	// their final visual, so scanning the full input every frame is wasted work.
@@ -256,18 +256,18 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 		start := s.source_starts[i]
 		age := s.tick - start
 		if age >= source_lifetime {
-			visual_symbols[id] = input_symbols[id]
-			visual_fg[id] = s.final_colors[i]
+			visual_symbols[id].symbol = input_symbols[id]
+			visual_fg[id].fg = s.final_colors[i]
 			continue
 		}
-		visual_symbols[id] = age < 3 ? "^" : input_symbols[id]
+		visual_symbols[id].symbol = age < 3 ? "^" : input_symbols[id]
 		if age < 3 {
-			visual_fg[id] = s.cool_spectrum[0]
+			visual_fg[id].fg = s.cool_spectrum[0]
 		} else if age < 3 + len(s.cool_spectrum) * 3 {
-			visual_fg[id] = s.cool_spectrum[(age - 3) / 3]
+			visual_fg[id].fg = s.cool_spectrum[(age - 3) / 3]
 		} else {
 			cool_age := age - 3 - len(s.cool_spectrum) * 3
-			visual_fg[id] = engine.gradient_between_step(
+			visual_fg[id].fg = engine.gradient_between_step(
 				s.cool_spectrum[len(s.cool_spectrum) - 1],
 				s.final_colors[i],
 				8,
@@ -287,7 +287,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 				s.laser_position.column + beam,
 				s.laser_position.row + beam,
 			)
-			visual_fg[id] = color
+			visual_fg[id].fg = color
 			visible[id] = true
 		}
 		s.beam_color_index += 1
@@ -311,7 +311,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 				s.spark_targets[i],
 				ease.ease(.Sine_Out, f64(age + 1) / f64(s.spark_steps[i])),
 			)
-			visual_fg[id] = s.spark_spectrum[0]
+			visual_fg[id].fg = s.spark_spectrum[0]
 		} else {
 			cool_age := age - s.spark_steps[i]
 			color_step := cool_age / s.config.spark_cooling_frames
@@ -320,7 +320,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 				s.spark_starts[i] = -1
 				continue
 			}
-			visual_fg[id] = s.spark_spectrum[color_step]
+			visual_fg[id].fg = s.spark_spectrum[color_step]
 		}
 		s.active_sparks[spark_write] = i
 		spark_write += 1

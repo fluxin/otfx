@@ -126,7 +126,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 
 	current_coords := e.chars.current_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	for id, i in s.characters {
 		edge := rand.int_max(4)
 		target: engine.Coord
@@ -163,7 +163,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		s.explosion_max_steps = max(s.explosion_max_steps, s.explosion_steps[i])
 		s.reassembly_max_steps = max(s.reassembly_max_steps, s.reassembly_steps[i])
 		current_coords[id] = jumbled
-		visual_fg[id] = final_color
+		visual_fg[id].fg = final_color
 		visible[id] = true
 	}
 	s.phase = .Rumble
@@ -173,7 +173,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 
 	for {
 		switch s.phase {
@@ -185,7 +185,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 			}
 			color_step := min(s.phase_tick / 10, 12)
 			for id, i in s.characters {
-				visual_fg[id] = engine.gradient_between_step(
+				visual_fg[id].fg = engine.gradient_between_step(
 					s.final_colors[i],
 					s.config.unstable_color,
 					12,
@@ -252,7 +252,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 					input_coords[id],
 					ease.ease(s.config.reassembly_ease, progress),
 				)
-				visual_fg[id] = engine.gradient_between_step(
+				visual_fg[id].fg = engine.gradient_between_step(
 					s.config.unstable_color,
 					s.final_colors[i],
 					12,

@@ -161,8 +161,8 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
 	visible := e.chars.is_visible
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	available := make([dynamic]int, n, context.temp_allocator)
 	star_symbols := Blackhole_Star_Symbols
 	explode_directions := [5]engine.Coord {
@@ -183,8 +183,8 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		s.star_symbols[i] = star_symbols[rand.int_max(len(star_symbols))]
 		s.star_coords[i] = engine.canvas_random_coord(e.canvas, false, false)
 		current_coords[id] = s.star_coords[i]
-		visual_symbols[id] = s.star_symbols[i]
-		visual_fg[id] = s.star_colors[i]
+		visual_symbols[id].symbol = s.star_symbols[i]
+		visual_fg[id].fg = s.star_colors[i]
 		visible[id] = true
 		available[i] = i
 		s.consume_steps[i] = max(
@@ -244,8 +244,8 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 	current_coords := e.chars.current_coord
 	input_coords := e.chars.input_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 
 	for {
@@ -275,8 +275,8 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					s.ring_positions[slot],
 					ease.ease(.Sine_In_Out, f64(min(age + 1, steps)) / f64(steps)),
 				)
-				visual_symbols[id] = "*"
-				visual_fg[id] = s.config.blackhole_color
+				visual_symbols[id].symbol = "*"
+				visual_fg[id].fg = s.config.blackhole_color
 				e.chars.layer[id] = 1
 				if age < steps do formed = false
 			}
@@ -295,8 +295,8 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				slot := s.ring_slot_by_source[i]
 				if slot >= 0 {
 					current_coords[id] = blackhole_ring_position(s, slot)
-					visual_symbols[id] = "*"
-					visual_fg[id] = s.config.blackhole_color
+					visual_symbols[id].symbol = "*"
+					visual_fg[id].fg = s.config.blackhole_color
 					continue
 				}
 				steps := s.consume_steps[i]
@@ -306,7 +306,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					e.canvas.center,
 					ease.ease(.Exponential_In, progress),
 				)
-				visual_fg[id] = engine.gradient_between_step(
+				visual_fg[id].fg = engine.gradient_between_step(
 					s.star_colors[i],
 					engine.Color{0x00, 0x00, 0x00},
 					10,
@@ -355,8 +355,8 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						ease.ease(.Exponential_In, f64(s.phase_tick - 17) / 42),
 					)
 				}
-				visual_symbols[id] = s.phase_tick < 45 ? "◉" : "●"
-				visual_fg[id] = s.ring_colors[slot]
+				visual_symbols[id].symbol = s.phase_tick < 45 ? "◉" : "●"
+				visual_fg[id].fg = s.ring_colors[slot]
 			}
 			s.phase_tick += 1
 			engine.frame(e, s.characters[:])
@@ -366,14 +366,14 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 			if s.phase_tick == s.explode_limit do return false
 			for id, i in s.characters {
 				age := s.phase_tick
-				visual_symbols[id] = input_symbols[id]
+				visual_symbols[id].symbol = input_symbols[id]
 				if age < s.explode_steps[i] {
 					current_coords[id] = engine.coord_on_line(
 						e.canvas.center,
 						s.explode_targets[i],
 						ease.ease(.Exponential_Out, f64(age + 1) / f64(s.explode_steps[i])),
 					)
-					visual_fg[id] = s.explode_colors[i]
+					visual_fg[id].fg = s.explode_colors[i]
 				} else {
 					return_age := age - s.explode_steps[i]
 					if return_age < s.return_steps[i] {
@@ -383,7 +383,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 							ease.ease(.Cubic_In, f64(return_age + 1) / f64(s.return_steps[i])),
 						)
 					}
-					visual_fg[id] = engine.gradient_between_step(
+					visual_fg[id].fg = engine.gradient_between_step(
 						s.explode_colors[i],
 						s.final_colors[i],
 						10,

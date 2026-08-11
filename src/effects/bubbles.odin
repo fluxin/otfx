@@ -166,16 +166,16 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 
 	rows := engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
 	defer engine.groups_delete(&rows)
-	append(&s.bubbles.offsets, 0)
 	read := 0
-	for read < len(rows.chars) {
-		remaining := len(rows.chars) - read
+	for read < len(rows.members) {
+		remaining := len(rows.members) - read
 		count := remaining < 5 ? remaining : rand.int_range(5, min(remaining, 20) + 1)
-		append(&s.bubbles.chars, ..rows.chars[read:read + count])
-		append(&s.bubbles.offsets, len(s.bubbles.chars))
+		start := len(s.bubbles.members)
+		append(&s.bubbles.members, ..rows.members[read:read + count])
+		append(&s.bubbles.spans, engine.Span{start, count})
 		read += count
 	}
-	bubble_count := engine.group_count(s.bubbles)
+	bubble_count := len(s.bubbles.spans)
 	s.bubble_origins = make([dynamic]engine.Coord, bubble_count)
 	s.bubble_targets = make([dynamic]engine.Coord, bubble_count)
 	s.bubble_steps = make([dynamic]int, bubble_count)
@@ -185,7 +185,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	s.bubble_starts = make([dynamic]int, bubble_count)
 	s.pop_starts = make([dynamic]int, bubble_count)
 	for bi in 0 ..< bubble_count {
-		members := engine.group_slice(s.bubbles, bi)
+		members := engine.group_members(s.bubbles, bi)
 		radius := max(len(members) / 5, 1)
 		lowest := e.canvas.bottom
 		if s.config.pop_condition == .Row {
@@ -243,7 +243,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 }
 
 bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
-	active := s.next_bubble < engine.group_count(s.bubbles)
+	active := s.next_bubble < len(s.bubbles.spans)
 	for state in s.bubble_states {
 		if state == .Float || state == .Pop {
 			active = true
@@ -251,7 +251,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	if !active do return false
-	if s.next_bubble < engine.group_count(s.bubbles) {
+	if s.next_bubble < len(s.bubbles.spans) {
 		if s.delay == 0 {
 			bi := s.next_bubble
 			s.next_bubble += 1
@@ -266,13 +266,13 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 	current_coords := e.chars.current_coord
 	input_coords := e.chars.input_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	for bi in 0 ..< len(s.bubble_states) {
 		state := s.bubble_states[bi]
 		if state == .Pending || state == .Done do continue
-		members := engine.group_slice(s.bubbles, bi)
+		members := engine.group_members(s.bubbles, bi)
 		if state == .Float {
 			age := s.tick - s.bubble_starts[bi]
 			steps := s.bubble_steps[bi]
@@ -283,13 +283,13 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 					anchor.column + s.circle_dx[id],
 					anchor.row + s.circle_dy[id],
 				)
-				visual_symbols[id] = input_symbols[id]
+				visual_symbols[id].symbol = input_symbols[id]
 				if s.config.rainbow {
 					color_index := s.color_offsets[id] + s.rainbow_index
 					if color_index >= len(s.rainbow_palette) do color_index -= len(s.rainbow_palette)
-					visual_fg[id] = s.rainbow_palette[color_index]
+					visual_fg[id].fg = s.rainbow_palette[color_index]
 				} else {
-					visual_fg[id] = s.bubble_colors[bi]
+					visual_fg[id].fg = s.bubble_colors[bi]
 				}
 				visible[id] = true
 			}
@@ -317,8 +317,8 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 			for id in members {
 				if age < 18 {
 					current_coords[id] = s.pop_targets[id]
-					visual_symbols[id] = age < 9 ? "*" : "'"
-					visual_fg[id] = s.config.pop_color
+					visual_symbols[id].symbol = age < 9 ? "*" : "'"
+					visual_fg[id].fg = s.config.pop_color
 				} else {
 					move_age := age - 18
 					steps := s.pop_steps[id]
@@ -329,8 +329,8 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 							ease.ease(s.config.movement_easing, f64(move_age + 1) / f64(steps)),
 						)
 					}
-					visual_symbols[id] = input_symbols[id]
-					visual_fg[id] = engine.gradient_between_step(
+					visual_symbols[id].symbol = input_symbols[id]
+					visual_fg[id].fg = engine.gradient_between_step(
 						s.config.pop_color,
 						s.final_colors[id],
 						8,

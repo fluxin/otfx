@@ -104,8 +104,8 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	for id in characters {
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		e.chars.visual_symbol[id] = e.chars.input_symbol[id]
-		e.chars.visual_fg[id] = s.final_colors[id]
+		e.chars.visual[id].symbol = e.chars.input_symbol[id]
+		e.chars.visual[id].fg = s.final_colors[id]
 		e.chars.is_visible[id] = true
 	}
 	available := make([dynamic]engine.Char_Id, 0, len(characters), context.temp_allocator)
@@ -158,10 +158,10 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 		switch {
 		case age < 60:
 			if (age / 3) % 2 ==
-			   0 {e.chars.visual_symbol[id] = "▓"; e.chars.visual_fg[id] = s.config.error_color} else {e.chars.visual_symbol[id] = e.chars.input_symbol[id]; e.chars.visual_fg[id] = white}
+			   0 {e.chars.visual[id].symbol = "▓"; e.chars.visual[id].fg = s.config.error_color} else {e.chars.visual[id].symbol = e.chars.input_symbol[id]; e.chars.visual[id].fg = white}
 		case age < 84:
-			e.chars.visual_symbol[id] = first_wipe[(age - 60) / 3]
-			e.chars.visual_fg[id] = s.config.error_color
+			e.chars.visual[id].symbol = first_wipe[(age - 60) / 3]
+			e.chars.visual[id].fg = s.config.error_color
 		case age < last_start:
 			progress := f64(age - motion_start + 1) / f64(s.max_steps[id])
 			e.chars.current_coord[id] = engine.coord_on_line(
@@ -170,8 +170,8 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 				progress,
 			)
 			e.chars.layer[id] = 1
-			e.chars.visual_symbol[id] = "█"
-			e.chars.visual_fg[id] = engine.gradient_between_step(
+			e.chars.visual[id].symbol = "█"
+			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.config.error_color,
 				s.config.correct_color,
 				10,
@@ -180,11 +180,11 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 		case age < last_start + 21:
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 			e.chars.layer[id] = 0
-			e.chars.visual_symbol[id] = last_wipe[(age - last_start) / 3]
-			e.chars.visual_fg[id] = s.config.correct_color
+			e.chars.visual[id].symbol = last_wipe[(age - last_start) / 3]
+			e.chars.visual[id].fg = s.config.correct_color
 		case:
-			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
-			e.chars.visual_fg[id] = engine.gradient_between_step(
+			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.config.correct_color,
 				s.final_colors[id],
 				10,

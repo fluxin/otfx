@@ -96,7 +96,7 @@ Vhstape_Phase :: enum {
 	Redraw,
 }
 
-// The row state is parallel to `rows.offsets`; a kind value of one identifies
+// The row state is parallel to `rows.spans`; a kind value of one identifies
 // a moving three-row wave, zero an isolated line glitch.
 Vhstape_State :: struct {
 	config:        Vhstape_Config,
@@ -134,15 +134,15 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	// Char_Id is the Character_Storage index, so this is a direct color column.
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual_fg
+	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	for id in s.characters {
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], input_coords[id])
-		visual_fg[id] = s.final_colors[id]
+		visual_fg[id].fg = s.final_colors[id]
 		visible[id] = true
 	}
 	s.rows = engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
-	row_count := engine.group_count(s.rows)
+	row_count := len(s.rows.spans)
 	s.row_starts = make([dynamic]int, row_count)
 	s.row_durations = make([dynamic]int, row_count)
 	s.row_offsets = make([dynamic]int, row_count)
@@ -177,20 +177,20 @@ vhstape_start_wave_row :: proc(s: ^Vhstape_State, row, offset: int) {
 vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
-	visual_symbols := e.chars.visual_symbol
+	visual_symbols := e.chars.visual
 	input_symbols := e.chars.input_symbol
-	visual_fg := e.chars.visual_fg
-	for id in engine.group_slice(s.rows, row) {
+	visual_fg := e.chars.visual
+	for id in engine.group_members(s.rows, row) {
 		current_coords[id] = input_coords[id]
-		visual_symbols[id] = input_symbols[id]
-		visual_fg[id] = s.final_colors[id]
+		visual_symbols[id].symbol = input_symbols[id]
+		visual_fg[id].fg = s.final_colors[id]
 	}
 	s.row_starts[row] = -1
 }
 
 vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Glitching {
-		row_count := engine.group_count(s.rows)
+		row_count := len(s.rows.spans)
 		if s.wave_cooldown == 0 && row_count >= 3 {
 			start := rand.int_range(max(row_count / 2 - 2, 0), row_count - 2)
 			vhstape_start_wave_row(s, start, 8)
@@ -209,8 +209,8 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 		current_coords := e.chars.current_coord
 		input_coords := e.chars.input_coord
 		input_symbols := e.chars.input_symbol
-		visual_symbols := e.chars.visual_symbol
-		visual_fg := e.chars.visual_fg
+		visual_symbols := e.chars.visual
+		visual_fg := e.chars.visual
 		for row in 0 ..< row_count {
 			start := s.row_starts[row]
 			if start < 0 do continue
@@ -232,19 +232,19 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 			palette :=
 				s.row_kinds[row] == 0 ? s.config.glitch_line_colors[:] : s.config.glitch_wave_colors[:]
 			color := palette[min(age / 4, len(palette) - 1)]
-			for id in engine.group_slice(s.rows, row) {
+			for id in engine.group_members(s.rows, row) {
 				p := input_coords[id]
 				current_coords[id] = engine.coord(p.column + delta, p.row)
-				visual_symbols[id] = input_symbols[id]
-				visual_fg[id] = color
+				visual_symbols[id].symbol = input_symbols[id]
+				visual_fg[id].fg = color
 			}
 		}
 
 		if rand.float64() < s.config.noise_chance {
 			noise_symbols := Vhs_Noise_Symbols
 			for id in s.characters {
-				visual_symbols[id] = noise_symbols[rand.int_max(len(noise_symbols))]
-				visual_fg[id] = s.config.noise_colors[rand.int_max(len(s.config.noise_colors))]
+				visual_symbols[id].symbol = noise_symbols[rand.int_max(len(noise_symbols))]
+				visual_fg[id].fg = s.config.noise_colors[rand.int_max(len(s.config.noise_colors))]
 			}
 		}
 		s.tick += 1
@@ -266,11 +266,11 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 			return vhstape_next(s, e)
 		}
 		noise_symbols := Vhs_Noise_Symbols
-		visual_symbols := e.chars.visual_symbol
-		visual_fg := e.chars.visual_fg
+		visual_symbols := e.chars.visual
+		visual_fg := e.chars.visual
 		for id in s.characters {
-			visual_symbols[id] = noise_symbols[s.noise_index]
-			visual_fg[id] = s.config.noise_colors[s.noise_index]
+			visual_symbols[id].symbol = noise_symbols[s.noise_index]
+			visual_fg[id].fg = s.config.noise_colors[s.noise_index]
 			s.noise_index += 1
 			if s.noise_index == min(len(noise_symbols), len(s.config.noise_colors)) do s.noise_index = 0
 		}
@@ -279,16 +279,16 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 		return true
 	}
 
-	if s.redraw_row == engine.group_count(s.rows) do return false
+	if s.redraw_row == len(s.rows.spans) do return false
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual_symbol
-	visual_fg := e.chars.visual_fg
-	for id in engine.group_slice(s.rows, s.redraw_row) {
+	visual_symbols := e.chars.visual
+	visual_fg := e.chars.visual
+	for id in engine.group_members(s.rows, s.redraw_row) {
 		current_coords[id] = input_coords[id]
-		visual_symbols[id] = input_symbols[id]
-		visual_fg[id] = s.final_colors[id]
+		visual_symbols[id].symbol = input_symbols[id]
+		visual_fg[id].fg = s.final_colors[id]
 	}
 	s.redraw_row += 1
 	engine.frame(e, s.characters[:])
