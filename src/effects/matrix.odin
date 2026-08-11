@@ -175,23 +175,24 @@ Matrix_Column_Queue :: struct {
 }
 
 Matrix_State :: struct {
-	config:             Matrix_Config,
-	columns:            [dynamic]Matrix_Rain_Column,
-	column_characters:  [dynamic]engine.Char_Id,
-	visible_characters: [dynamic]engine.Char_Id,
-	pending_columns:    Matrix_Column_Queue,
-	active_columns:     [dynamic]int,
-	full_columns:       [dynamic]int,
-	resolve_scenes:     [dynamic]engine.Scene,
-	resolve_active:     [dynamic]engine.Char_Id,
-	resolve_active_ids: [dynamic]u8,
-	rain_colors:        [dynamic]engine.Color,
-	column_delay:       int,
-	resolve_delay:      int,
-	final_frame_shown:  bool,
-	rain_complete:      bool,
-	phase:              Matrix_Phase,
-	rain_start:         f64,
+	config:               Matrix_Config,
+	columns:              [dynamic]Matrix_Rain_Column,
+	column_characters:    [dynamic]engine.Char_Id,
+	visible_characters:   [dynamic]engine.Char_Id,
+	pending_columns:      Matrix_Column_Queue,
+	active_columns:       [dynamic]int,
+	full_columns:         [dynamic]int,
+	resolve_final_colors: []engine.Color,
+	resolve_ticks:        []int,
+	resolve_active:       [dynamic]engine.Char_Id,
+	resolve_active_ids:   []u8,
+	rain_colors:          [dynamic]engine.Color,
+	column_delay:         int,
+	resolve_delay:        int,
+	final_frame_shown:    bool,
+	rain_complete:        bool,
+	phase:                Matrix_Phase,
+	rain_start:           f64,
 }
 
 matrix_column_visible :: proc(
@@ -422,27 +423,16 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
-	s.resolve_scenes = make([dynamic]engine.Scene, len(e.chars))
-	s.resolve_active_ids = make([dynamic]u8, len(e.chars))
+	s.resolve_final_colors = make([]engine.Color, len(e.chars))
+	s.resolve_ticks = make([]int, len(e.chars))
+	s.resolve_active_ids = make([]u8, len(e.chars))
 	input_coords := e.chars.input_coord[:]
 	input_symbols := e.chars.input_symbol[:]
 
 	for id in chars {
 		c := input_coords[id]
 		final := engine.gradient_sample(final_sampler, final_spectrum[:], c)
-		g := engine.gradient_make([]engine.Color{s.config.highlight_color, final}, []int{8}, false)
-		resolve_scene := &s.resolve_scenes[id]
-		for color in g {
-			engine.scene_add_frame(
-				resolve_scene,
-				input_symbols[id],
-				s.config.final_gradient_frames,
-				color,
-				nil,
-				false,
-			)
-		}
-		delete(g[:])
+		s.resolve_final_colors[id] = final
 	}
 
 	col_groups := engine.get_characters_grouped(
@@ -482,19 +472,30 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	s.pending_columns.count = len(s.pending_columns.items)
 	reserve(&s.active_columns, len(s.columns))
 	reserve(&s.full_columns, len(s.columns))
+	reserve(&s.resolve_active, len(chars))
 	rand.shuffle(s.pending_columns.items[:])
 	s.rain_start = engine.now_wall(e.wall_start, e.mono_start)
 	s.resolve_delay = s.config.resolve_delay
 }
 
-matrix_step_resolve_scenes :: proc(s: ^Matrix_State, chars: ^engine.Character_Storage) {
+matrix_step_resolve :: proc(s: ^Matrix_State, chars: ^engine.Character_Storage) {
 	write := 0
 	for id in s.resolve_active {
-		visual, complete := engine.step_animation(&s.resolve_scenes[id])
-		chars.visual[id] = visual
-		if complete {
+		tick := s.resolve_ticks[id]
+		chars.visual[id] = {
+			symbol = chars.input_symbol[id],
+			fg     = engine.gradient_between_step(
+				s.config.highlight_color,
+				s.resolve_final_colors[id],
+				8,
+				min(tick / s.config.final_gradient_frames, 8),
+			),
+		}
+		tick += 1
+		if tick == 9 * s.config.final_gradient_frames {
 			s.resolve_active_ids[id] = 0
 		} else {
+			s.resolve_ticks[id] = tick
 			s.resolve_active[write] = id
 			write += 1
 		}
@@ -640,10 +641,13 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 						visible[idx] = visible[len(visible) - 1]
 						column.visible_count -= 1
 						if input_symbols[next] != " " {
-							scene := &s.resolve_scenes[next]
-							chars.visual[next] = engine.scene_first_visual(scene^)
 							if s.resolve_active_ids[next] == 0 {
 								s.resolve_active_ids[next] = 1
+								s.resolve_ticks[next] = 0
+								chars.visual[next] = {
+									symbol = input_symbols[next],
+									fg     = s.config.highlight_color,
+								}
 								append(&s.resolve_active, next)
 							}
 						} else {
@@ -671,12 +675,12 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 	   len(s.resolve_active) > 0 ||
 	   s.pending_columns.count > 0 ||
 	   !s.rain_complete {
-		matrix_step_resolve_scenes(s, chars)
+		matrix_step_resolve(s, chars)
 		return nil, true
 	}
 	if !s.final_frame_shown {
 		s.final_frame_shown = true
-		matrix_step_resolve_scenes(s, chars)
+		matrix_step_resolve(s, chars)
 		return nil, true
 	}
 	return nil, false
