@@ -7,9 +7,8 @@ import "core:strconv"
 import "core:strings"
 import "core:unicode/utf8"
 
-// Effect states are stored in a discriminated union; operations on them are
-// proc groups resolved at compile time. The union switch below forwards to
-// the group by the stored tag — no function pointers, no vtables.
+// Effect states are stored in a discriminated union. The build and frame
+// switches below call each concrete state procedure directly.
 
 Effect_State :: union {
 	Slide_State,
@@ -95,357 +94,237 @@ Effect_Kind :: enum {
 	Thunderstorm,
 }
 
-effect_build :: proc {
-	slide_build,
-	beams_build,
-	rings_build,
-	waves_build,
-	matrix_build,
-	decrypt_build,
-	rain_build,
-	wipe_build,
-	scattered_build,
-	expand_build,
-	middleout_build,
-	colorshift_build,
-	highlight_build,
-	sweep_build,
-	randomsequence_build,
-	pour_build,
-	bouncyballs_build,
-	spray_build,
-	slice_build,
-	overflow_build,
-	print_build,
-	errorcorrect_build,
-	unstable_build,
-	smoke_build,
-	burn_build,
-	crumble_build,
-	fireworks_build,
-	spotlights_build,
-	vhstape_build,
-	orbittingvolley_build,
-	synthgrid_build,
-	bubbles_build,
-	binarypath_build,
-	swarm_build,
-	laseretch_build,
-	blackhole_build,
-	thunderstorm_build,
-}
-
-effect_next :: proc {
-	slide_next,
-	beams_next,
-	rings_next,
-	waves_next,
-	matrix_next,
-	decrypt_next,
-	rain_next,
-	wipe_next,
-	scattered_next,
-	expand_next,
-	middleout_next,
-	colorshift_next,
-	highlight_next,
-	sweep_next,
-	randomsequence_next,
-	pour_next,
-	bouncyballs_next,
-	spray_next,
-	slice_next,
-	overflow_next,
-	print_next,
-	errorcorrect_next,
-	unstable_next,
-	smoke_next,
-	burn_next,
-	crumble_next,
-	fireworks_next,
-	spotlights_next,
-	vhstape_next,
-	orbittingvolley_next,
-	synthgrid_next,
-	bubbles_next,
-	binarypath_next,
-	swarm_next,
-	laseretch_next,
-	blackhole_next,
-	thunderstorm_next,
-}
-
-effect_parse :: proc {
-	slide_parse,
-	beams_parse,
-	rings_parse,
-	waves_parse,
-	matrix_parse,
-	decrypt_parse,
-	rain_parse,
-	wipe_parse,
-	scattered_parse,
-	expand_parse,
-	middleout_parse,
-	colorshift_parse,
-	highlight_parse,
-	sweep_parse,
-	randomsequence_parse,
-	pour_parse,
-	bouncyballs_parse,
-	spray_parse,
-	slice_parse,
-	overflow_parse,
-	print_parse,
-	errorcorrect_parse,
-	unstable_parse,
-	smoke_parse,
-	burn_parse,
-	crumble_parse,
-	fireworks_parse,
-	spotlights_parse,
-	vhstape_parse,
-	orbittingvolley_parse,
-	synthgrid_parse,
-	bubbles_parse,
-	binarypath_parse,
-	swarm_parse,
-	laseretch_parse,
-	blackhole_parse,
-	thunderstorm_parse,
-}
-
 make_effect :: proc(kind: Effect_Kind, args: []string) -> (Effect, bool) {
 	switch kind {
 	case .Slide:
 		cfg := slide_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !slide_parse(&cfg, args) do return {}, false
 		return {state = Slide_State{config = cfg}}, true
 	case .Beams:
 		cfg := beams_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !beams_parse(&cfg, args) do return {}, false
 		return {state = Beams_State{config = cfg}}, true
 	case .Rings:
 		cfg := rings_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !rings_parse(&cfg, args) do return {}, false
 		return {state = Rings_State{config = cfg}}, true
 	case .Waves:
 		cfg := waves_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !waves_parse(&cfg, args) do return {}, false
 		return {state = Waves_State{config = cfg}}, true
 	case .Matrix:
 		cfg := matrix_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !matrix_parse(&cfg, args) do return {}, false
 		return {state = Matrix_State{config = cfg}}, true
 	case .Decrypt:
 		cfg := decrypt_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !decrypt_parse(&cfg, args) do return {}, false
 		return {state = Decrypt_State{config = cfg}}, true
 	case .Rain:
 		cfg := rain_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !rain_parse(&cfg, args) do return {}, false
 		return {state = Rain_State{config = cfg}}, true
 	case .Wipe:
 		cfg := wipe_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !wipe_parse(&cfg, args) do return {}, false
 		return {state = Wipe_State{config = cfg}}, true
 	case .Scattered:
 		cfg := scattered_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !scattered_parse(&cfg, args) do return {}, false
 		return {state = Scattered_State{config = cfg}}, true
 	case .Expand:
 		cfg := expand_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !expand_parse(&cfg, args) do return {}, false
 		return {state = Expand_State{config = cfg}}, true
 	case .Middleout:
 		cfg := middleout_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !middleout_parse(&cfg, args) do return {}, false
 		return {state = Middleout_State{config = cfg}}, true
 	case .Colorshift:
 		cfg := colorshift_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !colorshift_parse(&cfg, args) do return {}, false
 		return {state = Colorshift_State{config = cfg}}, true
 	case .Highlight:
 		cfg := highlight_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !highlight_parse(&cfg, args) do return {}, false
 		return {state = Highlight_State{config = cfg}}, true
 	case .Sweep:
 		cfg := sweep_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !sweep_parse(&cfg, args) do return {}, false
 		return {state = Sweep_State{config = cfg}}, true
 	case .Randomsequence:
 		cfg := randomsequence_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !randomsequence_parse(&cfg, args) do return {}, false
 		return {state = Randomsequence_State{config = cfg}}, true
 	case .Pour:
 		cfg := pour_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !pour_parse(&cfg, args) do return {}, false
 		return {state = Pour_State{config = cfg}}, true
 	case .Bouncyballs:
 		cfg := bouncyballs_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !bouncyballs_parse(&cfg, args) do return {}, false
 		return {state = Bouncyballs_State{config = cfg}}, true
 	case .Spray:
 		cfg := spray_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !spray_parse(&cfg, args) do return {}, false
 		return {state = Spray_State{config = cfg}}, true
 	case .Slice:
 		cfg := slice_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !slice_parse(&cfg, args) do return {}, false
 		return {state = Slice_State{config = cfg}}, true
 	case .Overflow:
 		cfg := overflow_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !overflow_parse(&cfg, args) do return {}, false
 		return {state = Overflow_State{config = cfg}}, true
 	case .Print:
 		cfg := print_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !print_parse(&cfg, args) do return {}, false
 		return {state = Print_State{config = cfg}}, true
 	case .Errorcorrect:
 		cfg := errorcorrect_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !errorcorrect_parse(&cfg, args) do return {}, false
 		return {state = Errorcorrect_State{config = cfg}}, true
 	case .Unstable:
 		cfg := unstable_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !unstable_parse(&cfg, args) do return {}, false
 		return {state = Unstable_State{config = cfg}}, true
 	case .Smoke:
 		cfg := smoke_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !smoke_parse(&cfg, args) do return {}, false
 		return {state = Smoke_State{config = cfg}}, true
 	case .Burn:
 		cfg := burn_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !burn_parse(&cfg, args) do return {}, false
 		return {state = Burn_State{config = cfg}}, true
 	case .Crumble:
 		cfg := crumble_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !crumble_parse(&cfg, args) do return {}, false
 		return {state = Crumble_State{config = cfg}}, true
 	case .Fireworks:
 		cfg := fireworks_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !fireworks_parse(&cfg, args) do return {}, false
 		return {state = Fireworks_State{config = cfg}}, true
 	case .Spotlights:
 		cfg := spotlights_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !spotlights_parse(&cfg, args) do return {}, false
 		return {state = Spotlights_State{config = cfg}}, true
 	case .Vhstape:
 		cfg := vhstape_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !vhstape_parse(&cfg, args) do return {}, false
 		return {state = Vhstape_State{config = cfg}}, true
 	case .Orbittingvolley:
 		cfg := orbittingvolley_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !orbittingvolley_parse(&cfg, args) do return {}, false
 		return {state = Orbittingvolley_State{config = cfg}}, true
 	case .Synthgrid:
 		cfg := synthgrid_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !synthgrid_parse(&cfg, args) do return {}, false
 		return {state = Synthgrid_State{config = cfg}}, true
 	case .Bubbles:
 		cfg := bubbles_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !bubbles_parse(&cfg, args) do return {}, false
 		return {state = Bubbles_State{config = cfg}}, true
 	case .Binarypath:
 		cfg := binarypath_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !binarypath_parse(&cfg, args) do return {}, false
 		return {state = Binarypath_State{config = cfg}}, true
 	case .Swarm:
 		cfg := swarm_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !swarm_parse(&cfg, args) do return {}, false
 		return {state = Swarm_State{config = cfg}}, true
 	case .Laseretch:
 		cfg := laseretch_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !laseretch_parse(&cfg, args) do return {}, false
 		return {state = Laseretch_State{config = cfg}}, true
 	case .Blackhole:
 		cfg := blackhole_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !blackhole_parse(&cfg, args) do return {}, false
 		return {state = Blackhole_State{config = cfg}}, true
 	case .Thunderstorm:
 		cfg := thunderstorm_config_default()
-		if !effect_parse(&cfg, args) do return {}, false
+		if !thunderstorm_parse(&cfg, args) do return {}, false
 		return {state = Thunderstorm_State{config = cfg}}, true
 	}
 	return {}, false
 }
 
-// Tagged-union dispatch: each case resolves its call through the proc group.
+// Tagged-union dispatch keeps the dynamic branch explicit at the effect boundary.
 build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 	switch &s in effect.state {
 	case Slide_State:
-		effect_build(&s, ctx)
+		slide_build(&s, ctx)
 	case Beams_State:
-		effect_build(&s, ctx)
+		beams_build(&s, ctx)
 	case Rings_State:
-		effect_build(&s, ctx)
+		rings_build(&s, ctx)
 	case Waves_State:
-		effect_build(&s, ctx)
+		waves_build(&s, ctx)
 	case Matrix_State:
-		effect_build(&s, ctx)
+		matrix_build(&s, ctx)
 	case Decrypt_State:
-		effect_build(&s, ctx)
+		decrypt_build(&s, ctx)
 	case Rain_State:
-		effect_build(&s, ctx)
+		rain_build(&s, ctx)
 	case Wipe_State:
-		effect_build(&s, ctx)
+		wipe_build(&s, ctx)
 	case Scattered_State:
-		effect_build(&s, ctx)
+		scattered_build(&s, ctx)
 	case Expand_State:
-		effect_build(&s, ctx)
+		expand_build(&s, ctx)
 	case Middleout_State:
-		effect_build(&s, ctx)
+		middleout_build(&s, ctx)
 	case Colorshift_State:
-		effect_build(&s, ctx)
+		colorshift_build(&s, ctx)
 	case Highlight_State:
-		effect_build(&s, ctx)
+		highlight_build(&s, ctx)
 	case Sweep_State:
-		effect_build(&s, ctx)
+		sweep_build(&s, ctx)
 	case Randomsequence_State:
-		effect_build(&s, ctx)
+		randomsequence_build(&s, ctx)
 	case Pour_State:
-		effect_build(&s, ctx)
+		pour_build(&s, ctx)
 	case Bouncyballs_State:
-		effect_build(&s, ctx)
+		bouncyballs_build(&s, ctx)
 	case Spray_State:
-		effect_build(&s, ctx)
+		spray_build(&s, ctx)
 	case Slice_State:
-		effect_build(&s, ctx)
+		slice_build(&s, ctx)
 	case Overflow_State:
-		effect_build(&s, ctx)
+		overflow_build(&s, ctx)
 	case Print_State:
-		effect_build(&s, ctx)
+		print_build(&s, ctx)
 	case Errorcorrect_State:
-		effect_build(&s, ctx)
+		errorcorrect_build(&s, ctx)
 	case Unstable_State:
-		effect_build(&s, ctx)
+		unstable_build(&s, ctx)
 	case Smoke_State:
-		effect_build(&s, ctx)
+		smoke_build(&s, ctx)
 	case Burn_State:
-		effect_build(&s, ctx)
+		burn_build(&s, ctx)
 	case Crumble_State:
-		effect_build(&s, ctx)
+		crumble_build(&s, ctx)
 	case Fireworks_State:
-		effect_build(&s, ctx)
+		fireworks_build(&s, ctx)
 	case Spotlights_State:
-		effect_build(&s, ctx)
+		spotlights_build(&s, ctx)
 	case Vhstape_State:
-		effect_build(&s, ctx)
+		vhstape_build(&s, ctx)
 	case Orbittingvolley_State:
-		effect_build(&s, ctx)
+		orbittingvolley_build(&s, ctx)
 	case Synthgrid_State:
-		effect_build(&s, ctx)
+		synthgrid_build(&s, ctx)
 	case Bubbles_State:
-		effect_build(&s, ctx)
+		bubbles_build(&s, ctx)
 	case Binarypath_State:
-		effect_build(&s, ctx)
+		binarypath_build(&s, ctx)
 	case Swarm_State:
-		effect_build(&s, ctx)
+		swarm_build(&s, ctx)
 	case Laseretch_State:
-		effect_build(&s, ctx)
+		laseretch_build(&s, ctx)
 	case Blackhole_State:
-		effect_build(&s, ctx)
+		blackhole_build(&s, ctx)
 	case Thunderstorm_State:
-		effect_build(&s, ctx)
+		thunderstorm_build(&s, ctx)
 	case:
 		unreachable()
 	}
@@ -454,79 +333,79 @@ build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	switch &s in effect.state {
 	case Slide_State:
-		return effect_next(&s, ctx)
+		return slide_next(&s, ctx)
 	case Beams_State:
-		return effect_next(&s, ctx)
+		return beams_next(&s, ctx)
 	case Rings_State:
-		return effect_next(&s, ctx)
+		return rings_next(&s, ctx)
 	case Waves_State:
-		return effect_next(&s, ctx)
+		return waves_next(&s, ctx)
 	case Matrix_State:
-		return effect_next(&s, ctx)
+		return matrix_next(&s, ctx)
 	case Decrypt_State:
-		return effect_next(&s, ctx)
+		return decrypt_next(&s, ctx)
 	case Rain_State:
-		return effect_next(&s, ctx)
+		return rain_next(&s, ctx)
 	case Wipe_State:
-		return effect_next(&s, ctx)
+		return wipe_next(&s, ctx)
 	case Scattered_State:
-		return effect_next(&s, ctx)
+		return scattered_next(&s, ctx)
 	case Expand_State:
-		return effect_next(&s, ctx)
+		return expand_next(&s, ctx)
 	case Middleout_State:
-		return effect_next(&s, ctx)
+		return middleout_next(&s, ctx)
 	case Colorshift_State:
-		return effect_next(&s, ctx)
+		return colorshift_next(&s, ctx)
 	case Highlight_State:
-		return effect_next(&s, ctx)
+		return highlight_next(&s, ctx)
 	case Sweep_State:
-		return effect_next(&s, ctx)
+		return sweep_next(&s, ctx)
 	case Randomsequence_State:
-		return effect_next(&s, ctx)
+		return randomsequence_next(&s, ctx)
 	case Pour_State:
-		return effect_next(&s, ctx)
+		return pour_next(&s, ctx)
 	case Bouncyballs_State:
-		return effect_next(&s, ctx)
+		return bouncyballs_next(&s, ctx)
 	case Spray_State:
-		return effect_next(&s, ctx)
+		return spray_next(&s, ctx)
 	case Slice_State:
-		return effect_next(&s, ctx)
+		return slice_next(&s, ctx)
 	case Overflow_State:
-		return effect_next(&s, ctx)
+		return overflow_next(&s, ctx)
 	case Print_State:
-		return effect_next(&s, ctx)
+		return print_next(&s, ctx)
 	case Errorcorrect_State:
-		return effect_next(&s, ctx)
+		return errorcorrect_next(&s, ctx)
 	case Unstable_State:
-		return effect_next(&s, ctx)
+		return unstable_next(&s, ctx)
 	case Smoke_State:
-		return effect_next(&s, ctx)
+		return smoke_next(&s, ctx)
 	case Burn_State:
-		return effect_next(&s, ctx)
+		return burn_next(&s, ctx)
 	case Crumble_State:
-		return effect_next(&s, ctx)
+		return crumble_next(&s, ctx)
 	case Fireworks_State:
-		return effect_next(&s, ctx)
+		return fireworks_next(&s, ctx)
 	case Spotlights_State:
-		return effect_next(&s, ctx)
+		return spotlights_next(&s, ctx)
 	case Vhstape_State:
-		return effect_next(&s, ctx)
+		return vhstape_next(&s, ctx)
 	case Orbittingvolley_State:
-		return effect_next(&s, ctx)
+		return orbittingvolley_next(&s, ctx)
 	case Synthgrid_State:
-		return effect_next(&s, ctx)
+		return synthgrid_next(&s, ctx)
 	case Bubbles_State:
-		return effect_next(&s, ctx)
+		return bubbles_next(&s, ctx)
 	case Binarypath_State:
-		return effect_next(&s, ctx)
+		return binarypath_next(&s, ctx)
 	case Swarm_State:
-		return effect_next(&s, ctx)
+		return swarm_next(&s, ctx)
 	case Laseretch_State:
-		return effect_next(&s, ctx)
+		return laseretch_next(&s, ctx)
 	case Blackhole_State:
-		return effect_next(&s, ctx)
+		return blackhole_next(&s, ctx)
 	case Thunderstorm_State:
-		return effect_next(&s, ctx)
+		return thunderstorm_next(&s, ctx)
 	case:
 		return nil, false
 	}
