@@ -5,6 +5,7 @@ import engine "../engine"
 import "core:fmt"
 import "core:math"
 import rand "core:math/rand"
+import "core:sort"
 
 Swarm_Config :: struct {
 	base_colors:              [dynamic]engine.Color,
@@ -76,14 +77,25 @@ Swarm_State :: struct {
 	swarms:             engine.Char_Groups,
 	group_stage_counts: [dynamic]int,
 	group_colors:       [dynamic]engine.Color,
+	group_area_stages:  [dynamic]int,
+	group_spawns:       [dynamic]engine.Coord,
+	group_start_ticks:  [dynamic]int,
 	waypoints:          [dynamic]engine.Coord,
-	segment_origins:    [dynamic]engine.Coord,
-	segment_steps:      [dynamic]int,
-	segment_lags:       [dynamic]int,
+	lane_origins:       [dynamic]engine.Coord,
+	lane_starts:        [dynamic]int,
+	lane_ends:          [dynamic]int,
+	lane_next:          [dynamic]int,
+	lane_finish:        [dynamic]int,
 	character_stages:   [dynamic]int,
-	character_ticks:    [dynamic]int,
 	active_indexes:     [dynamic]int,
-	next_group:         int,
+	next_launch_group:  int,
+	tick:               int,
+}
+
+Swarm_Plan_Event :: struct {
+	tick:      int,
+	character: int,
+	stage:     int,
 }
 
 swarm_waypoint :: #force_inline proc(
@@ -113,11 +125,13 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.waypoints = make([dynamic]engine.Coord, n * SWARM_MAX_STAGES)
-	s.segment_origins = make([dynamic]engine.Coord, n)
-	s.segment_steps = make([dynamic]int, n)
-	s.segment_lags = make([dynamic]int, n)
+	s.lane_origins = make([dynamic]engine.Coord, n * SWARM_MAX_STAGES)
+	s.lane_starts = make([dynamic]int, n * SWARM_MAX_STAGES)
+	s.lane_ends = make([dynamic]int, n * SWARM_MAX_STAGES)
+	s.lane_next = make([dynamic]int, n * SWARM_MAX_STAGES)
+	s.lane_finish = make([dynamic]int, n)
 	s.character_stages = make([dynamic]int, n)
-	s.character_ticks = make([dynamic]int, n)
+	for &next in s.lane_next do next = -1
 
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
@@ -145,6 +159,9 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	groups = engine.group_count(s.swarms)
 	s.group_stage_counts = make([dynamic]int, groups)
 	s.group_colors = make([dynamic]engine.Color, groups)
+	s.group_area_stages = make([dynamic]int, groups)
+	s.group_spawns = make([dynamic]engine.Coord, groups)
+	s.group_start_ticks = make([dynamic]int, groups)
 	s.group_by_index = make([dynamic]int, n)
 
 	for group in 0 ..< groups {
@@ -158,47 +175,45 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 		s.group_stage_counts[group] = stages
 		s.group_colors[group] = s.config.base_colors[rand.int_max(len(s.config.base_colors))]
 		spawn := engine.canvas_random_coord(e.canvas, true, false)
-		focus := engine.canvas_random_coord(e.canvas, false, false)
-		radius := max(math.floor_div(min(e.canvas.width, e.canvas.height), 6), 1)
+		s.group_spawns[group] = spawn
+		area_radius := max(math.floor_div(min(e.canvas.right, e.canvas.top), 6), 1) * 2
+		focus_radius := max(math.floor_div(min(e.canvas.right, e.canvas.top), 2), 1)
+		area_coords: [4][dynamic]engine.Coord
+		last_focus := spawn
+		for area in 0 ..< area_count {
+			// The source keeps each area around the *previous* focus, then
+			// chooses the next focus from a large circle around it. That shared
+			// area data is the coordination domain for every member of a swarm.
+			circle := engine.find_coords_on_circle(last_focus, focus_radius, 0, false)
+			rand.shuffle(circle[:])
+			next_focus: engine.Coord
+			found := false
+			for p in circle {
+				if engine.canvas_in(e.canvas, p) {
+					next_focus, found = p, true
+					break
+				}
+			}
+			if !found do next_focus = engine.canvas_random_coord(e.canvas, false, false)
+			delete(circle[:])
+			area_coords[area] = engine.find_coords_in_circle(last_focus, area_radius)
+			last_focus = next_focus
+		}
 		for id in engine.group_slice(s.swarms, group) {
 			i := s.index_by_id[id]
 			current_coords[id] = spawn
 			for area in 0 ..< area_count {
-				if area > 0 {
-					focus = engine.coord(
-						clamp(
-							focus.column + rand.int_range(-radius * 2, radius * 2 + 1),
-							e.canvas.left,
-							e.canvas.right,
-						),
-						clamp(
-							focus.row + rand.int_range(-radius, radius + 1),
-							e.canvas.bottom,
-							e.canvas.top,
-						),
-					)
-				}
 				base_stage := area * 3
 				for inner in 0 ..< 3 {
-					s.waypoints[i * SWARM_MAX_STAGES + base_stage + inner] = engine.coord(
-						clamp(
-							focus.column + rand.int_range(-radius, radius + 1),
-							e.canvas.left,
-							e.canvas.right,
-						),
-						clamp(
-							focus.row +
-							rand.int_range(-max(radius / 2, 1), max(radius / 2, 1) + 1),
-							e.canvas.bottom,
-							e.canvas.top,
-						),
-					)
+					s.waypoints[i * SWARM_MAX_STAGES + base_stage + inner] =
+						area_coords[area][rand.int_max(len(area_coords[area]))]
 				}
 			}
 			s.waypoints[i * SWARM_MAX_STAGES + stages - 1] = input_coords[id]
 		}
+		for &coords in area_coords[:area_count] do delete(coords[:])
 	}
-	s.next_group = groups - 1
+	swarm_plan_lanes(s, e)
 }
 
 swarm_stage_speed :: #force_inline proc(stage, stage_count: int) -> f64 {
@@ -206,60 +221,213 @@ swarm_stage_speed :: #force_inline proc(stage, stage_count: int) -> f64 {
 	return stage % 3 == 0 ? 0.4 : 0.18
 }
 
-swarm_begin_segment :: proc(s: ^Swarm_State, e: ^engine.Engine, i: int) {
-	current_coords := e.chars.current_coord
-	id := s.characters[i]
-	stage := s.character_stages[i]
-	stage_count := s.group_stage_counts[s.group_by_index[i]]
-	s.segment_origins[i] = current_coords[id]
-	target := swarm_waypoint(s, i, stage)
-	s.segment_steps[i] = max(
+swarm_lane_index :: #force_inline proc(character, stage: int) -> int {
+	return character * SWARM_MAX_STAGES + stage
+}
+
+swarm_event_less :: #force_inline proc(a, b: Swarm_Plan_Event) -> bool {
+	return a.tick < b.tick || (a.tick == b.tick && a.character < b.character)
+}
+
+swarm_event_push :: proc(events: ^[dynamic]Swarm_Plan_Event, event: Swarm_Plan_Event) {
+	append(events, event)
+	i := len(events^) - 1
+	for i > 0 {
+		parent := (i - 1) / 2
+		if !swarm_event_less(events^[i], events^[parent]) do break
+		events^[i], events^[parent] = events^[parent], events^[i]
+		i = parent
+	}
+}
+
+swarm_event_pop :: proc(events: ^[dynamic]Swarm_Plan_Event) -> Swarm_Plan_Event {
+	result := events^[0]
+	last := pop(events)
+	if len(events^) == 0 do return result
+	events^[0] = last
+	i := 0
+	for {
+		left := 2 * i + 1
+		if left >= len(events^) do break
+		smallest := left
+		right := left + 1
+		if right < len(events^) && swarm_event_less(events^[right], events^[left]) do smallest = right
+		if !swarm_event_less(events^[smallest], events^[i]) do break
+		events^[i], events^[smallest] = events^[smallest], events^[i]
+		i = smallest
+	}
+	return result
+}
+
+swarm_lane_position :: proc(s: ^Swarm_State, character, stage, tick: int) -> engine.Coord {
+	row := swarm_lane_index(character, stage)
+	start, end := s.lane_starts[row], s.lane_ends[row]
+	duration := max(end - start, 1)
+	progress := f64(clamp(tick - start, 0, duration)) / f64(duration)
+	stage_count := s.group_stage_counts[s.group_by_index[character]]
+	return engine.coord_on_line(
+		s.lane_origins[row],
+		swarm_waypoint(s, character, stage),
+		engine.easing_apply(
+			stage + 1 == stage_count ? engine.ease_of(.Quadratic_In_Out) : engine.ease_of(.Sine_In_Out),
+			progress,
+		),
+	)
+}
+
+swarm_plan_segment :: proc(
+	s: ^Swarm_State,
+	character, stage, tick: int,
+	origin: engine.Coord,
+	events: ^[dynamic]Swarm_Plan_Event,
+) {
+	stage_count := s.group_stage_counts[s.group_by_index[character]]
+	row := swarm_lane_index(character, stage)
+	target := swarm_waypoint(s, character, stage)
+	steps := max(
 		engine.round_half_even(
-			engine.line_length(s.segment_origins[i], target, true) /
-			swarm_stage_speed(stage, stage_count),
+			engine.line_length(origin, target, true) / swarm_stage_speed(stage, stage_count),
 		),
 		1,
 	)
-	// The reference starts each group together, then lets the path chain fan
-	// out. A small initial lag gives the uncoordinated minority that same look.
-	s.segment_lags[i] = rand.float64() < s.config.swarm_coordination ? 0 : rand.int_range(1, 13)
-	s.character_ticks[i] = 0
+	s.lane_origins[row] = origin
+	s.lane_starts[row] = tick
+	s.lane_ends[row] = tick + steps
+	s.lane_next[row] = -1
+	swarm_event_push(events, {tick + steps, character, stage})
+}
+
+swarm_plan_coordinate_area :: proc(
+	s: ^Swarm_State,
+	group, leader, stage, tick: int,
+	plan_stages: []int,
+	events: ^[dynamic]Swarm_Plan_Event,
+) {
+	group := s.group_by_index[leader]
+	if stage <= s.group_area_stages[group] do return
+	s.group_area_stages[group] = stage
+	for id in engine.group_slice(s.swarms, group) {
+		i := s.index_by_id[id]
+		if i == leader || plan_stages[i] < 0 || plan_stages[i] >= stage do continue
+		if rand.float64() >= s.config.swarm_coordination do continue
+		old_stage := plan_stages[i]
+		old_row := swarm_lane_index(i, old_stage)
+		s.lane_ends[old_row] = tick
+		s.lane_next[old_row] = stage
+		plan_stages[i] = stage
+		swarm_plan_segment(s, i, stage, tick, swarm_lane_position(s, i, old_stage, tick), events)
+	}
+}
+
+swarm_plan_group :: proc(s: ^Swarm_State, group, start_tick: int) {
+	plan_stages := make([]int, len(s.characters), context.temp_allocator)
+	for &stage in plan_stages do stage = -1
+	events: [dynamic]Swarm_Plan_Event
+	defer delete(events[:])
+	s.group_area_stages[group] = 0
+	for id in engine.group_slice(s.swarms, group) {
+		i := s.index_by_id[id]
+		plan_stages[i] = 0
+		swarm_plan_segment(s, i, 0, start_tick, s.group_spawns[group], &events)
+	}
+	for len(events) > 0 {
+		event := swarm_event_pop(&events)
+		i, stage := event.character, event.stage
+		row := swarm_lane_index(i, stage)
+		if plan_stages[i] != stage || s.lane_ends[row] != event.tick do continue
+		stage_count := s.group_stage_counts[group]
+		if stage + 1 == stage_count {
+			s.lane_finish[i] = event.tick + 30
+			plan_stages[i] = -1
+			continue
+		}
+		next_stage := stage + 1
+		s.lane_next[row] = next_stage
+		plan_stages[i] = next_stage
+		swarm_plan_segment(s, i, next_stage, event.tick, swarm_waypoint(s, i, stage), &events)
+		if next_stage % 3 == 0 do swarm_plan_coordinate_area(s, group, i, next_stage, event.tick, plan_stages, &events)
+	}
+}
+
+swarm_plan_lanes :: proc(s: ^Swarm_State, e: ^engine.Engine) {
+	finish_ticks: [dynamic]int
+	defer delete(finish_ticks[:])
+	start_tick := 0
+	launched := 0
+	for group := engine.group_count(s.swarms) - 1; group >= 0; group -= 1 {
+		s.group_start_ticks[group] = start_tick
+		swarm_plan_group(s, group, start_tick)
+		members := engine.group_slice(s.swarms, group)
+		for id in members do append(&finish_ticks, s.lane_finish[s.index_by_id[id]])
+		launched += len(members)
+		if group > 0 {
+			finish_slice := finish_ticks[:]
+			sort.sort(sort.slice_interface(&finish_slice))
+			finished_needed := launched - len(members) + 1
+			start_tick = finish_ticks[finished_needed - 1] + 1
+		}
+	}
+	s.next_launch_group = engine.group_count(s.swarms) - 1
 }
 
 swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
-	if s.next_group < 0 do return
-	group := s.next_group
-	s.next_group -= 1
-	visible := e.chars.is_visible
+	if s.next_launch_group < 0 do return
+	group := s.next_launch_group
+	s.next_launch_group -= 1
 	for id in engine.group_slice(s.swarms, group) {
 		i := s.index_by_id[id]
 		s.character_stages[i] = 0
-		swarm_begin_segment(s, e, i)
-		visible[id] = true
+		e.chars.current_coord[id] = s.lane_origins[swarm_lane_index(i, 0)]
+		e.chars.is_visible[id] = true
 		append(&s.active_indexes, i)
 	}
 }
 
 swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
-	if len(s.active_indexes) == 0 && s.next_group < 0 do return false
-	if len(s.active_indexes) == 0 do swarm_launch_group(s, e)
+	for s.next_launch_group >= 0 && s.tick >= s.group_start_ticks[s.next_launch_group] do swarm_launch_group(s, e)
+	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return false
 
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
 	visual_symbols := e.chars.visual_symbol
 	visual_fg := e.chars.visual_fg
 	write := 0
-	launch_next := false
 	for i in s.active_indexes {
 		group := s.group_by_index[i]
 		stage_count := s.group_stage_counts[group]
 		stage := s.character_stages[i]
 		id := s.characters[i]
-		age := s.character_ticks[i] - s.segment_lags[i]
-		if age >= 0 {
-			progress := f64(min(age + 1, s.segment_steps[i])) / f64(s.segment_steps[i])
+		row := swarm_lane_index(i, stage)
+		if s.tick >= s.lane_ends[row] {
+			next_stage := s.lane_next[row]
+			if next_stage >= 0 {
+				current_coords[id] = swarm_waypoint(s, i, stage)
+				s.character_stages[i] = next_stage
+				s.active_indexes[write] = i
+				write += 1
+				continue
+			}
+			if s.tick >= s.lane_finish[i] {
+				visual_fg[id] = s.final_colors[i]
+				continue
+			}
+			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
+			visual_fg[id] = engine.gradient_between_step(
+				s.config.flash_color,
+				s.final_colors[i],
+				10,
+				landing_step,
+			)
+			current_coords[id] = swarm_waypoint(s, i, stage)
+			s.active_indexes[write] = i
+			write += 1
+			continue
+		}
+		if s.tick >= s.lane_starts[row] {
+			progress :=
+				f64(s.tick - s.lane_starts[row] + 1) / f64(s.lane_ends[row] - s.lane_starts[row])
 			current_coords[id] = engine.coord_on_line(
-				s.segment_origins[i],
+				s.lane_origins[row],
 				swarm_waypoint(s, i, stage),
 				engine.easing_apply(
 					stage + 1 == stage_count ? engine.ease_of(.Quadratic_In_Out) : engine.ease_of(.Sine_In_Out),
@@ -268,14 +436,9 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 			)
 			visual_symbols[id] = input_symbols[id]
 			if stage + 1 == stage_count {
-				visual_fg[id] = engine.gradient_between_step(
-					s.config.flash_color,
-					s.final_colors[i],
-					10,
-					min(age / 3, 10),
-				)
+				visual_fg[id] = s.config.flash_color
 			} else {
-				flash_step := min(age, 6)
+				flash_step := min(s.tick - s.lane_starts[row], 6)
 				visual_fg[id] = engine.gradient_between_step(
 					s.group_colors[group],
 					s.config.flash_color,
@@ -284,29 +447,11 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 				)
 			}
 		}
-		s.character_ticks[i] += 1
-		if s.character_ticks[i] < s.segment_steps[i] + s.segment_lags[i] {
-			s.active_indexes[write] = i
-			write += 1
-			continue
-		}
-
-		current_coords[id] = swarm_waypoint(s, i, stage)
-		if stage + 1 == stage_count {
-			visual_fg[id] = s.final_colors[i]
-			// ttfx starts the following swarm as soon as the first character in
-			// this group has finished its chained motion. Keeping the older
-			// members active lets the swarms overlap instead of serializing them.
-			launch_next = true
-		} else {
-			s.character_stages[i] += 1
-			swarm_begin_segment(s, e, i)
-			s.active_indexes[write] = i
-			write += 1
-		}
+		s.active_indexes[write] = i
+		write += 1
 	}
 	resize(&s.active_indexes, write)
-	if launch_next do swarm_launch_group(s, e)
 	engine.frame(e, s.characters[:])
+	s.tick += 1
 	return true
 }

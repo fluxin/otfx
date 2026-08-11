@@ -69,11 +69,21 @@ bouncyballs_parse :: proc(cfg: ^Bouncyballs_Config, args: []string) -> bool {
 }
 
 Bouncyballs_State :: struct {
-	config:     Bouncyballs_Config,
-	row_groups: engine.Char_Groups,
-	next_group: int,
-	pending:    [dynamic]engine.Char_Id,
-	ball_delay: int,
+	config:       Bouncyballs_Config,
+	characters:   [dynamic]engine.Char_Id,
+	index_by_id:  [dynamic]int,
+	final_colors: [dynamic]engine.Color,
+	ball_colors:  [dynamic]engine.Color,
+	ball_symbols: [dynamic]string,
+	origins:      [dynamic]engine.Coord,
+	max_steps:    [dynamic]int,
+	start_ticks:  [dynamic]int,
+	row_groups:   engine.Char_Groups,
+	next_group:   int,
+	pending:      [dynamic]engine.Char_Id,
+	active_slots: [dynamic]int,
+	ball_delay:   int,
+	tick:         int,
 }
 
 bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
@@ -91,55 +101,42 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	characters := engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
-	defer delete(characters[:])
+	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
 	s.row_groups = engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
+	n := len(s.characters)
+	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.ball_colors = make([dynamic]engine.Color, n)
+	s.ball_symbols = make([dynamic]string, n)
+	s.origins = make([dynamic]engine.Coord, n)
+	s.max_steps = make([dynamic]int, n)
+	s.start_ticks = make([dynamic]int, n)
 
-	for id in characters {
+	for id, i in s.characters {
+		s.index_by_id[id] = i
 		input_coord := e.chars.input_coord[id]
-		ball_color := s.config.ball_colors[rand.int_max(len(s.config.ball_colors))]
-		ball_symbol := s.config.ball_symbols[rand.int_max(len(s.config.ball_symbols))]
-		ball_scene := engine.new_scene(e, false, .None, nil)
-		engine.scene_add_frame(&e.scenes[ball_scene], ball_symbol, 1, ball_color, nil, false)
-
-		final_color := engine.gradient_sample(sampler, spectrum[:], input_coord)
-		fade := engine.gradient_with_steps([]engine.Color{ball_color, final_color}, 10, false)
-		final_scene := engine.new_scene(e, false, .None, nil)
-		engine.scene_add_gradient(
-			&e.scenes[final_scene],
-			[]string{e.chars.input_symbol[id]},
-			6,
-			fade[:],
-			nil,
-		)
-		delete(fade[:])
-
+		s.ball_colors[i] = s.config.ball_colors[rand.int_max(len(s.config.ball_colors))]
+		s.ball_symbols[i] = s.config.ball_symbols[rand.int_max(len(s.config.ball_symbols))]
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], input_coord)
 		drop_row := int(f64(e.canvas.top) * rand.float64_range(1, 1.5))
-		e.chars.current_coord[id] = engine.coord(input_coord.column, drop_row)
-		path := engine.new_path(
-			e,
-			s.config.movement_speed,
-			s.config.movement_easing,
-			nil,
-			0,
-			false,
+		s.origins[i] = engine.coord(input_coord.column, drop_row)
+		e.chars.current_coord[id] = s.origins[i]
+		s.max_steps[i] = max(
+			engine.round_half_even(
+				engine.line_length(s.origins[i], input_coord, true) / s.config.movement_speed,
+			),
+			1,
 		)
-		engine.path_add_waypoint(&e.paths[path], input_coord)
-		engine.activate_path(e, id, path)
-		engine.activate_scene(e, id, ball_scene)
-		engine.register_event(
-			e,
-			id,
-			.Path_Complete,
-			.Path,
-			path,
-			{kind = .Activate_Scene, scene = final_scene},
-		)
+		s.start_ticks[i] = -1
 	}
 }
 
 bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
-	if s.next_group >= engine.group_count(s.row_groups) && len(s.pending) == 0 && len(e.active) == 0 do return false
+	active :=
+		s.next_group < engine.group_count(s.row_groups) ||
+		len(s.pending) > 0 ||
+		len(s.active_slots) > 0
+	if !active do return false
 	if len(s.pending) == 0 && s.next_group < engine.group_count(s.row_groups) {
 		append(&s.pending, ..engine.group_slice(s.row_groups, s.next_group))
 		s.next_group += 1
@@ -151,15 +148,48 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 				index := rand.int_max(len(s.pending))
 				id := s.pending[index]
 				ordered_remove(&s.pending, index)
+				slot := s.index_by_id[id]
+				s.start_ticks[slot] = s.tick
+				append(&s.active_slots, slot)
 				e.chars.is_visible[id] = true
-				engine.active_insert(e, id)
 			}
 			s.ball_delay = s.config.ball_delay
 		} else {
 			s.ball_delay -= 1
 		}
 	}
-	engine.update(e)
-	engine.frame(e)
+	write := 0
+	for slot in s.active_slots {
+		id := s.characters[slot]
+		age := s.tick - s.start_ticks[slot]
+		if age >= s.max_steps[slot] + 65 do continue
+		if age < s.max_steps[slot] - 1 {
+			progress := f64(age + 1) / f64(s.max_steps[slot])
+			e.chars.current_coord[id] = engine.coord_on_line(
+				s.origins[slot],
+				e.chars.input_coord[id],
+				engine.easing_apply(s.config.movement_easing, progress),
+			)
+			e.chars.visual_symbol[id] = s.ball_symbols[slot]
+			e.chars.visual_fg[id] = s.ball_colors[slot]
+		} else {
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+			fade_tick := age - (s.max_steps[slot] - 1)
+			e.chars.visual_fg[id] = engine.gradient_between_step(
+				s.ball_colors[slot],
+				s.final_colors[slot],
+				10,
+				min(fade_tick / 6, 10),
+			)
+		}
+		if age + 1 < s.max_steps[slot] + 65 {
+			s.active_slots[write] = slot
+			write += 1
+		}
+	}
+	resize(&s.active_slots, write)
+	s.tick += 1
+	engine.frame(e, s.characters[:])
 	return true
 }

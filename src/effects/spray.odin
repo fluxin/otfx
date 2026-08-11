@@ -102,9 +102,17 @@ spray_parse :: proc(cfg: ^Spray_Config, args: []string) -> bool {
 }
 
 Spray_State :: struct {
-	config:  Spray_Config,
-	pending: [dynamic]engine.Char_Id,
-	volume:  int,
+	config:       Spray_Config,
+	characters:   [dynamic]engine.Char_Id,
+	index_by_id:  [dynamic]int,
+	pending:      [dynamic]engine.Char_Id,
+	final_colors: [dynamic]engine.Color,
+	start_colors: [dynamic]engine.Color,
+	max_steps:    [dynamic]int,
+	start_ticks:  [dynamic]int,
+	origin:       engine.Coord,
+	volume:       int,
+	tick:         int,
 }
 
 spray_origin :: proc(position: Spray_Position, canvas: engine.Canvas) -> engine.Coord {
@@ -145,40 +153,33 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	characters := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(characters[:])
-
-	origin := spray_origin(s.config.spray_position, e.canvas)
-	for id in characters {
+	n := len(s.characters)
+	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.start_colors = make([dynamic]engine.Color, n)
+	s.max_steps = make([dynamic]int, n)
+	s.start_ticks = make([dynamic]int, n)
+	s.origin = spray_origin(s.config.spray_position, e.canvas)
+	for id, i in s.characters {
+		s.index_by_id[id] = i
 		input_coord := e.chars.input_coord[id]
-		final_color := engine.gradient_sample(sampler, spectrum[:], input_coord)
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], input_coord)
+		s.start_colors[i] = spectrum[rand.int_max(len(spectrum))]
 		speed := rand.float64_range(
 			s.config.movement_speed_range.lo,
 			s.config.movement_speed_range.hi,
 		)
-		e.chars.current_coord[id] = origin
-		path := engine.new_path(e, speed, s.config.movement_easing, nil, 0, false)
-		engine.path_add_waypoint(&e.paths[path], input_coord)
-		engine.register_event(e, id, .Path_Activated, .Path, path, {kind = .Set_Layer, layer = 1})
-		engine.register_event(e, id, .Path_Complete, .Path, path, {kind = .Set_Layer, layer = 0})
-
-		start_color := spectrum[rand.int_max(len(spectrum))]
-		gradient := engine.gradient_with_steps([]engine.Color{start_color, final_color}, 7, false)
-		scene := engine.new_scene(e, false, .None, nil)
-		engine.scene_add_gradient(
-			&e.scenes[scene],
-			[]string{e.chars.input_symbol[id]},
-			20,
-			gradient[:],
-			nil,
+		e.chars.current_coord[id] = s.origin
+		s.max_steps[i] = max(
+			engine.round_half_even(engine.line_length(s.origin, input_coord, true) / speed),
+			1,
 		)
-		delete(gradient[:])
-		engine.activate_scene(e, id, scene)
-		engine.activate_path(e, id, path)
+		s.start_ticks[i] = -1
 		append(&s.pending, id)
 	}
 	rand.shuffle(s.pending[:])
@@ -186,16 +187,51 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 }
 
 spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
-	if len(s.pending) == 0 && len(e.active) == 0 do return false
+	active := len(s.pending) != 0
+	for _, i in s.characters {
+		start := s.start_ticks[i]
+		if start >= 0 && s.tick - start < max(s.max_steps[i], 160) {
+			active = true
+			break
+		}
+	}
+	if !active do return false
 	if len(s.pending) > 0 {
 		for _ in 0 ..< rand.int_range(1, s.volume + 1) {
 			if len(s.pending) == 0 do break
 			id := pop(&s.pending)
+			s.start_ticks[s.index_by_id[id]] = s.tick
 			e.chars.is_visible[id] = true
-			engine.active_insert(e, id)
 		}
 	}
-	engine.update(e)
-	engine.frame(e)
+	for id, i in s.characters {
+		start := s.start_ticks[i]
+		if start < 0 do continue
+		age := s.tick - start
+		if age < s.max_steps[i] {
+			progress := f64(age + 1) / f64(s.max_steps[i])
+			e.chars.current_coord[id] = engine.coord_on_line(
+				s.origin,
+				e.chars.input_coord[id],
+				engine.easing_apply(s.config.movement_easing, progress),
+			)
+			e.chars.layer[id] = 1
+		} else {
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.layer[id] = 0
+		}
+		if age < 160 {
+			e.chars.visual_fg[id] = engine.gradient_between_step(
+				s.start_colors[i],
+				s.final_colors[i],
+				7,
+				min(age / 20, 7),
+			)
+		} else {
+			e.chars.visual_fg[id] = s.final_colors[i]
+		}
+	}
+	s.tick += 1
+	engine.frame(e, s.characters[:])
 	return true
 }

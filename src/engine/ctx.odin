@@ -70,85 +70,6 @@ seq_complete :: proc(se: Sequence_Easer) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// events
-// ---------------------------------------------------------------------------
-
-register_event :: proc(
-	e: ^Engine,
-	id: Char_Id,
-	event: Event,
-	caller_kind: Caller_Kind,
-	caller: int,
-	action: Action,
-) {
-	append(&e.chars.events[id], Event_Reg{event, caller_kind, caller, action})
-}
-
-// Fire (event, caller) on a character; actions execute inline, in order.
-handle_event :: proc(
-	e: ^Engine,
-	id: Char_Id,
-	event: Event,
-	caller_kind: Caller_Kind,
-	caller: int,
-) {
-	regs := &e.chars.events[id]
-	i := 0
-	for i < len(regs) {
-		reg := regs[i]
-		if reg.event == event && reg.caller_kind == caller_kind && reg.caller == caller {
-			switch reg.action.kind {
-			case .Activate_Path:
-				activate_path(e, id, reg.action.path)
-			case .Activate_Scene:
-				activate_scene(e, id, reg.action.scene)
-			case .Deactivate_Path:
-				if reg.action.path < 0 || e.chars.active_path[id] == reg.action.path {
-					e.chars.active_path[id] = -1
-				}
-			case .Deactivate_Scene:
-				if reg.action.scene < 0 || e.chars.active_scene[id] == reg.action.scene {
-					e.chars.active_scene[id] = -1
-				}
-			case .Set_Layer:
-				e.chars.layer[id] = reg.action.layer
-			case .Set_Coord:
-				e.chars.current_coord[id] = reg.action.coord
-			case .Set_Visible:
-				e.chars.is_visible[id] = reg.action.visible
-			}
-		}
-		i += 1
-	}
-}
-
-// Chain paths: Path_Complete(paths[i-1]) -> ActivatePath(paths[i]); loop
-// back when loop is true.
-chain_paths :: proc(e: ^Engine, id: Char_Id, paths: []int, loop: bool) {
-	if len(paths) < 2 do return
-	for i in 1 ..< len(paths) {
-		register_event(
-			e,
-			id,
-			.Path_Complete,
-			.Path,
-			paths[i - 1],
-			{kind = .Activate_Path, path = paths[i]},
-		)
-	}
-	if loop {
-		register_event(
-			e,
-			id,
-			.Path_Complete,
-			.Path,
-			paths[len(paths) - 1],
-			{kind = .Activate_Path, path = paths[0]},
-		)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // motion
 // ---------------------------------------------------------------------------
 
@@ -167,7 +88,6 @@ activate_path :: proc(e: ^Engine, id: Char_Id, handle: int) {
 	p.last_dist = 0
 	e.chars.active_path[id] = handle
 	if p.layer != nil do e.chars.layer[id] = p.layer.?
-	handle_event(e, id, .Path_Activated, .Path, handle)
 }
 
 // One step along the path; segment walk with eased-overshoot semantics.
@@ -238,7 +158,6 @@ motion_move :: proc(e: ^Engine, id: Char_Id) {
 		} else {
 			e.chars.completed_path[id] = handle
 			e.chars.active_path[id] = -1
-			handle_event(e, id, .Path_Complete, .Path, handle)
 		}
 	}
 }
@@ -252,7 +171,6 @@ activate_scene :: proc(e: ^Engine, id: Char_Id, handle: int) {
 	assert(len(s.frames) > 0, "activate_scene: empty scene")
 	e.chars.active_scene[id] = handle
 	character_set_visual(&e.chars, id, scene_first_visual(s^))
-	handle_event(e, id, .Scene_Activated, .Scene, handle)
 }
 
 step_animation :: proc(e: ^Engine, id: Char_Id) {
@@ -323,7 +241,6 @@ complete_scene_if_finished :: proc(e: ^Engine, id: Char_Id, scene_handle: int) {
 		scene_reset(s)
 		e.chars.active_scene[id] = -1
 	}
-	handle_event(e, id, .Scene_Complete, .Scene, scene_handle)
 }
 
 // ---------------------------------------------------------------------------

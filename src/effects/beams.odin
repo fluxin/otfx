@@ -117,10 +117,15 @@ Beams_Phase :: enum {
 
 Beams_State :: struct {
 	config:            Beams_Config,
-	final_colors:      [dynamic]engine.Color_Pair,
-	row_scenes:        [dynamic]int,
-	col_scenes:        [dynamic]int,
-	brighten_scenes:   [dynamic]int,
+	characters:        [dynamic]engine.Char_Id,
+	final_colors:      [dynamic]engine.Color,
+	faded_colors:      [dynamic]engine.Color,
+	beam_start_ticks:  [dynamic]int,
+	beam_modes:        [dynamic]Beam_Direction,
+	wipe_start_ticks:  [dynamic]int,
+	beam_palette:      [dynamic]engine.Color,
+	row_symbols:       [dynamic]string,
+	column_symbols:    [dynamic]string,
 	group_chars:       [dynamic]engine.Char_Id,
 	groups:            [dynamic]Beam_Group,
 	pending:           [dynamic]int, // group handles
@@ -129,7 +134,38 @@ Beams_State :: struct {
 	final_wipe_groups: engine.Char_Groups,
 	final_wipe_idx:    int,
 	delay:             int,
+	tick:              int,
 	phase:             Beams_Phase,
+}
+
+// Expand symbols with the same contiguous distribution used by
+// scene_add_gradient. It is build-only; playback indexes this flat row.
+beams_expand_symbols :: proc(symbols: []string, count: int) -> [dynamic]string {
+	out := make([dynamic]string, count)
+	repeat_factor := count / len(symbols)
+	overflow_count := count % len(symbols)
+	symbol_index, current_repeat := 0, 0
+	overflow_used := false
+	for i in 0 ..< count {
+		if current_repeat >= repeat_factor {
+			if overflow_count > 0 {
+				if overflow_used {
+					symbol_index += 1
+					current_repeat = 0
+					overflow_used = false
+				} else {
+					overflow_used = true
+					overflow_count -= 1
+				}
+			} else {
+				symbol_index += 1
+				current_repeat = 0
+			}
+		}
+		current_repeat += 1
+		out[i] = symbols[symbol_index]
+	}
+	return out
 }
 
 beams_make_group :: proc(
@@ -177,34 +213,30 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	)
 	defer delete(beam_spectrum[:])
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_all_fills(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
 	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.row_scenes = make([dynamic]int, max_slot + 1)
-	s.col_scenes = make([dynamic]int, max_slot + 1)
-	s.brighten_scenes = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.row_scenes[i], s.col_scenes[i], s.brighten_scenes[i] = -1, -1, -1
+	for id in s.characters do max_slot = max(max_slot, int(id))
+	s.final_colors = make([dynamic]engine.Color, max_slot + 1)
+	s.faded_colors = make([dynamic]engine.Color, max_slot + 1)
+	s.beam_start_ticks = make([dynamic]int, max_slot + 1)
+	s.beam_modes = make([dynamic]Beam_Direction, max_slot + 1)
+	s.wipe_start_ticks = make([dynamic]int, max_slot + 1)
+	for i in 0 ..= max_slot do s.beam_start_ticks[i], s.wipe_start_ticks[i] = -1, -1
 
 	black := engine.Color{0x00, 0x00, 0x00}
-	for id in chars {
+	for id in s.characters {
 		if e.chars.is_fill[id] {
-			s.final_colors[id] = engine.Color_Pair {
-				fg = black,
-				bg = nil,
-			}
+			s.final_colors[id] = black
+			s.faded_colors[id] = black
 			continue
 		}
 		c := e.chars.input_coord[id]
-		s.final_colors[id] = engine.Color_Pair {
-			fg = engine.gradient_sample(final_sampler, final_spectrum[:], c),
-			bg = nil,
-		}
+		s.final_colors[id] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
+		s.faded_colors[id] = engine.adjust_color_brightness(s.final_colors[id], 0.3)
 	}
 
 	// scenes on the row pass only (rows and columns share characters)
@@ -232,85 +264,84 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	}
 	engine.groups_delete(&col_groups)
 
-	for gi in 0 ..< len(s.groups) {
-		group := &s.groups[gi]
-		if group.direction != .Row do continue
-		for id in engine.span_slice(s.group_chars[:], group.span) {
-			sym := e.chars.input_symbol[id]
-			final := s.final_colors[id]
-			faded := engine.adjust_color_brightness(final.fg.?, 0.3)
-			fade := engine.gradient_with_steps([]engine.Color{final.fg.?, faded}, 10, false)
-			defer delete(fade[:])
-			brighten := engine.gradient_with_steps([]engine.Color{faded, final.fg.?}, 10, false)
-			defer delete(brighten[:])
-
-			row_scn := engine.new_scene(e, false, .None, {})
-			engine.scene_add_gradient(
-				&e.scenes[row_scn],
-				s.config.beam_row_symbols[:],
-				s.config.beam_gradient_frames,
-				beam_spectrum[:],
-				nil,
-			)
-			engine.scene_add_gradient(&e.scenes[row_scn], []string{sym}, 2, fade[:], nil)
-			s.row_scenes[id] = row_scn
-
-			col_scn := engine.new_scene(e, false, .None, {})
-			engine.scene_add_gradient(
-				&e.scenes[col_scn],
-				s.config.beam_column_symbols[:],
-				s.config.beam_gradient_frames,
-				beam_spectrum[:],
-				nil,
-			)
-			engine.scene_add_gradient(&e.scenes[col_scn], []string{sym}, 2, fade[:], nil)
-			s.col_scenes[id] = col_scn
-
-			brighten_scn := engine.new_scene(e, false, .None, {})
-			engine.scene_add_gradient(
-				&e.scenes[brighten_scn],
-				[]string{sym},
-				s.config.final_gradient_frames,
-				brighten[:],
-				nil,
-			)
-			s.brighten_scenes[id] = brighten_scn
-		}
-	}
+	s.beam_palette = beam_spectrum
+	beam_spectrum = nil
+	s.row_symbols = beams_expand_symbols(s.config.beam_row_symbols[:], len(s.beam_palette))
+	s.column_symbols = beams_expand_symbols(s.config.beam_column_symbols[:], len(s.beam_palette))
 
 	for gi in 0 ..< len(s.groups) do append(&s.pending, gi)
 	rand.shuffle(s.pending[:])
 }
 
-// Release one character from a beam group. Crossings reset and switch scenes;
-// only a character not already active needs insertion into the active set.
-beams_release_char :: proc(
-	group_chars: []engine.Char_Id,
-	row_scenes, col_scenes: []int,
-	e: ^engine.Engine,
-	group: ^Beam_Group,
-) -> (
-	engine.Char_Id,
-	bool,
-) {
+beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Group) {
 	group.counter -= 1
-	next := group_chars[group.span.start + group.head]
+	next := s.group_chars[group.span.start + group.head]
 	group.head += 1
-	if e.chars.active_scene[next] >= 0 {
-		engine.scene_reset(&e.scenes[e.chars.active_scene[next]])
-	} else {
-		e.chars.is_visible[next] = true
+	s.beam_start_ticks[next] = s.tick
+	s.beam_modes[next] = group.direction
+	e.chars.is_visible[next] = true
+}
+
+beams_beam_active :: proc(s: Beams_State) -> bool {
+	beam_ticks := len(s.beam_palette) * s.config.beam_gradient_frames + 22
+	for id in s.characters {
+		start := s.beam_start_ticks[id]
+		if start >= 0 && s.tick - start < beam_ticks do return true
 	}
-	scene_handle := group.direction == .Row ? row_scenes[next] : col_scenes[next]
-	engine.activate_scene(e, next, scene_handle)
-	// A crossing beam resets the old scene and immediately switches direction,
-	// but the character is already in the active set. A fresh character needs
-	// insertion so it advances on subsequent frames.
-	return next, e.in_active[next] == 0
+	return false
+}
+
+beams_wipe_active :: proc(s: Beams_State) -> bool {
+	wipe_ticks := 11 * s.config.final_gradient_frames
+	for id in s.characters {
+		start := s.wipe_start_ticks[id]
+		if start >= 0 && s.tick - start < wipe_ticks do return true
+	}
+	return false
+}
+
+beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
+	beam_ticks := len(s.beam_palette) * s.config.beam_gradient_frames + 22
+	for id in s.characters {
+		beam_start := s.beam_start_ticks[id]
+		if beam_start >= 0 {
+			age := s.tick - beam_start
+			if age < beam_ticks {
+				palette_index := age / s.config.beam_gradient_frames
+				if palette_index < len(s.beam_palette) {
+					symbols := s.beam_modes[id] == .Row ? s.row_symbols : s.column_symbols
+					e.chars.visual_symbol[id] = symbols[palette_index]
+					e.chars.visual_fg[id] = s.beam_palette[palette_index]
+				} else {
+					e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+					e.chars.visual_fg[id] = engine.gradient_between_step(
+						s.final_colors[id],
+						s.faded_colors[id],
+						10,
+						min((age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2, 10),
+					)
+				}
+				continue
+			}
+		}
+		wipe_start := s.wipe_start_ticks[id]
+		if wipe_start >= 0 {
+			age := s.tick - wipe_start
+			if age < 11 * s.config.final_gradient_frames {
+				e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+				e.chars.visual_fg[id] = engine.gradient_between_step(
+					s.faded_colors[id],
+					s.final_colors[id],
+					10,
+					min(age / s.config.final_gradient_frames, 10),
+				)
+			}
+		}
+	}
 }
 
 beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
-	if s.phase == .Complete && len(e.active) == 0 {
+	if s.phase == .Complete && !beams_wipe_active(s^) {
 		return false
 	}
 	switch s.phase {
@@ -335,14 +366,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 			if count > 1 {
 				for _ in 0 ..< count {
 					if group.head >= group.span.len do break
-					ch, insert := beams_release_char(
-						s.group_chars[:],
-						s.row_scenes[:],
-						s.col_scenes[:],
-						e,
-						group,
-					)
-					if insert do engine.active_insert(e, ch)
+					beams_release_char(s, e, group)
 				}
 			}
 		}
@@ -356,7 +380,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 			}
 		}
 		resize(&s.active, write)
-		if s.pending_head == len(s.pending) && len(s.active) == 0 && len(e.active) == 0 {
+		if s.pending_head == len(s.pending) && len(s.active) == 0 && !beams_beam_active(s^) {
 			s.phase = .Final_Wipe
 		}
 	case .Final_Wipe:
@@ -366,9 +390,8 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 				g := engine.group_slice(s.final_wipe_groups, s.final_wipe_idx)
 				s.final_wipe_idx += 1
 				for id in g {
-					engine.activate_scene(e, id, s.brighten_scenes[id])
+					s.wipe_start_ticks[id] = s.tick
 					e.chars.is_visible[id] = true
-					engine.active_insert(e, id)
 				}
 			}
 		} else {
@@ -376,7 +399,8 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 		}
 	case .Complete:
 	}
-	engine.update(e)
-	engine.frame(e)
+	beams_update_visuals(s^, e)
+	s.tick += 1
+	engine.frame(e, s.characters[:])
 	return true
 }

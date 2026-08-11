@@ -60,11 +60,14 @@ scattered_parse :: proc(cfg: ^Scattered_Config, args: []string) -> bool {
 }
 
 Scattered_State :: struct {
-	config:        Scattered_Config,
-	final_colors:  [dynamic]engine.Color_Pair,
-	path_handles:  [dynamic]int,
-	scene_handles: [dynamic]int,
-	initial_hold:  int,
+	config:       Scattered_Config,
+	characters:   [dynamic]engine.Char_Id,
+	final_colors: [dynamic]engine.Color,
+	origins:      [dynamic]engine.Coord,
+	max_steps:    [dynamic]int,
+	step_limit:   int,
+	tick:         int,
+	initial_hold: int,
 }
 
 scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
@@ -82,66 +85,63 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.path_handles = make([dynamic]int, max_slot + 1)
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.path_handles[i], s.scene_handles[i] = -1, -1
-
-	for id in chars {
+	n := len(s.characters)
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.origins = make([dynamic]engine.Coord, n)
+	s.max_steps = make([dynamic]int, n)
+	for id, i in s.characters {
 		c := e.chars.input_coord[id]
-		final := engine.Color_Pair {
-			fg = engine.gradient_sample(sampler, spectrum[:], c),
-			bg = nil,
-		}
-		s.final_colors[id] = final
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
 
 		start :=
 			e.canvas.right < 2 || e.canvas.top < 2 ? engine.coord(1, 1) : engine.canvas_random_coord(e.canvas, false, false)
 		e.chars.current_coord[id] = start
-		p := engine.new_path(e, s.config.movement_speed, s.config.movement_easing, nil, 0, false)
-		engine.path_add_waypoint(&e.paths[p], c)
-		s.path_handles[id] = p
-
-		// on activation raise the layer above fills; on completion drop back
-		engine.register_event(e, id, .Path_Activated, .Path, p, {kind = .Set_Layer, layer = 1})
-		engine.register_event(e, id, .Path_Complete, .Path, p, {kind = .Set_Layer, layer = 0})
-
-		sc := engine.new_scene(e, false, .Distance, {})
-		g := engine.gradient_with_steps([]engine.Color{spectrum[0], final.fg.?}, 10, false)
-		defer delete(g[:])
-		engine.scene_add_gradient(
-			&e.scenes[sc],
-			[]string{e.chars.input_symbol[id]},
-			s.config.final_gradient_frames,
-			g[:],
-			nil,
+		s.origins[i] = start
+		s.max_steps[i] = max(
+			engine.round_half_even(engine.line_length(start, c, true) / s.config.movement_speed),
+			1,
 		)
-		s.scene_handles[id] = sc
-
-		engine.activate_path(e, id, p)
-		engine.activate_scene(e, id, sc)
+		s.step_limit = max(s.step_limit, s.max_steps[i])
+		e.chars.layer[id] = 1
+		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], spectrum[0], nil)
 		e.chars.is_visible[id] = true
-		engine.active_insert(e, id)
 	}
 	s.initial_hold = 25
 }
 
 scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
-	if len(e.active) == 0 do return false
+	if s.tick == s.step_limit do return false
 	if s.initial_hold > 0 {
 		s.initial_hold -= 1
-		engine.frame(e)
+		engine.frame(e, s.characters[:])
 		return true
 	}
-	engine.update(e)
-	engine.frame(e)
+	for id, i in s.characters {
+		steps := s.max_steps[i]
+		progress := f64(min(s.tick + 1, steps)) / f64(steps)
+		e.chars.current_coord[id] = engine.coord_on_line(
+			s.origins[i],
+			e.chars.input_coord[id],
+			engine.easing_apply(s.config.movement_easing, progress),
+		)
+		e.chars.visual_fg[id] = engine.gradient_between_step(
+			s.config.final_gradient_stops[0],
+			s.final_colors[i],
+			10,
+			min(engine.round_half_even(progress * 9), 10),
+		)
+		if s.tick + 1 >= steps {
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.visual_fg[id] = s.final_colors[i]
+			e.chars.layer[id] = 0
+		}
+	}
+	s.tick += 1
+	engine.frame(e, s.characters[:])
 	return true
 }

@@ -86,12 +86,16 @@ middleout_parse :: proc(cfg: ^Middleout_Config, args: []string) -> bool {
 }
 
 Middleout_State :: struct {
-	config:       Middleout_Config,
-	final_colors: [dynamic]engine.Color_Pair,
-	center_paths: [dynamic]int,
-	full_paths:   [dynamic]int,
-	full_scenes:  [dynamic]int,
-	phase_full:   bool,
+	config:           Middleout_Config,
+	characters:       [dynamic]engine.Char_Id,
+	final_colors:     [dynamic]engine.Color,
+	center_targets:   [dynamic]engine.Coord,
+	center_max_steps: [dynamic]int,
+	full_max_steps:   [dynamic]int,
+	center_limit:     int,
+	full_limit:       int,
+	phase_full:       bool,
+	phase_tick:       int,
 }
 
 middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
@@ -109,84 +113,77 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.center_paths = make([dynamic]int, max_slot + 1)
-	s.full_paths = make([dynamic]int, max_slot + 1)
-	s.full_scenes = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.center_paths[i], s.full_paths[i], s.full_scenes[i] = -1, -1, -1
-
-	for id in chars {
+	n := len(s.characters)
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.center_targets = make([dynamic]engine.Coord, n)
+	s.center_max_steps = make([dynamic]int, n)
+	s.full_max_steps = make([dynamic]int, n)
+	for id, i in s.characters {
 		c := e.chars.input_coord[id]
-		final := engine.Color_Pair {
-			fg = engine.gradient_sample(sampler, spectrum[:], c),
-			bg = nil,
-		}
-		s.final_colors[id] = final
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
 
 		e.chars.current_coord[id] = e.canvas.center
-
-		// center path: to the middle row/column
 		mid := engine.coord(c.column, e.canvas.center_row)
 		if s.config.expand_direction == .Horizontal do mid = engine.coord(e.canvas.center_column, c.row)
-		cp := engine.new_path(
-			e,
-			s.config.center_movement_speed,
-			s.config.center_easing,
-			nil,
-			0,
-			false,
+		s.center_targets[i] = mid
+		s.center_max_steps[i] = max(
+			engine.round_half_even(
+				engine.line_length(e.canvas.center, mid, true) / s.config.center_movement_speed,
+			),
+			1,
 		)
-		engine.path_add_waypoint(&e.paths[cp], mid)
-		s.center_paths[id] = cp
-
-		// full path: to home
-		fp := engine.new_path(e, s.config.full_movement_speed, s.config.full_easing, nil, 0, false)
-		engine.path_add_waypoint(&e.paths[fp], c)
-		s.full_paths[id] = fp
-
-		// full scene: starting color -> final fg
-		sc := engine.new_scene(e, false, .None, {})
-		g := engine.gradient_with_steps(
-			[]engine.Color{s.config.starting_color, final.fg.?},
-			10,
-			false,
+		s.full_max_steps[i] = max(
+			engine.round_half_even(
+				engine.line_length(mid, c, true) / s.config.full_movement_speed,
+			),
+			1,
 		)
-		defer delete(g[:])
-		engine.scene_add_gradient(&e.scenes[sc], []string{e.chars.input_symbol[id]}, 6, g[:], nil)
-		s.full_scenes[id] = sc
-
-		engine.activate_path(e, id, cp)
+		s.center_limit = max(s.center_limit, s.center_max_steps[i])
+		s.full_limit = max(s.full_limit, s.full_max_steps[i])
 		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], s.config.starting_color, nil)
 		e.chars.is_visible[id] = true
-		engine.active_insert(e, id)
 	}
+	s.full_limit = max(s.full_limit, 60)
 }
 
 middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
-	if !s.phase_full && len(e.active) == 0 {
+	if s.phase_full && s.phase_tick >= s.full_limit do return false
+	if !s.phase_full && s.phase_tick >= s.center_limit {
 		s.phase_full = true
-		chars := engine.get_characters(
-			engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-			engine.filter_input(),
-			.Top_Bottom_Left_Right,
-		)
-		defer delete(chars[:])
-		for id in chars {
-			engine.activate_path(e, id, s.full_paths[id])
-			engine.activate_scene(e, id, s.full_scenes[id])
-			engine.active_insert(e, id)
+		s.phase_tick = 0
+	}
+	for id, i in s.characters {
+		if s.phase_full {
+			if s.phase_tick < s.full_max_steps[i] {
+				progress := f64(s.phase_tick + 1) / f64(s.full_max_steps[i])
+				e.chars.current_coord[id] = engine.coord_on_line(
+					s.center_targets[i],
+					e.chars.input_coord[id],
+					engine.easing_apply(s.config.full_easing, progress),
+				)
+			}
+			gradient_step := min(s.phase_tick / 6, 10)
+			e.chars.visual_fg[id] = engine.gradient_between_step(
+				s.config.starting_color,
+				s.final_colors[i],
+				10,
+				gradient_step,
+			)
+		} else if s.phase_tick < s.center_max_steps[i] {
+			progress := f64(s.phase_tick + 1) / f64(s.center_max_steps[i])
+			e.chars.current_coord[id] = engine.coord_on_line(
+				e.canvas.center,
+				s.center_targets[i],
+				engine.easing_apply(s.config.center_easing, progress),
+			)
 		}
 	}
-	if len(e.active) == 0 do return false
-	engine.update(e)
-	engine.frame(e)
+	s.phase_tick += 1
+	engine.frame(e, s.characters[:])
 	return true
 }

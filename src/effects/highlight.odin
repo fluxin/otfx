@@ -59,9 +59,15 @@ highlight_parse :: proc(cfg: ^Highlight_Config, args: []string) -> bool {
 }
 
 Highlight_State :: struct {
-	config:        Highlight_Config,
-	scene_handles: [dynamic]int,
-	easer:         engine.Sequence_Easer,
+	config:       Highlight_Config,
+	easer:        engine.Sequence_Easer,
+	characters:   [dynamic]engine.Char_Id,
+	index_by_id:  [dynamic]int,
+	palette:      [dynamic]engine.Color,
+	start_ticks:  [dynamic]int,
+	active_slots: [dynamic]int,
+	palette_len:  int,
+	tick:         int,
 }
 
 highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
@@ -90,18 +96,16 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.scene_handles[i] = -1
-
-	for id in chars {
+	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.start_ticks = make([dynamic]int, len(e.chars))
+	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
+	for id, i in s.characters {
+		s.index_by_id[id] = i
 		c := e.chars.input_coord[id]
 		base := engine.gradient_sample(sampler, spectrum[:], c)
 		// base -> bright -> bright -> base with widths 3/width/3
@@ -111,29 +115,36 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 			[]int{3, s.config.highlight_width, 3},
 			false,
 		)
-		defer delete(hl[:])
-		sc := engine.new_scene(e, false, .None, {})
-		for color in hl {
-			engine.scene_add_frame(&e.scenes[sc], e.chars.input_symbol[id], 2, color, nil, false)
-		}
-		s.scene_handles[id] = sc
+		if i == 0 do s.palette_len = len(hl)
+		append(&s.palette, ..hl[:])
+		delete(hl[:])
 		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], base, nil)
 		e.chars.is_visible[id] = true
 	}
 }
 
 highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
-	if len(e.active) == 0 && engine.seq_complete(s.easer) {
+	if len(s.active_slots) == 0 && engine.seq_complete(s.easer) {
 		return false
 	}
 	r := engine.seq_step(&s.easer)
 	for gi in r.added_start ..< r.added_end {
 		for id in engine.group_slice(s.easer.groups, gi) {
-			engine.activate_scene(e, id, s.scene_handles[id])
-			engine.active_insert(e, id)
+			slot := s.index_by_id[id]
+			s.start_ticks[slot] = s.tick
+			append(&s.active_slots, slot)
 		}
 	}
-	engine.update(e)
+	write := 0
+	for slot in s.active_slots {
+		age := s.tick - s.start_ticks[slot]
+		if age >= s.palette_len * 2 do continue
+		id := s.characters[slot]
+		e.chars.visual_fg[id] = s.palette[slot * s.palette_len + age / 2]
+		if age + 1 < s.palette_len * 2 {s.active_slots[write] = slot; write += 1}
+	}
+	resize(&s.active_slots, write)
+	s.tick += 1
 	engine.frame(e)
 	return true
 }

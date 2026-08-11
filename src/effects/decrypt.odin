@@ -1,12 +1,8 @@
 package effects
 
 import engine "../engine"
-import rand "core:math/rand"
-
 import "core:fmt"
-
-// decrypt — a typing phase resolves into per-character decryption, then the
-// true symbols are discovered.
+import rand "core:math/rand"
 
 Decrypt_Config :: struct {
 	typing_speed:             int,
@@ -23,11 +19,7 @@ decrypt_config_default :: proc() -> Decrypt_Config {
 	}
 	append(
 		&cfg.ciphertext_colors,
-		..[]engine.Color {
-			engine.Color{0x00, 0x80, 0x00},
-			engine.Color{0x00, 0xcb, 0x00},
-			engine.Color{0x00, 0xff, 0x00},
-		},
+		..[]engine.Color{{0x00, 0x80, 0x00}, {0x00, 0xcb, 0x00}, {0x00, 0xff, 0x00}},
 	)
 	append(&cfg.final_gradient_stops, engine.Color{0xed, 0xa0, 0x00})
 	append(&cfg.final_gradient_steps, 12)
@@ -60,169 +52,172 @@ Decrypt_Phase :: enum {
 	Typing,
 	Decrypting,
 }
+Decrypt_Typing_Frames :: 5
+Decrypt_Fast_Frames :: 80
+Decrypt_Slow_Max_Frames :: 15
+Decrypt_Fast_Ticks :: Decrypt_Fast_Frames * 2
+Decrypt_Discovered_Ticks :: 11 * 5 // ten interpolation steps plus exact final
+Decrypt_Block_Symbols :: [4]string{"▉", "▓", "▒", "░"}
 
+// Per-character timeline columns. Symbol values are u16 indices into the
+// shared encrypted alphabet; there are no scene/event objects in the hot path.
 Decrypt_State :: struct {
-	config:             Decrypt_Config,
-	final_colors:       [dynamic]engine.Color_Pair,
-	typing_scenes:      [dynamic]int,
-	fast_scenes:        [dynamic]int,
-	typing_pending:     [dynamic]engine.Char_Id,
-	typing_head:        int,
-	decrypting_pending: [dynamic]engine.Char_Id,
-	phase:              Decrypt_Phase,
-	encrypted_symbols:  [dynamic]string,
+	config:              Decrypt_Config,
+	characters:          [dynamic]engine.Char_Id,
+	final_colors:        [dynamic]engine.Color,
+	typing_start_ticks:  [dynamic]int,
+	typing_colors:       [dynamic]engine.Color, // n * 5
+	typing_symbols:      [dynamic]u16,
+	decrypt_colors:      [dynamic]engine.Color,
+	fast_symbols:        [dynamic]u16, // n * 80
+	slow_symbols:        [dynamic]u16, // n * 15
+	slow_end_ticks:      [dynamic]int, // n * 15 cumulative ends
+	slow_counts:         [dynamic]u8,
+	slow_frame:          [dynamic]u8,
+	slow_totals:         [dynamic]int,
+	typing_head:         int,
+	typing_tick:         int,
+	typing_finish_tick:  int,
+	decrypt_tick:        int,
+	decrypt_finish_tick: int,
+	phase:               Decrypt_Phase,
+	encrypted_symbols:   [dynamic]string,
 }
 
 encrypted_symbols_build :: proc() -> [dynamic]string {
 	symbols: [dynamic]string
-	for n in 33 ..< 127 {
-		append(&symbols, engine.rune_to_string(rune(n)))
-	}
-	for n in 9608 ..< 9632 {
-		append(&symbols, engine.rune_to_string(rune(n)))
-	}
-	for n in 9472 ..< 9599 {
-		append(&symbols, engine.rune_to_string(rune(n)))
-	}
-	for n in 174 ..< 452 {
-		append(&symbols, engine.rune_to_string(rune(n)))
-	}
+	for n in 33 ..< 127 do append(&symbols, engine.rune_to_string(rune(n)))
+	for n in 9608 ..< 9632 do append(&symbols, engine.rune_to_string(rune(n)))
+	for n in 9472 ..< 9599 do append(&symbols, engine.rune_to_string(rune(n)))
+	for n in 174 ..< 452 do append(&symbols, engine.rune_to_string(rune(n)))
 	return symbols
 }
 
 decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	s.encrypted_symbols = encrypted_symbols_build()
-
-	final_spectrum := engine.gradient_make(
+	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
 	)
-	defer delete(final_spectrum[:])
-	final_sampler := engine.gradient_sampler(
+	defer delete(spectrum[:])
+	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
 		e.canvas.text_left,
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.typing_scenes = make([dynamic]int, max_slot + 1)
-	s.fast_scenes = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.typing_scenes[i], s.fast_scenes[i] = -1, -1
+	n := len(s.characters)
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.typing_start_ticks = make([dynamic]int, n)
+	s.typing_colors = make([dynamic]engine.Color, n * Decrypt_Typing_Frames)
+	s.typing_symbols = make([dynamic]u16, n)
+	s.decrypt_colors = make([dynamic]engine.Color, n)
+	s.fast_symbols = make([dynamic]u16, n * Decrypt_Fast_Frames)
+	s.slow_symbols = make([dynamic]u16, n * Decrypt_Slow_Max_Frames)
+	s.slow_end_ticks = make([dynamic]int, n * Decrypt_Slow_Max_Frames)
+	s.slow_counts = make([dynamic]u8, n)
+	s.slow_frame = make([dynamic]u8, n)
+	s.slow_totals = make([dynamic]int, n)
 
-	// typing scenes: block chars then a cipher symbol
-	for id in chars {
-		c := e.chars.input_coord[id]
-		s.final_colors[id] = engine.Color_Pair {
-			fg = engine.gradient_sample(final_sampler, final_spectrum[:], c),
-			bg = nil,
-		}
-
-		typing := engine.new_scene(e, false, .None, {})
-		block_chars := []string{"▉", "▓", "▒", "░"}
-		for block in block_chars {
-			col := s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
-			engine.scene_add_frame(&e.scenes[typing], block, 2, col, nil, false)
-		}
-		sym := s.encrypted_symbols[rand.int_max(len(s.encrypted_symbols))]
-		col := s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
-		engine.scene_add_frame(&e.scenes[typing], sym, 1, col, nil, false)
-		s.typing_scenes[id] = typing
-		append(&s.typing_pending, id)
+	// Preserve source RNG ordering: make all typing rows, then all decrypt rows.
+	for id, i in s.characters {
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+		s.typing_start_ticks[i] = -1
+		base := i * Decrypt_Typing_Frames
+		for frame in 0 ..< Decrypt_Typing_Frames - 1 do s.typing_colors[base + frame] = s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
+		s.typing_symbols[i] = u16(rand.int_max(len(s.encrypted_symbols)))
+		s.typing_colors[base + Decrypt_Typing_Frames - 1] =
+			s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
 	}
-
-	// decryption scenes: fast -> slow -> discovered
-	for id in chars {
-		sym := e.chars.input_symbol[id]
-		col := s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
-
-		fast := engine.new_scene(e, false, .None, {})
-		for _ in 0 ..< 80 {
-			sym2 := s.encrypted_symbols[rand.int_max(len(s.encrypted_symbols))]
-			engine.scene_add_frame(&e.scenes[fast], sym2, 2, col, nil, false)
-		}
-		s.fast_scenes[id] = fast
-
-		slow := engine.new_scene(e, false, .None, {})
-		for _ in 0 ..< rand.int_range(1, 16) {
-			sym2 := s.encrypted_symbols[rand.int_max(len(s.encrypted_symbols))]
+	for _, i in s.characters {
+		s.decrypt_colors[i] =
+			s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
+		fast_base := i * Decrypt_Fast_Frames
+		for frame in 0 ..< Decrypt_Fast_Frames do s.fast_symbols[fast_base + frame] = u16(rand.int_max(len(s.encrypted_symbols)))
+		slow_base := i * Decrypt_Slow_Max_Frames
+		slow_count := rand.int_range(1, Decrypt_Slow_Max_Frames + 1)
+		s.slow_counts[i] = u8(slow_count)
+		total := 0
+		for frame in 0 ..< slow_count {
+			s.slow_symbols[slow_base + frame] = u16(rand.int_max(len(s.encrypted_symbols)))
 			duration := rand.int_range(3, 6)
 			if rand.int_range(0, 101) <= 30 do duration = rand.int_range(35, 60)
-			engine.scene_add_frame(&e.scenes[slow], sym2, duration, col, nil, false)
+			total += duration
+			s.slow_end_ticks[slow_base + frame] = total
 		}
-
-		discovered := engine.new_scene(e, false, .None, {})
-		final := s.final_colors[id].fg.?
-		g := engine.gradient_with_steps(
-			[]engine.Color{engine.Color{0xff, 0xff, 0xff}, final},
-			10,
-			false,
+		s.slow_totals[i] = total
+		s.decrypt_finish_tick = max(
+			s.decrypt_finish_tick,
+			Decrypt_Fast_Ticks + total + Decrypt_Discovered_Ticks,
 		)
-		defer delete(g[:])
-		engine.scene_add_gradient(&e.scenes[discovered], []string{sym}, 5, g[:], nil)
-
-		engine.register_event(
-			e,
-			id,
-			.Scene_Complete,
-			.Scene,
-			fast,
-			{kind = .Activate_Scene, scene = slow},
-		)
-		engine.register_event(
-			e,
-			id,
-			.Scene_Complete,
-			.Scene,
-			slow,
-			{kind = .Activate_Scene, scene = discovered},
-		)
-		append(&s.decrypting_pending, id)
 	}
 }
 
 decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Typing {
-		if s.typing_head == len(s.typing_pending) && len(e.active) == 0 {
-			// switch to decryption: activate fast_decrypt on all, in id order
-			engine.active_clear(e)
-			for id in s.decrypting_pending {
-				engine.active_insert(e, id)
-			}
-			for id in s.decrypting_pending {
-				engine.activate_scene(e, id, s.fast_scenes[id])
-			}
+		if s.typing_head == len(s.characters) && s.typing_tick >= s.typing_finish_tick {
 			s.phase = .Decrypting
 		} else {
-			if s.typing_head < len(s.typing_pending) && rand.int_range(0, 101) <= 75 {
+			if s.typing_head < len(s.characters) && rand.int_range(0, 101) <= 75 {
 				for _ in 0 ..< s.config.typing_speed {
-					if s.typing_head == len(s.typing_pending) do break
-					next := s.typing_pending[s.typing_head]
+					if s.typing_head == len(s.characters) do break
+					i := s.typing_head
 					s.typing_head += 1
-					e.chars.is_visible[next] = true
-					engine.activate_scene(e, next, s.typing_scenes[next])
-					engine.active_insert(e, next)
+					s.typing_start_ticks[i] = s.typing_tick
+					s.typing_finish_tick = max(s.typing_finish_tick, s.typing_tick + 9)
+					e.chars.is_visible[s.characters[i]] = true
 				}
 			}
-			engine.update(e)
-			engine.frame(e)
+			blocks := Decrypt_Block_Symbols
+			for id, i in s.characters {
+				start := s.typing_start_ticks[i]
+				if start < 0 do continue
+				frame := min((s.typing_tick - start) / 2, Decrypt_Typing_Frames - 1)
+				e.chars.visual_symbol[id] =
+					frame < Decrypt_Typing_Frames - 1 ? blocks[frame] : s.encrypted_symbols[int(s.typing_symbols[i])]
+				e.chars.visual_fg[id] = s.typing_colors[i * Decrypt_Typing_Frames + frame]
+			}
+			s.typing_tick += 1
+			engine.frame(e, s.characters[:])
 			return true
 		}
 	}
 	if s.phase == .Decrypting {
-		if len(e.active) == 0 do return false
-		engine.update(e)
-		engine.frame(e)
+		if s.decrypt_tick == s.decrypt_finish_tick do return false
+		for id, i in s.characters {
+			if s.decrypt_tick < Decrypt_Fast_Ticks {
+				e.chars.visual_symbol[id] =
+					s.encrypted_symbols[int(s.fast_symbols[i * Decrypt_Fast_Frames + s.decrypt_tick / 2])]
+				e.chars.visual_fg[id] = s.decrypt_colors[i]
+				continue
+			}
+			slow_tick := s.decrypt_tick - Decrypt_Fast_Ticks
+			frame := int(s.slow_frame[i])
+			if frame < int(s.slow_counts[i]) &&
+			   slow_tick >= s.slow_end_ticks[i * Decrypt_Slow_Max_Frames + frame] {
+				frame += 1
+				s.slow_frame[i] = u8(frame)
+			}
+			if frame < int(s.slow_counts[i]) {
+				e.chars.visual_symbol[id] =
+					s.encrypted_symbols[int(s.slow_symbols[i * Decrypt_Slow_Max_Frames + frame])]
+				e.chars.visual_fg[id] = s.decrypt_colors[i]
+				continue
+			}
+			discovered_tick := slow_tick - s.slow_totals[i]
+			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+			e.chars.visual_fg[id] =
+				discovered_tick < Decrypt_Discovered_Ticks ? engine.gradient_between_step(engine.Color{0xff, 0xff, 0xff}, s.final_colors[i], 10, min(discovered_tick / 5, 10)) : s.final_colors[i]
+		}
+		s.decrypt_tick += 1
+		engine.frame(e, s.characters[:])
 		return true
 	}
 	return false

@@ -90,14 +90,18 @@ slide_parse :: proc(cfg: ^Slide_Config, args: []string) -> bool {
 }
 
 Slide_State :: struct {
-	config:        Slide_Config,
-	final_colors:  [dynamic]engine.Color_Pair, // indexed by arena slot
-	groups:        engine.Char_Groups, // all groups, one flat pool
-	heads:         [dynamic]int, // per-group consumption cursor
-	path_handles:  [dynamic]int, // per arena slot
-	scene_handles: [dynamic]int, // per arena slot
-	next_group:    int, // first not-yet-activated group
-	current_gap:   int,
+	config:       Slide_Config,
+	characters:   [dynamic]engine.Char_Id,
+	index_by_id:  [dynamic]int,
+	final_colors: [dynamic]engine.Color,
+	groups:       engine.Char_Groups,
+	heads:        [dynamic]int,
+	origins:      [dynamic]engine.Coord,
+	steps:        [dynamic]int,
+	max_steps:    [dynamic]int,
+	active_slots: [dynamic]int,
+	next_group:   int,
+	current_gap:  int,
 }
 
 slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
@@ -115,25 +119,28 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.path_handles = make([dynamic]int, max_slot + 1)
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.path_handles[i], s.scene_handles[i] = -1, -1
-
-	for id in chars {
+	n := len(s.characters)
+	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.origins = make([dynamic]engine.Coord, n)
+	s.steps = make([dynamic]int, n)
+	s.max_steps = make([dynamic]int, n)
+	for id, i in s.characters {
 		c := e.chars.input_coord[id]
-		s.final_colors[id] = {
-			fg = engine.gradient_sample(sampler, spectrum[:], c),
-			bg = nil,
-		}
+		s.index_by_id[id] = i
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
+		engine.set_appearance(
+			&e.chars,
+			id,
+			e.chars.input_symbol[id],
+			s.config.final_gradient_stops[0],
+			nil,
+		)
 	}
 
 	grouping: engine.Character_Group = .Row_T2B
@@ -151,23 +158,8 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		grouping,
 	)
 
-	// input path: one waypoint at the home coordinate
-	for gi in 0 ..< engine.group_count(s.groups) {
-		for id in engine.group_slice(s.groups, gi) {
-			p := engine.new_path(
-				e,
-				s.config.movement_speed,
-				s.config.movement_easing,
-				nil,
-				0,
-				false,
-			)
-			engine.path_add_waypoint(&e.paths[p], e.chars.input_coord[id])
-			s.path_handles[id] = p
-		}
-	}
-
-	// starting positions, per group (reversals happen on the flat slice)
+	// Starting positions and fixed direct-motion rows. Reversals happen on the
+	// flat group slice, matching the source ordering without path objects.
 	for gi in 0 ..< engine.group_count(s.groups) {
 		g := engine.group_slice(s.groups, gi)
 		switch s.config.grouping {
@@ -213,32 +205,23 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 			}
 			for id in g do e.chars.current_coord[id] = start
 		}
-		// gradient scene per character
 		for id in g {
-			final := s.final_colors[id]
-			sc := engine.new_scene(e, false, .None, {})
-			gg := engine.gradient_with_steps(
-				[]engine.Color{s.config.final_gradient_stops[0], final.fg.?},
-				10,
-				false,
+			i := s.index_by_id[id]
+			s.origins[i] = e.chars.current_coord[id]
+			s.max_steps[i] = max(
+				engine.round_half_even(
+					engine.line_length(s.origins[i], e.chars.input_coord[id], true) /
+					s.config.movement_speed,
+				),
+				1,
 			)
-			defer delete(gg[:])
-			engine.scene_add_gradient(
-				&e.scenes[sc],
-				[]string{e.chars.input_symbol[id]},
-				s.config.final_gradient_frames,
-				gg[:],
-				nil,
-			)
-			engine.activate_scene(e, id, sc)
-			s.scene_handles[id] = sc
 		}
 	}
 	s.heads = make([dynamic]int, engine.group_count(s.groups))
 }
 
 slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
-	if s.next_group >= engine.group_count(s.groups) && len(e.active) == 0 {
+	if s.next_group >= engine.group_count(s.groups) && len(s.active_slots) == 0 {
 		return false
 	}
 	if s.current_gap == s.config.gap && s.next_group < engine.group_count(s.groups) {
@@ -254,8 +237,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 			next := g[s.heads[gi]]
 			s.heads[gi] += 1
 			e.chars.is_visible[next] = true
-			engine.activate_path(e, next, s.path_handles[next])
-			engine.active_insert(e, next)
+			append(&s.active_slots, s.index_by_id[next])
 		}
 	}
 	// drop exhausted groups from the front
@@ -267,7 +249,37 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 			break
 		}
 	}
-	engine.update(e)
-	engine.frame(e)
+	write := 0
+	base_color := s.config.final_gradient_stops[0]
+	gradient_ticks := 10 * s.config.final_gradient_frames
+	for i in s.active_slots {
+		id := s.characters[i]
+		step := s.steps[i]
+		if step < s.max_steps[i] {
+			progress := f64(step + 1) / f64(s.max_steps[i])
+			e.chars.current_coord[id] = engine.coord_on_line(
+				s.origins[i],
+				e.chars.input_coord[id],
+				engine.easing_apply(s.config.movement_easing, progress),
+			)
+		}
+		gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
+		e.chars.visual_fg[id] = engine.gradient_between_step(
+			base_color,
+			s.final_colors[i],
+			10,
+			gradient_step,
+		)
+		s.steps[i] += 1
+		if s.steps[i] < max(s.max_steps[i], gradient_ticks) {
+			s.active_slots[write] = i
+			write += 1
+		} else {
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.visual_fg[id] = s.final_colors[i]
+		}
+	}
+	resize(&s.active_slots, write)
+	engine.frame(e, s.characters[:])
 	return true
 }

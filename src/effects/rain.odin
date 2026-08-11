@@ -78,11 +78,19 @@ rain_parse :: proc(cfg: ^Rain_Config, args: []string) -> bool {
 }
 
 Rain_State :: struct {
-	config:      Rain_Config,
-	pending:     [dynamic]engine.Char_Id,
-	by_row:      [dynamic]engine.Char_Id, // flat pool sorted by input row asc
-	revealed:    [dynamic]engine.Char_Id,
-	by_row_head: int,
+	config:       Rain_Config,
+	characters:   [dynamic]engine.Char_Id,
+	index_by_id:  [dynamic]int,
+	pending:      [dynamic]engine.Char_Id,
+	by_row:       [dynamic]engine.Char_Id, // flat pool sorted by input row asc
+	revealed:     [dynamic]engine.Char_Id,
+	final_colors: [dynamic]engine.Color,
+	drop_colors:  [dynamic]engine.Color,
+	drop_symbols: [dynamic]string,
+	max_steps:    [dynamic]int,
+	start_ticks:  [dynamic]int,
+	by_row_head:  int,
+	tick:         int,
 }
 
 rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
@@ -100,64 +108,47 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
 	input_coords := e.chars.input_coord[:]
-	current_coords := e.chars.current_coord[:]
-	input_symbols := e.chars.input_symbol[:]
 	Rain_Row :: struct {
 		id:          engine.Char_Id,
 		row, column: int,
 	}
-	rows := make([]Rain_Row, len(chars))
+	n := len(s.characters)
+	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.drop_colors = make([dynamic]engine.Color, n)
+	s.drop_symbols = make([dynamic]string, n)
+	s.max_steps = make([dynamic]int, n)
+	s.start_ticks = make([dynamic]int, n)
+	rows := make([]Rain_Row, n)
 	defer delete(rows)
 
-	for id, i in chars {
+	for id, i in s.characters {
+		s.index_by_id[id] = i
 		c := input_coords[id]
 		rows[i] = {id, c.row, c.column}
-		final_color := engine.gradient_sample(sampler, spectrum[:], c)
-
-		drop := s.config.rain_colors[rand.int_max(len(s.config.rain_colors))]
-		rain_scn := engine.new_scene(e, false, .None, {})
-		engine.scene_add_frame(
-			&e.scenes[rain_scn],
-			s.config.rain_symbols[rand.int_max(len(s.config.rain_symbols))],
-			1,
-			drop,
-			nil,
-			false,
-		)
-
-		fade_scn := engine.new_scene(e, false, .None, {})
-		g := engine.gradient_with_steps([]engine.Color{drop, final_color}, 7, false)
-		engine.scene_add_gradient(&e.scenes[fade_scn], []string{input_symbols[id]}, 3, g[:], nil)
-		delete(g[:])
-
-		engine.activate_scene(e, id, rain_scn)
-		current_coords[id] = engine.coord(c.column, e.canvas.top)
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
+		s.drop_colors[i] = s.config.rain_colors[rand.int_max(len(s.config.rain_colors))]
+		s.drop_symbols[i] = s.config.rain_symbols[rand.int_max(len(s.config.rain_symbols))]
+		e.chars.current_coord[id] = engine.coord(c.column, e.canvas.top)
 		speed := rand.float64_range(s.config.movement_speed.lo, s.config.movement_speed.hi)
-		p := engine.new_path(e, speed, s.config.movement_easing, nil, 0, false)
-		engine.path_add_waypoint(&e.paths[p], c)
-		engine.register_event(
-			e,
-			id,
-			.Path_Complete,
-			.Path,
-			p,
-			{kind = .Activate_Scene, scene = fade_scn},
+		s.max_steps[i] = max(
+			engine.round_half_even(engine.line_length(e.chars.current_coord[id], c, true) / speed),
+			1,
 		)
-		engine.activate_path(e, id, p)
+		s.start_ticks[i] = -1
 	}
 	// One flat pool sorted by input row ascending; the front run of equal rows
 	// is the min-row group.
 	slice.sort_by(rows, proc(a, b: Rain_Row) -> bool {
-		if a.row != b.row do return a.row < b.row
-		return a.column < b.column
-	})
+			if a.row != b.row do return a.row < b.row
+			return a.column < b.column
+		})
 	s.by_row = make([dynamic]engine.Char_Id, len(rows))
 	for row, i in rows do s.by_row[i] = row.id
 }
@@ -167,7 +158,15 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 	pending := &s.pending
 	input_coords := e.chars.input_coord[:]
 	visible := e.chars.is_visible[:]
-	if s.by_row_head == len(by_row) && len(pending^) == 0 && len(e.active) == 0 {
+	active := s.by_row_head < len(by_row) || len(pending^) > 0
+	for _, i in s.characters {
+		start := s.start_ticks[i]
+		if start >= 0 && s.tick - start < s.max_steps[i] + 23 {
+			active = true
+			break
+		}
+	}
+	if !active {
 		return false
 	}
 	if len(pending^) == 0 && s.by_row_head < len(by_row) {
@@ -187,12 +186,37 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 			idx := rand.int_max(len(pending^))
 			next := pending[idx]
 			unordered_remove(pending, idx)
+			s.start_ticks[s.index_by_id[next]] = s.tick
 			visible[next] = true
 			append(&s.revealed, next)
-			engine.active_insert(e, next)
 		}
 	}
-	engine.update(e)
+	for id, i in s.characters {
+		start := s.start_ticks[i]
+		if start < 0 do continue
+		age := s.tick - start
+		if age < s.max_steps[i] - 1 {
+			progress := f64(age + 1) / f64(s.max_steps[i])
+			e.chars.current_coord[id] = engine.coord_on_line(
+				engine.coord(e.chars.input_coord[id].column, e.canvas.top),
+				e.chars.input_coord[id],
+				engine.easing_apply(s.config.movement_easing, progress),
+			)
+			e.chars.visual_symbol[id] = s.drop_symbols[i]
+			e.chars.visual_fg[id] = s.drop_colors[i]
+			continue
+		}
+		e.chars.current_coord[id] = e.chars.input_coord[id]
+		e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+		fade_tick := age - (s.max_steps[i] - 1)
+		e.chars.visual_fg[id] = engine.gradient_between_step(
+			s.drop_colors[i],
+			s.final_colors[i],
+			7,
+			min(fade_tick / 3, 7),
+		)
+	}
+	s.tick += 1
 	engine.frame(e, s.revealed[:])
 	return true
 }

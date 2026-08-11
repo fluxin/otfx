@@ -424,46 +424,6 @@ path_add_waypoint :: proc(p: ^Path, c: Coord, control: Maybe(Coord) = nil) {
 	}
 }
 
-// Events: pure data rows. Caller is a path or scene handle; actions a closed set.
-
-Event :: enum {
-	Path_Activated,
-	Path_Complete,
-	Scene_Activated,
-	Scene_Complete,
-}
-
-Action_Kind :: enum {
-	Activate_Path,
-	Activate_Scene,
-	Deactivate_Path,
-	Deactivate_Scene,
-	Set_Layer,
-	Set_Coord,
-	Set_Visible,
-}
-
-Action :: struct {
-	kind:    Action_Kind,
-	path:    int,
-	scene:   int,
-	layer:   int,
-	coord:   Coord,
-	visible: bool,
-}
-
-Caller_Kind :: enum {
-	Path,
-	Scene,
-}
-
-Event_Reg :: struct {
-	event:       Event,
-	caller_kind: Caller_Kind,
-	caller:      int,
-	action:      Action,
-}
-
 Character :: struct {
 	character_id:         int,
 	input_symbol:         string,
@@ -490,7 +450,6 @@ Character :: struct {
 	render_cached_fg:     Maybe(Color),
 	render_cached_bg:     Maybe(Color),
 	render_cached_bold:   bool,
-	events:               [dynamic]Event_Reg,
 }
 
 Character_Storage :: #soa[dynamic]Character
@@ -1407,10 +1366,12 @@ render_cell_dirty :: #force_inline proc(
 	if cell != previous_cell do return true
 	if cell == EMPTY_CELL do return false
 	id := int(cell)
-	return visual_symbols[id] != render_cached_symbols[id] ||
+	return(
+		visual_symbols[id] != render_cached_symbols[id] ||
 		visual_fg[id] != render_cached_fg[id] ||
 		visual_bg[id] != render_cached_bg[id] ||
-		visual_bold[id] != render_cached_bold[id]
+		visual_bold[id] != render_cached_bold[id] \
+	)
 }
 
 // Build the frame into e.out_buf, top row first.
@@ -1470,18 +1431,19 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 				cursor_column = column
 			}
 
-			for column < width && render_cell_dirty(
-				row_cells[column],
-				previous_row[column],
-				visual_symbols,
-				render_cached_symbols,
-				visual_fg,
-				render_cached_fg,
-				visual_bg,
-				render_cached_bg,
-				visual_bold,
-				render_cached_bold,
-			) {
+			for column < width &&
+			    render_cell_dirty(
+				    row_cells[column],
+				    previous_row[column],
+				    visual_symbols,
+				    render_cached_symbols,
+				    visual_fg,
+				    render_cached_fg,
+				    visual_bg,
+				    render_cached_bg,
+				    visual_bold,
+				    render_cached_bold,
+			    ) {
 				cell := row_cells[column]
 				previous_row[column] = cell
 				if cell == EMPTY_CELL {

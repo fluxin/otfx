@@ -55,10 +55,12 @@ expand_parse :: proc(cfg: ^Expand_Config, args: []string) -> bool {
 }
 
 Expand_State :: struct {
-	config:        Expand_Config,
-	final_colors:  [dynamic]engine.Color_Pair,
-	path_handles:  [dynamic]int,
-	scene_handles: [dynamic]int,
+	config:       Expand_Config,
+	characters:   [dynamic]engine.Char_Id,
+	final_colors: [dynamic]engine.Color,
+	max_steps:    [dynamic]int,
+	step_limit:   int,
+	tick:         int,
 }
 
 expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
@@ -76,50 +78,55 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.path_handles = make([dynamic]int, max_slot + 1)
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.path_handles[i], s.scene_handles[i] = -1, -1
+	n := len(s.characters)
+	s.final_colors = make([dynamic]engine.Color, n)
+	s.max_steps = make([dynamic]int, n)
 
-	for id in chars {
+	for id, i in s.characters {
 		c := e.chars.input_coord[id]
-		final := engine.Color_Pair {
-			fg = engine.gradient_sample(sampler, spectrum[:], c),
-			bg = nil,
-		}
-		s.final_colors[id] = final
-
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
 		e.chars.current_coord[id] = e.canvas.center
-		p := engine.new_path(e, s.config.movement_speed, s.config.expand_easing, nil, 0, false)
-		engine.path_add_waypoint(&e.paths[p], c)
-		s.path_handles[id] = p
-		engine.register_event(e, id, .Path_Activated, .Path, p, {kind = .Set_Layer, layer = 1})
-		engine.register_event(e, id, .Path_Complete, .Path, p, {kind = .Set_Layer, layer = 0})
-
-		sc := engine.new_scene(e, false, .Distance, {})
-		g := engine.gradient_with_steps([]engine.Color{spectrum[0], final.fg.?}, 10, false)
-		defer delete(g[:])
-		engine.scene_add_gradient(&e.scenes[sc], []string{e.chars.input_symbol[id]}, 5, g[:], nil)
-		s.scene_handles[id] = sc
-
-		engine.activate_path(e, id, p)
-		engine.activate_scene(e, id, sc)
+		s.max_steps[i] = max(
+			engine.round_half_even(
+				engine.line_length(e.canvas.center, c, true) / s.config.movement_speed,
+			),
+			1,
+		)
+		s.step_limit = max(s.step_limit, s.max_steps[i])
 		e.chars.is_visible[id] = true
-		engine.active_insert(e, id)
+		e.chars.layer[id] = 1
 	}
 }
 
 expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
-	if len(e.active) == 0 do return false
-	engine.update(e)
-	engine.frame(e)
+	if s.tick == s.step_limit do return false
+	for id, i in s.characters {
+		maximum := s.max_steps[i]
+		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
+		factor := engine.easing_apply(s.config.expand_easing, progress)
+		e.chars.current_coord[id] = engine.coord_on_line(
+			e.canvas.center,
+			e.chars.input_coord[id],
+			factor,
+		)
+		e.chars.visual_fg[id] = engine.gradient_between_step(
+			s.config.final_gradient_stops[0],
+			s.final_colors[i],
+			10,
+			min(engine.round_half_even(factor * 10), 10),
+		)
+		if s.tick + 1 >= maximum {
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.visual_fg[id] = s.final_colors[i]
+			e.chars.layer[id] = 0
+		}
+	}
+	s.tick += 1
+	engine.frame(e, s.characters[:])
 	return true
 }

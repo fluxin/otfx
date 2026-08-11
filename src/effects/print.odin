@@ -62,13 +62,22 @@ Print_Row :: struct {
 }
 
 Print_State :: struct {
-	config:      Print_Config,
-	row_chars:   [dynamic]engine.Char_Id,
-	rows:        [dynamic]Print_Row,
-	current_row: int,
-	typing_head: engine.Char_Id,
-	typing:      bool,
-	last_column: int,
+	config:             Print_Config,
+	row_chars:          [dynamic]engine.Char_Id,
+	rows:               [dynamic]Print_Row,
+	final_colors:       [dynamic]engine.Color,
+	char_start_ticks:   [dynamic]int,
+	active_chars:       [dynamic]engine.Char_Id,
+	current_row:        int,
+	typing_head:        engine.Char_Id,
+	typing:             bool,
+	last_column:        int,
+	head_origin:        engine.Coord,
+	head_target:        engine.Coord,
+	head_start_tick:    int,
+	head_max_steps:     int,
+	head_return_active: bool,
+	tick:               int,
 }
 
 print_row_characters :: proc(s: ^Print_State, row_index: int) -> []engine.Char_Id {
@@ -101,7 +110,9 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	characters := engine.get_characters(query, engine.filter_all_fills(), .Top_Bottom_Left_Right)
 	defer delete(characters[:])
-	final_colors := make([]engine.Color, len(e.chars), context.temp_allocator)
+	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.char_start_ticks = make([dynamic]int, len(e.chars))
+	for i in 0 ..< len(s.char_start_ticks) do s.char_start_ticks[i] = -1
 	white := engine.Color{0xff, 0xff, 0xff}
 	for id in characters {
 		coord := e.chars.input_coord[id]
@@ -109,9 +120,9 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		   coord.row <= e.canvas.text_top &&
 		   coord.column >= e.canvas.text_left &&
 		   coord.column <= e.canvas.text_right {
-			final_colors[id] = engine.gradient_sample(sampler, spectrum[:], coord)
+			s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], coord)
 		} else {
-			final_colors[id] = white
+			s.final_colors[id] = white
 		}
 	}
 
@@ -131,21 +142,6 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 			if all_fill && len(s.row_chars) > start do break
 			if !all_fill && e.chars.input_coord[id].column > right_extent do continue
 			e.chars.current_coord[id] = engine.coord(e.chars.input_coord[id].column, 1)
-			scene := engine.new_scene(e, false, .None, nil)
-			gradient := engine.gradient_with_steps(
-				[]engine.Color{white, final_colors[id]},
-				5,
-				false,
-			)
-			engine.scene_add_gradient(
-				&e.scenes[scene],
-				[]string{"█", "▓", "▒", "░", e.chars.input_symbol[id]},
-				3,
-				gradient[:],
-				nil,
-			)
-			delete(gradient[:])
-			engine.activate_scene(e, id, scene)
 			append(&s.row_chars, id)
 		}
 		append(&s.rows, Print_Row{{start, len(s.row_chars) - start}, 0})
@@ -154,9 +150,9 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 }
 
 print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
-	if len(e.active) == 0 && !s.typing do return false
-	head_path := e.chars.active_path[s.typing_head]
-	if head_path >= 0 {
+	white := engine.Color{0xff, 0xff, 0xff}
+	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return false
+	if s.head_return_active {
 		// carriage return is still active
 	} else if s.typing {
 		row := &s.rows[s.current_row]
@@ -167,7 +163,8 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 				id := characters[row.typed]
 				row.typed += 1
 				e.chars.is_visible[id] = true
-				engine.active_insert(e, id)
+				s.char_start_ticks[id] = s.tick
+				append(&s.active_chars, id)
 				s.last_column = e.chars.input_coord[id].column
 			}
 		} else if s.current_row + 1 < len(s.rows) {
@@ -194,33 +191,59 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 				current_ids = print_row_characters(s, s.current_row)
 			}
 
-			e.chars.current_coord[s.typing_head] = engine.coord(s.last_column, 1)
+			s.head_origin = engine.coord(s.last_column, 1)
+			e.chars.current_coord[s.typing_head] = s.head_origin
 			e.chars.is_visible[s.typing_head] = true
 			target_column := e.chars.input_coord[current_ids[0]].column
-			path := engine.new_path(
-				e,
-				s.config.print_head_return_speed,
-				s.config.print_head_easing,
-				nil,
-				0,
-				false,
+			s.head_target = engine.coord(target_column, 1)
+			s.head_max_steps = max(
+				engine.round_half_even(
+					engine.line_length(s.head_origin, s.head_target, true) /
+					s.config.print_head_return_speed,
+				),
+				1,
 			)
-			engine.path_add_waypoint(&e.paths[path], engine.coord(target_column, 1))
-			engine.register_event(
-				e,
-				s.typing_head,
-				.Path_Complete,
-				.Path,
-				path,
-				{kind = .Set_Visible, visible = false},
-			)
-			engine.activate_path(e, s.typing_head, path)
-			engine.active_insert(e, s.typing_head)
+			s.head_start_tick = s.tick
+			s.head_return_active = true
 		} else {
 			s.typing = false
 		}
 	}
-	engine.update(e)
+	write := 0
+	for id in s.active_chars {
+		age := s.tick - s.char_start_ticks[id]
+		if age >= 18 do continue
+		frame := min(age / 3, 5)
+		if frame < 4 {
+			symbols := [4]string{"█", "█", "▓", "▒"}
+			e.chars.visual_symbol[id] = symbols[frame]
+		} else if frame == 4 {
+			e.chars.visual_symbol[id] = "░"
+		} else {
+			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+		}
+		e.chars.visual_fg[id] = engine.gradient_between_step(white, s.final_colors[id], 5, frame)
+		if age + 1 < 18 {
+			s.active_chars[write] = id
+			write += 1
+		}
+	}
+	resize(&s.active_chars, write)
+	if s.head_return_active {
+		age := s.tick - s.head_start_tick
+		progress := f64(age + 1) / f64(s.head_max_steps)
+		e.chars.current_coord[s.typing_head] = engine.coord_on_line(
+			s.head_origin,
+			s.head_target,
+			engine.easing_apply(s.config.print_head_easing, progress),
+		)
+		if age + 1 >= s.head_max_steps {
+			e.chars.current_coord[s.typing_head] = s.head_target
+			e.chars.is_visible[s.typing_head] = false
+			s.head_return_active = false
+		}
+	}
+	s.tick += 1
 	engine.frame(e)
 	return true
 }

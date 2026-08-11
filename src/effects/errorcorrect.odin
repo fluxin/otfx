@@ -1,7 +1,6 @@
 package effects
 
 import engine "../engine"
-
 import "core:fmt"
 import rand "core:math/rand"
 
@@ -20,18 +19,14 @@ errorcorrect_config_default :: proc() -> Errorcorrect_Config {
 	cfg := Errorcorrect_Config {
 		error_pairs              = 0.1,
 		swap_delay               = 6,
-		error_color              = engine.Color{0xe7, 0x4c, 0x3c},
-		correct_color            = engine.Color{0x45, 0xbf, 0x55},
+		error_color              = {0xe7, 0x4c, 0x3c},
+		correct_color            = {0x45, 0xbf, 0x55},
 		movement_speed           = 0.9,
 		final_gradient_direction = .Vertical,
 	}
 	append(
 		&cfg.final_gradient_stops,
-		..[]engine.Color {
-			engine.Color{0x8A, 0x00, 0x8A},
-			engine.Color{0x00, 0xD1, 0xFF},
-			engine.Color{0xFF, 0xFF, 0xFF},
-		},
+		..[]engine.Color{{0x8A, 0x00, 0x8A}, {0x00, 0xD1, 0xFF}, {0xFF, 0xFF, 0xFF}},
 	)
 	append(&cfg.final_gradient_steps, 12)
 	return cfg
@@ -58,8 +53,7 @@ errorcorrect_parse :: proc(cfg: ^Errorcorrect_Config, args: []string) -> bool {
 		case "--final-gradient-direction":
 			if !parse_gdir_flag(&cfg.final_gradient_direction, args, &i, value, has_value) do return false
 		case:
-			fmt.eprintln("Error: unknown errorcorrect option: ", name)
-			return false
+			fmt.eprintln("Error: unknown errorcorrect option: ", name); return false
 		}
 	}
 	return true
@@ -69,105 +63,18 @@ Errorcorrect_Pair :: struct {
 	first, second: engine.Char_Id,
 }
 
+// One flat active-id column; each id's phase is derived from its start tick.
 Errorcorrect_State :: struct {
 	config:       Errorcorrect_Config,
 	swapped:      [dynamic]Errorcorrect_Pair,
 	swapped_head: int,
-	error_scenes: [dynamic]int,
+	final_colors: [dynamic]engine.Color,
+	origins:      [dynamic]engine.Coord,
+	max_steps:    [dynamic]int,
+	start_ticks:  [dynamic]int,
+	active:       [dynamic]engine.Char_Id,
 	swap_delay:   int,
-}
-
-errorcorrect_configure :: proc(
-	s: ^Errorcorrect_State,
-	e: ^engine.Engine,
-	id: engine.Char_Id,
-	path: int,
-	final_color: engine.Color,
-	correcting_gradient: []engine.Color,
-) {
-	input_symbol := e.chars.input_symbol[id]
-	first_wipe := engine.new_scene(e, false, .None, nil)
-	for symbol in ([]string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}) {
-		engine.scene_add_frame(&e.scenes[first_wipe], symbol, 3, s.config.error_color, nil, false)
-	}
-	last_wipe := engine.new_scene(e, false, .None, nil)
-	for symbol in ([]string{"▇", "▆", "▅", "▄", "▃", "▂", "▁"}) {
-		engine.scene_add_frame(&e.scenes[last_wipe], symbol, 3, s.config.correct_color, nil, false)
-	}
-
-	error_scene := engine.new_scene(e, false, .None, nil)
-	white := engine.Color{0xff, 0xff, 0xff}
-	for _ in 0 ..< 10 {
-		engine.scene_add_frame(&e.scenes[error_scene], "▓", 3, s.config.error_color, nil, false)
-		engine.scene_add_frame(&e.scenes[error_scene], input_symbol, 3, white, nil, false)
-	}
-	s.error_scenes[id] = error_scene
-
-	correcting_scene := engine.new_scene(e, false, .Distance, nil)
-	engine.scene_add_gradient(
-		&e.scenes[correcting_scene],
-		[]string{"█"},
-		3,
-		correcting_gradient,
-		nil,
-	)
-	final_scene := engine.new_scene(e, false, .None, nil)
-	final_gradient := engine.gradient_with_steps(
-		[]engine.Color{s.config.correct_color, final_color},
-		10,
-		false,
-	)
-	engine.scene_add_gradient(
-		&e.scenes[final_scene],
-		[]string{input_symbol},
-		3,
-		final_gradient[:],
-		nil,
-	)
-	delete(final_gradient[:])
-
-	engine.register_event(
-		e,
-		id,
-		.Scene_Complete,
-		.Scene,
-		error_scene,
-		{kind = .Activate_Scene, scene = first_wipe},
-	)
-	engine.register_event(
-		e,
-		id,
-		.Scene_Complete,
-		.Scene,
-		first_wipe,
-		{kind = .Activate_Scene, scene = correcting_scene},
-	)
-	engine.register_event(
-		e,
-		id,
-		.Scene_Complete,
-		.Scene,
-		first_wipe,
-		{kind = .Activate_Path, path = path},
-	)
-	engine.register_event(e, id, .Path_Activated, .Path, path, {kind = .Set_Layer, layer = 1})
-	engine.register_event(e, id, .Path_Complete, .Path, path, {kind = .Set_Layer, layer = 0})
-	engine.register_event(
-		e,
-		id,
-		.Path_Complete,
-		.Path,
-		path,
-		{kind = .Activate_Scene, scene = last_wipe},
-	)
-	engine.register_event(
-		e,
-		id,
-		.Scene_Complete,
-		.Scene,
-		last_wipe,
-		{kind = .Activate_Scene, scene = final_scene},
-	)
+	tick:         int,
 }
 
 errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
@@ -190,60 +97,104 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(characters[:])
-	final_colors := make([]engine.Color, len(e.chars), context.temp_allocator)
-	s.error_scenes = make([dynamic]int, len(e.chars))
+	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.origins = make([dynamic]engine.Coord, len(e.chars))
+	s.max_steps = make([dynamic]int, len(e.chars))
+	s.start_ticks = make([dynamic]int, len(e.chars))
+	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	for id in characters {
-		final_colors[id] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], final_colors[id], nil)
+		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+		e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+		e.chars.visual_fg[id] = s.final_colors[id]
 		e.chars.is_visible[id] = true
-		s.error_scenes[id] = -1
 	}
-
 	available := make([dynamic]engine.Char_Id, 0, len(characters), context.temp_allocator)
 	append(&available, ..characters[:])
-	correcting := engine.gradient_with_steps(
-		[]engine.Color{s.config.error_color, s.config.correct_color},
-		10,
-		false,
-	)
-	defer delete(correcting[:])
-	pair_count := int(s.config.error_pairs * f64(len(characters)))
-	for _ in 0 ..< pair_count {
+	for _ in 0 ..< int(s.config.error_pairs * f64(len(characters))) {
 		if len(available) < 2 do break
-		first_index := rand.int_max(len(available))
-		first := available[first_index]
-		ordered_remove(&available, first_index)
-		second_index := rand.int_max(len(available))
-		second := available[second_index]
-		ordered_remove(&available, second_index)
-		first_home := e.chars.input_coord[first]
-		second_home := e.chars.input_coord[second]
-		e.chars.current_coord[first] = second_home
-		e.chars.current_coord[second] = first_home
-		first_path := engine.new_path(e, s.config.movement_speed, nil, nil, 0, false)
-		second_path := engine.new_path(e, s.config.movement_speed, nil, nil, 0, false)
-		engine.path_add_waypoint(&e.paths[first_path], first_home)
-		engine.path_add_waypoint(&e.paths[second_path], second_home)
-		errorcorrect_configure(s, e, first, first_path, final_colors[first], correcting[:])
-		errorcorrect_configure(s, e, second, second_path, final_colors[second], correcting[:])
+		first_index := rand.int_max(
+			len(available),
+		); first := available[first_index]; ordered_remove(&available, first_index)
+		second_index := rand.int_max(
+			len(available),
+		); second := available[second_index]; ordered_remove(&available, second_index)
+		first_home, second_home := e.chars.input_coord[first], e.chars.input_coord[second]
+		s.origins[first], s.origins[second] = second_home, first_home
+		e.chars.current_coord[first], e.chars.current_coord[second] = second_home, first_home
+		s.max_steps[first] = max(
+			engine.round_half_even(
+				engine.line_length(second_home, first_home, true) / s.config.movement_speed,
+			),
+			1,
+		)
+		s.max_steps[second] = max(
+			engine.round_half_even(
+				engine.line_length(first_home, second_home, true) / s.config.movement_speed,
+			),
+			1,
+		)
 		append(&s.swapped, Errorcorrect_Pair{first, second})
 	}
 }
 
 errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 	if s.swapped_head < len(s.swapped) && s.swap_delay == 0 {
-		pair := s.swapped[s.swapped_head]
-		s.swapped_head += 1
-		for id in ([]engine.Char_Id{pair.first, pair.second}) {
-			engine.activate_scene(e, id, s.error_scenes[id])
-			engine.active_insert(e, id)
-		}
+		pair := s.swapped[s.swapped_head]; s.swapped_head += 1
+		s.start_ticks[pair.first] = s.tick
+		s.start_ticks[pair.second] = s.tick
+		append(&s.active, pair.first, pair.second)
 		s.swap_delay = s.config.swap_delay
-	} else if s.swap_delay != 0 {
-		s.swap_delay -= 1
+	} else if s.swap_delay != 0 do s.swap_delay -= 1
+	if len(s.active) == 0 do return false
+	first_wipe := [8]string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
+	last_wipe := [7]string{"▇", "▆", "▅", "▄", "▃", "▂", "▁"}
+	white := engine.Color{0xff, 0xff, 0xff}
+	write := 0
+	for id in s.active {
+		age, motion_start := s.tick - s.start_ticks[id], 84
+		last_start := motion_start + s.max_steps[id] - 1
+		total := s.max_steps[id] + 137
+		if age >= total do continue
+		switch {
+		case age < 60:
+			if (age / 3) % 2 ==
+			   0 {e.chars.visual_symbol[id] = "▓"; e.chars.visual_fg[id] = s.config.error_color} else {e.chars.visual_symbol[id] = e.chars.input_symbol[id]; e.chars.visual_fg[id] = white}
+		case age < 84:
+			e.chars.visual_symbol[id] = first_wipe[(age - 60) / 3]
+			e.chars.visual_fg[id] = s.config.error_color
+		case age < last_start:
+			progress := f64(age - motion_start + 1) / f64(s.max_steps[id])
+			e.chars.current_coord[id] = engine.coord_on_line(
+				s.origins[id],
+				e.chars.input_coord[id],
+				progress,
+			)
+			e.chars.layer[id] = 1
+			e.chars.visual_symbol[id] = "█"
+			e.chars.visual_fg[id] = engine.gradient_between_step(
+				s.config.error_color,
+				s.config.correct_color,
+				10,
+				min(engine.round_half_even(progress * 10), 10),
+			)
+		case age < last_start + 21:
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.layer[id] = 0
+			e.chars.visual_symbol[id] = last_wipe[(age - last_start) / 3]
+			e.chars.visual_fg[id] = s.config.correct_color
+		case:
+			e.chars.visual_symbol[id] = e.chars.input_symbol[id]
+			e.chars.visual_fg[id] = engine.gradient_between_step(
+				s.config.correct_color,
+				s.final_colors[id],
+				10,
+				min((age - last_start - 21) / 3, 10),
+			)
+		}
+		s.active[write] = id; write += 1
 	}
-	if len(e.active) == 0 do return false
-	engine.update(e)
+	resize(&s.active, write)
+	s.tick += 1
 	engine.frame(e)
 	return true
 }
