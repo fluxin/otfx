@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 
 Print_Config :: struct {
 	print_head_return_speed:  f64,

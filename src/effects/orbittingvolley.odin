@@ -3,7 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 
 Orbittingvolley_Config :: struct {
 	top_launcher_symbol:      string,

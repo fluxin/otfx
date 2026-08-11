@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 
 // wipe — reveal characters along a grouped direction, eased.
 

@@ -2,8 +2,8 @@ package engine
 
 import "core:fmt"
 import "core:math"
-import ease "core:math/ease"
-import linalg "core:math/linalg"
+import "core:math/ease"
+import "core:math/linalg"
 import "core:strconv"
 import "core:strings"
 

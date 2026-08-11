@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 
 // scattered — characters fly in from random coordinates with a slight
 // overshoot easing, synced to movement distance.

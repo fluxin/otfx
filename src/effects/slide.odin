@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 import "core:slice"
 
 // slide — characters slide in from outside the canvas, group by group.

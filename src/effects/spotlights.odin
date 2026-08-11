@@ -1,10 +1,10 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
-import rand "core:math/rand"
+import "core:math/ease"
+import "core:math/rand"
 
 Spotlights_Config :: struct {
 	beam_width_ratio:         f64,

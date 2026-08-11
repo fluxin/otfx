@@ -4,8 +4,8 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math"
-import ease "core:math/ease"
-import rand "core:math/rand"
+import "core:math/ease"
+import "core:math/rand"
 import "core:sort"
 
 Swarm_Config :: struct {

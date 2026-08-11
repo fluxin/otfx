@@ -1,10 +1,10 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
-import rand "core:math/rand"
+import "core:math/ease"
+import "core:math/rand"
 
 Crumble_Dust_Symbols :: [3]string{"*", ".", ","}
 

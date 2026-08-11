@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import rand "core:math/rand"
+import "core:math/rand"
 import "core:unicode/utf8"
 
 Binarypath_Config :: struct {

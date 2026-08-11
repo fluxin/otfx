@@ -3,7 +3,6 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import rand "core:math/rand"
 
 Smoke_Config :: struct {
 	starting_color:           engine.Color,

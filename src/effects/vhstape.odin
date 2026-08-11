@@ -3,7 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import rand "core:math/rand"
+import "core:math/rand"
 
 Vhs_Noise_Symbols :: [4]string{"#", "*", ".", ":"}
 

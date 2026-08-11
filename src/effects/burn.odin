@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import rand "core:math/rand"
+import "core:math/rand"
 
 Burn_Char_Order :: [9]string{"'", ".", "▖", "▙", "█", "▜", "▀", "▝", "."}
 Burn_Smoke_Symbols :: [6]string{".", ",", "'", "`", "#", "*"}

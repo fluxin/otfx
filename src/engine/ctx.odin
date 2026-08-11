@@ -1,6 +1,6 @@
 package engine
 
-import ease "core:math/ease"
+import "core:math/ease"
 
 // Eased reveal of a prefix of character groups (wipe/highlight/sweep).
 Group_Reveal :: struct {

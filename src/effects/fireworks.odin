@@ -1,11 +1,11 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
 import "core:math"
-import ease "core:math/ease"
-import rand "core:math/rand"
+import "core:math/ease"
+import "core:math/rand"
 
 Fireworks_Config :: struct {
 	explode_anywhere:         bool,

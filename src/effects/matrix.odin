@@ -1,8 +1,8 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 import "core:math"
-import rand "core:math/rand"
+import "core:math/rand"
 import "core:slice"
 
 import "core:fmt"

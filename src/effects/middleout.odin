@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 
 // middleout — characters condense onto the middle row/column, then expand to
 // their home coordinates.

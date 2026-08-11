@@ -3,8 +3,8 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
-import rand "core:math/rand"
+import "core:math/ease"
+import "core:math/rand"
 
 Laseretch_Config :: struct {
 	etch_pattern:             Maybe(engine.Character_Group), // nil = algorithm order

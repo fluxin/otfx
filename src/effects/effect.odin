@@ -1,8 +1,8 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
-import ease "core:math/ease"
+import "core:math/ease"
 import "core:strconv"
 import "core:strings"
 import "core:unicode/utf8"

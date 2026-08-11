@@ -1,6 +1,6 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
 

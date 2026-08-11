@@ -1,9 +1,9 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
+import "core:math/ease"
 
 // waves — one shared eased wave timeline, staggered by group start ticks, then
 // a direct per-character transition into the final gradient.

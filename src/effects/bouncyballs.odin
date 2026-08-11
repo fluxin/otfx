@@ -3,8 +3,8 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import ease "core:math/ease"
-import rand "core:math/rand"
+import "core:math/ease"
+import "core:math/rand"
 
 Bouncyballs_Config :: struct {
 	ball_colors:              [dynamic]engine.Color,

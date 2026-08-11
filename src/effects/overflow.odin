@@ -1,10 +1,10 @@
 package effects
 
-import engine "../engine"
+import "../engine"
 
 import "core:fmt"
 import "core:math"
-import rand "core:math/rand"
+import "core:math/rand"
 
 Overflow_Config :: struct {
 	overflow_gradient_stops:  [dynamic]engine.Color,
