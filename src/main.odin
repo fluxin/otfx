@@ -517,21 +517,13 @@ read_stdin_all :: proc() -> []byte {
 	return buf[:]
 }
 
-// A resize rebuild owns one arena for the complete engine/effect lifetime.
-// All default dynamic allocations made during construction belong to it, so a
-// resize releases the entire old world at once rather than retaining stale
-// scene pools, virtual characters, or formatted strings.
 run_effect_once :: proc(
 	input: string,
 	opts: Terminal_Opts,
 	resize_aware: bool,
+	allocator: mem.Allocator,
 ) -> effects.Run_Outcome {
-	run_memory: mem.Dynamic_Arena
-	mem.dynamic_arena_init(&run_memory, minimum_alignment = 1)
-	defer mem.dynamic_arena_destroy(&run_memory)
-	prior_allocator := context.allocator
-	context.allocator = mem.dynamic_arena_allocator(&run_memory)
-	defer {context.allocator = prior_allocator}
+	context.allocator = allocator
 
 	ctx := engine.engine_make(input, opts.cfg, context.allocator)
 	effect, effect_ok := effects.make_effect(opts.kind, opts.effect_args)
@@ -580,9 +572,17 @@ main :: proc() {
 
 	resize_aware := terminal.is_terminal(os.stdout)
 	if resize_aware do engine.install_resize_handler()
+	// One arena backs every rebuilt engine/effect world. Resetting after a
+	// resize retains its blocks for the replacement run without retaining any
+	// references into the old world.
+	run_memory: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&run_memory, minimum_alignment = 1)
+	defer mem.dynamic_arena_destroy(&run_memory)
+	run_allocator := mem.dynamic_arena_allocator(&run_memory)
 	for {
-		outcome := run_effect_once(input, opts, resize_aware)
+		outcome := run_effect_once(input, opts, resize_aware, run_allocator)
 		if outcome != .Terminal_Resized do break
+		mem.dynamic_arena_reset(&run_memory)
 		// The old DEC anchor was cleared by reset_canvas_area. It is valid only
 		// for the caller's first run, exactly as in the Rust reference.
 		opts.cfg.reuse_canvas = false
