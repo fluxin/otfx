@@ -17,6 +17,53 @@ import "core:terminal"
 
 Effect_Kind :: effects.Effect_Kind
 
+Completion_Shell :: enum {
+	None,
+	Bash,
+	Zsh,
+}
+
+// Match ttfx's Clap subcommand order for filtered random-effect selection.
+Random_Effect_Order :: [37]Effect_Kind {
+	.Beams,
+	.Binarypath,
+	.Blackhole,
+	.Bouncyballs,
+	.Bubbles,
+	.Burn,
+	.Colorshift,
+	.Crumble,
+	.Decrypt,
+	.Errorcorrect,
+	.Expand,
+	.Fireworks,
+	.Highlight,
+	.Laseretch,
+	.Matrix,
+	.Middleout,
+	.Orbittingvolley,
+	.Overflow,
+	.Pour,
+	.Print,
+	.Rain,
+	.Randomsequence,
+	.Rings,
+	.Scattered,
+	.Slice,
+	.Slide,
+	.Smoke,
+	.Spotlights,
+	.Spray,
+	.Swarm,
+	.Sweep,
+	.Synthgrid,
+	.Thunderstorm,
+	.Unstable,
+	.Vhstape,
+	.Waves,
+	.Wipe,
+}
+
 effect_kind_parse :: proc(name: string) -> (Effect_Kind, bool) {
 	for kind in Effect_Kind {
 		if effect_kind_name(kind) == name do return kind, true
@@ -341,12 +388,42 @@ effect_flag_names :: proc(kind: Effect_Kind) -> string {
 // ---------------------------------------------------------------------------
 
 Terminal_Opts :: struct {
-	cfg:         engine.Terminal_Config,
-	seed:        Maybe(u64),
-	input_file:  string,
-	random:      bool,
-	kind:        Effect_Kind,
-	effect_args: []string,
+	cfg:             engine.Terminal_Config,
+	seed:            Maybe(u64),
+	input_file:      string,
+	random:          bool,
+	include_effects: [dynamic]string,
+	exclude_effects: [dynamic]string,
+	completion:      Completion_Shell,
+	kind:            Effect_Kind,
+	effect_args:     []string,
+}
+
+effect_name_in :: #force_inline proc(name: string, names: []string) -> bool {
+	for candidate in names {
+		if candidate == name do return true
+	}
+	return false
+}
+
+random_effect_pick :: proc(include, exclude: []string) -> (Effect_Kind, bool) {
+	candidate_count := 0
+	for kind in Random_Effect_Order {
+		name := effect_kind_name(kind)
+		if len(include) > 0 && !effect_name_in(name, include) do continue
+		if effect_name_in(name, exclude) do continue
+		candidate_count += 1
+	}
+	if candidate_count == 0 do return .Slide, false
+	selected := rand.int_max(candidate_count)
+	for kind in Random_Effect_Order {
+		name := effect_kind_name(kind)
+		if len(include) > 0 && !effect_name_in(name, include) do continue
+		if effect_name_in(name, exclude) do continue
+		if selected == 0 do return kind, true
+		selected -= 1
+	}
+	unreachable()
 }
 
 parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
@@ -390,6 +467,25 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 				return args[i^], true
 			}
 			return "", false
+		}
+		effect_filter_values :: proc(
+			args: []string,
+			i: ^int,
+			value: string,
+			has_value: bool,
+			out: ^[dynamic]string,
+		) -> bool {
+			if has_value {
+				if value == "" do return false
+				append(out, value)
+				return true
+			}
+			start := i^
+			for i^ + 1 < len(args) && !strings.has_prefix(args[i^ + 1], "-") {
+				i^ += 1
+				append(out, args[i^])
+			}
+			return i^ != start
 		}
 		switch name {
 		case "--frame-rate":
@@ -472,6 +568,21 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 			opts.input_file = v
 		case "-R", "--random-effect":
 			opts.random = true
+		case "--include-effects":
+			if !effect_filter_values(args, &i, value, has_value, &opts.include_effects) do return opts, false
+		case "--exclude-effects":
+			if !effect_filter_values(args, &i, value, has_value, &opts.exclude_effects) do return opts, false
+		case "--print-completion":
+			v, ok := value_of(args, &i, value, has_value)
+			if !ok do return opts, false
+			switch v {
+			case "bash":
+				opts.completion = .Bash
+			case "zsh":
+				opts.completion = .Zsh
+			case:
+				return opts, false
+			}
 		case "--version", "-v":
 			fmt.println("otfx 0.1.0 (odin port of ttfx)")
 			return opts, false
@@ -484,7 +595,11 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 		}
 		i += 1
 	}
-	if !has_kind {
+	if len(opts.include_effects) > 0 && len(opts.exclude_effects) > 0 {
+		fmt.eprintln("Error: --include-effects conflicts with --exclude-effects.")
+		return opts, false
+	}
+	if !has_kind && !opts.random && opts.completion == .None {
 		fmt.eprintln("Error: No effect specified.")
 		print_usage()
 		return opts, false
@@ -504,6 +619,9 @@ print_usage :: proc() {
 		"  --xterm-colors --no-color --existing-color-handling M --no-eol --no-restore-cursor",
 	)
 	fmt.println("  --tab-width N --terminal-background-color C --seed N -i FILE -R")
+	fmt.println(
+		"  --include-effects EFFECT... --exclude-effects EFFECT... --print-completion bash|zsh",
+	)
 	fmt.println("")
 	fmt.println("effects:")
 	for kind in Effect_Kind {
@@ -511,6 +629,56 @@ print_usage :: proc() {
 	}
 	fmt.println("")
 	fmt.println("run 'otfx <effect> --help' for effect options")
+}
+
+completion_global_words :: proc() -> string {
+	return(
+		"--frame-rate --canvas-width --canvas-height --anchor-canvas --anchor-text --wrap-text --xterm-colors --no-color --existing-color-handling --no-eol --no-restore-cursor --ignore-terminal-dimensions --reuse-canvas --tab-width --terminal-background-color --seed --input-file --random-effect --include-effects --exclude-effects --print-completion --help --version" \
+	)
+}
+
+print_completion_bash :: proc() {
+	fmt.println("_otfx() {")
+	fmt.println("  local cur effect word")
+	fmt.println("  cur=\"${COMP_WORDS[COMP_CWORD]}\"")
+	fmt.println("  effect=\"\"")
+	fmt.println("  for word in \"${COMP_WORDS[@]:1:COMP_CWORD}\"; do")
+	fmt.println("    case \"$word\" in")
+	for kind in Random_Effect_Order do fmt.printf("      %s) effect=%s; break ;;\n", effect_kind_name(kind), effect_kind_name(kind))
+	fmt.println("    esac")
+	fmt.println("  done")
+	fmt.printf("  local words=\"%s", completion_global_words())
+	for kind in Random_Effect_Order do fmt.printf(" %s", effect_kind_name(kind))
+	fmt.println("\"")
+	fmt.println("  case \"$effect\" in")
+	for kind in Random_Effect_Order do fmt.printf("    %s) words=\"$words %s\" ;;\n", effect_kind_name(kind), effect_flag_names(kind))
+	fmt.println("  esac")
+	fmt.println("  COMPREPLY=( $(compgen -W \"$words\" -- \"$cur\") )")
+	fmt.println("}")
+	fmt.println("complete -F _otfx otfx")
+}
+
+print_completion_zsh :: proc() {
+	fmt.println("#compdef otfx")
+	fmt.println("_otfx() {")
+	fmt.println("  local -a words")
+	fmt.printf("  words=(%s", completion_global_words())
+	for kind in Random_Effect_Order do fmt.printf(" %s", effect_kind_name(kind))
+	fmt.println(")")
+	fmt.println("  _describe 'otfx command' words")
+	fmt.println("}")
+	fmt.println("_otfx \"$@\"")
+}
+
+print_completion :: proc(shell: Completion_Shell) {
+	switch shell {
+	case .Bash:
+		print_completion_bash()
+	case .Zsh:
+		print_completion_zsh()
+	case .None:
+		unreachable()
+	}
 }
 
 read_stdin_all :: proc() -> []byte {
@@ -556,6 +724,12 @@ main :: proc() {
 
 	opts, ok := parse_terminal_opts(args)
 	if !ok do os.exit(1)
+	defer delete(opts.include_effects)
+	defer delete(opts.exclude_effects)
+	if opts.completion != .None {
+		print_completion(opts.completion)
+		return
+	}
 
 	input := opts.input_file
 	if input == "" {
@@ -580,7 +754,14 @@ main :: proc() {
 	}
 
 	if seed, has_seed := opts.seed.?; has_seed do rand.reset_u64(seed)
-	if opts.random do opts.kind = Effect_Kind(rand.int_max(len(Effect_Kind)))
+	if opts.random {
+		kind, found := random_effect_pick(opts.include_effects[:], opts.exclude_effects[:])
+		if !found {
+			fmt.eprintln("Error: No effects available after filtering.")
+			os.exit(1)
+		}
+		opts.kind = kind
+	}
 
 	resize_aware := terminal.is_terminal(os.stdout)
 	if resize_aware do engine.install_resize_handler()

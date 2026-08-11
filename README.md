@@ -209,12 +209,18 @@ printf 'hello\n' | otfx --seed 42 --frame-rate 0 --canvas-width 80 rain
 
 # effect options after the effect
 printf 'hello\n' | otfx --seed 42 bubbles --bubble-delay 1 --rainbow
+
+# restrict random selection to a subset
+printf 'hello\n' | otfx --seed 42 -R --include-effects wipe sweep
+
+# install basic shell completion for the current shell session
+source <(otfx --print-completion bash)
 ```
 
 Supported terminal options include canvas sizing/anchoring, wrapping, color
 suppression, terminal background color, input-file selection, reproducible
-seeds, random effect selection, and frame pacing. Run `otfx --help` for the
-authoritative list.
+seeds, random-effect filters, shell-completion generation, and frame pacing.
+Run `otfx --help` for the authoritative list.
 
 When stdout is an interactive terminal and canvas geometry follows terminal
 dimensions, a settled `SIGWINCH` ends the current run, clears its old canvas
@@ -257,12 +263,6 @@ logical frames.
 
 ## Remaining parity work
 
-Effect-command coverage and resize rebuilding are complete. Input SGR state is
-now preprocessed into immutable source-style columns; `--xterm-colors` and
-`--existing-color-handling=always|dynamic` are implemented in the renderer and
-the effects that need dynamic final-color lanes. The remaining work is
-deliberately tracked separately from throughput claims:
-
 - Add a shared virtual-clock, logical-frame capture harness, then use it to
   reconcile random draw order, phase progression, and terminal output where
   byte parity is wanted. The renderer intentionally has a different stream.
@@ -270,10 +270,7 @@ deliberately tracked separately from throughput claims:
   60 fps sample above; Thunderstorm currently ends too early and must not be
   called a parity-safe performance win until corrected.
 - Add regression captures for input SGR combinations, xterm-color emission,
-  and `always`/`dynamic` behavior across effects; implementation coverage is
-  present, but that reference matrix is not yet automated.
-- Add the remaining reference global CLI surface: `--include-effects`,
-  `--exclude-effects`, and `--print-completion`.
+  and `always`/`dynamic` behavior across effects.
 
 ## Credit and license
 
