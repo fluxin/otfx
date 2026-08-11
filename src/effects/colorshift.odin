@@ -163,7 +163,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	}
 }
 
-colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
+colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	ids := e.character_sets.input[:]
 	visual_fg := e.chars.visual
 	n := len(s.gradient)
@@ -182,11 +182,11 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 			if s.palette_index == n do s.palette_index = 0
 		}
 	} else {
-		if s.config.skip_final_gradient do return false
+		if s.config.skip_final_gradient do return nil, false
 		transition_tick := s.tick - cycle_ticks
 		transition_step := transition_tick / frames
 		transition_steps :: 8
-		if transition_step > transition_steps do return false
+		if transition_step > transition_steps do return nil, false
 		for id, i in ids {
 			start_index := s.shifts[i] - 1
 			if start_index < 0 do start_index += n
@@ -200,6 +200,5 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.tick += 1
-	engine.frame(e)
-	return true
+	return nil, true
 }

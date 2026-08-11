@@ -217,11 +217,11 @@ laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: en
 	e.chars.is_visible[s.spark_ids[i]] = true
 }
 
-laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
+laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.pending_head == len(s.pending) &&
 	   len(s.active_sources) == 0 &&
 	   len(s.active_sparks) == 0 {
-		return false
+		return nil, false
 	}
 
 	if s.pending_head < len(s.pending) {
@@ -332,6 +332,5 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 	resize(&s.render_ids, base_render_count)
 	for i in s.active_sparks do append(&s.render_ids, s.spark_ids[i])
 	s.tick += 1
-	engine.frame(e, s.render_ids[:])
-	return true
+	return s.render_ids[:], true
 }

@@ -232,7 +232,13 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	}
 }
 
-orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bool {
+orbittingvolley_next :: proc(
+	s: ^Orbittingvolley_State,
+	e: ^engine.Engine,
+) -> (
+	[]engine.Char_Id,
+	bool,
+) {
 	active := !s.launchers_hidden
 	for start, i in s.launch_starts {
 		if start >= 0 && s.tick - start < s.launch_steps[i] {
@@ -240,7 +246,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 			break
 		}
 	}
-	if !active do return false
+	if !active do return nil, false
 
 	magazines_left := false
 	for i in 0 ..< 4 {
@@ -303,6 +309,5 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 		if age >= steps do e.chars.layer[id] = 0
 	}
 	s.tick += 1
-	engine.frame(e, s.render_ids[:])
-	return true
+	return s.render_ids[:], true
 }

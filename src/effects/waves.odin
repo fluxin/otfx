@@ -174,10 +174,10 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	)
 }
 
-waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
+waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	group_count := len(s.pending_cols.spans)
 	if s.col_idx >= group_count && s.active_count == 0 {
-		return false
+		return nil, false
 	}
 	visible := e.chars.is_visible
 	if s.col_idx < group_count {
@@ -226,6 +226,5 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.tick += 1
-	engine.frame(e, s.revealed[:])
-	return true
+	return s.revealed[:], true
 }

@@ -156,8 +156,8 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 	s.full_limit = max(s.full_limit, 60)
 }
 
-middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
-	if s.phase_full && s.phase_tick >= s.full_limit do return false
+middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if s.phase_full && s.phase_tick >= s.full_limit do return nil, false
 	if !s.phase_full && s.phase_tick >= s.center_limit {
 		s.phase_full = true
 		s.phase_tick = 0
@@ -189,6 +189,5 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.phase_tick += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

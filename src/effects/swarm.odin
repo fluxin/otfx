@@ -387,9 +387,9 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	}
 }
 
-swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
+swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	for s.next_launch_group >= 0 && s.tick >= s.group_start_ticks[s.next_launch_group] do swarm_launch_group(s, e)
-	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return false
+	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return nil, false
 
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
@@ -455,7 +455,6 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 		write += 1
 	}
 	resize(&s.active_indexes, write)
-	engine.frame(e, s.characters[:])
 	s.tick += 1
-	return true
+	return s.characters[:], true
 }

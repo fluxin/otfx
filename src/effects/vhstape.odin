@@ -188,7 +188,7 @@ vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 	s.row_starts[row] = -1
 }
 
-vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
+vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.phase == .Glitching {
 		row_count := len(s.rows.spans)
 		if s.wave_cooldown == 0 && row_count >= 3 {
@@ -255,8 +255,7 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 			s.phase = .Noise
 			s.phase_tick = 0
 		}
-		engine.frame(e, s.characters[:])
-		return true
+		return s.characters[:], true
 	}
 
 	if s.phase == .Noise {
@@ -275,11 +274,10 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 			if s.noise_index == min(len(noise_symbols), len(s.config.noise_colors)) do s.noise_index = 0
 		}
 		s.phase_tick += 1
-		engine.frame(e, s.characters[:])
-		return true
+		return s.characters[:], true
 	}
 
-	if s.redraw_row == len(s.rows.spans) do return false
+	if s.redraw_row == len(s.rows.spans) do return nil, false
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
@@ -291,6 +289,5 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 		visual_fg[id].fg = s.final_colors[id]
 	}
 	s.redraw_row += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

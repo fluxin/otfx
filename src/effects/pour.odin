@@ -194,12 +194,12 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	engine.groups_delete(&groups)
 }
 
-pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
+pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	spans := s.group_spans[:]
 	pool := s.pool[:]
 	visible := e.chars.is_visible[:]
 	if s.group_idx >= len(spans) && len(s.active_slots) == 0 {
-		return false
+		return nil, false
 	}
 	if s.group_idx < len(spans) {
 		cur := spans[s.group_idx]
@@ -254,6 +254,5 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	engine.frame(e, s.revealed[:])
-	return true
+	return s.revealed[:], true
 }

@@ -104,8 +104,8 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	}
 }
 
-expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
-	if s.tick == s.step_limit do return false
+expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if s.tick == s.step_limit do return nil, false
 	for id, i in s.characters {
 		maximum := s.max_steps[i]
 		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
@@ -128,6 +128,5 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.tick += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

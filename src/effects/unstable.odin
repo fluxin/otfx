@@ -170,7 +170,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 	s.rumble_delay = 18
 }
 
-unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
+unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
 	visual_fg := e.chars.visual
@@ -178,6 +178,10 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 	for {
 		switch s.phase {
 		case .Rumble:
+			// A jittered frame remains in character storage until it has been
+			// consumed by the engine. Restore the stable positions before
+			// advancing the next effect tick.
+			for id, i in s.characters do current_coords[id] = s.jumbled_coords[i]
 			if s.phase_tick == 150 {
 				s.phase = .Explosion
 				s.phase_tick = 0
@@ -201,13 +205,11 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 					current_coords[id] = engine.coord(p.column + column_offset, p.row + row_offset)
 				}
 			}
-			engine.frame(e, s.characters[:])
 			if jitter {
-				for id, i in s.characters do current_coords[id] = s.jumbled_coords[i]
 				s.rumble_delay = max(s.rumble_delay - 1, 1)
 			}
 			s.phase_tick += 1
-			return true
+			return s.characters[:], true
 
 		case .Explosion:
 			if s.phase_tick == s.explosion_max_steps {
@@ -224,9 +226,8 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 					ease.ease(s.config.explosion_ease, progress),
 				)
 			}
-			engine.frame(e, s.characters[:])
 			s.phase_tick += 1
-			return true
+			return s.characters[:], true
 
 		case .Explosion_Hold:
 			if s.phase_tick == 30 {
@@ -234,15 +235,14 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 				s.phase_tick = 0
 				continue
 			}
-			engine.frame(e, s.characters[:])
 			s.phase_tick += 1
-			return true
+			return s.characters[:], true
 
 		case .Reassembly:
 			// 13 gradient entries at three frames each. Motion and color settle
 			// together, exactly as the old path + scene combination did.
 			final_ticks := max(s.reassembly_max_steps, 39)
-			if s.phase_tick == final_ticks do return false
+			if s.phase_tick == final_ticks do return nil, false
 			color_step := min(s.phase_tick / 3, 12)
 			for id, i in s.characters {
 				steps := s.reassembly_steps[i]
@@ -259,9 +259,8 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 					color_step,
 				)
 			}
-			engine.frame(e, s.characters[:])
 			s.phase_tick += 1
-			return true
+			return s.characters[:], true
 		}
 	}
 }

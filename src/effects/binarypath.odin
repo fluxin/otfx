@@ -185,10 +185,10 @@ binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int
 	return engine.coord_on_line(s.turns[i], e.chars.input_coord[s.characters[i]], t)
 }
 
-binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
+binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.wiping {
 		groups := len(s.final_wipe.spans)
-		if s.wipe_group >= groups do return false
+		if s.wipe_group >= groups do return nil, false
 		input_symbols := e.chars.input_symbol
 		visual_symbols := e.chars.visual
 		visual_fg := e.chars.visual
@@ -202,8 +202,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 			}
 			s.wipe_group += 1
 		}
-		engine.frame(e, s.render_ids[:])
-		return true
+		return s.render_ids[:], true
 	}
 
 	for len(s.active) < s.max_active && len(s.pending) > 0 {
@@ -269,6 +268,5 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 		return binarypath_next(s, e)
 	}
 	s.tick += 1
-	engine.frame(e, s.render_ids[:])
-	return true
+	return s.render_ids[:], true
 }

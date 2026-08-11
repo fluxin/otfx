@@ -168,7 +168,7 @@ crumble_vacuum_active :: proc(s: Crumble_State) -> bool {
 	return false
 }
 
-crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
+crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
@@ -237,8 +237,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 			}
 			resize(&s.fall_active, fall_write)
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 
 		case .Vacuuming:
 			if !crumble_vacuum_active(s^) {
@@ -273,11 +272,10 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 			}
 			resize(&s.vacuum_active, vacuum_write)
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 
 		case .Resetting:
-			if s.phase_tick == s.reset_max_ticks do return false
+			if s.phase_tick == s.reset_max_ticks do return nil, false
 			for id, i in s.characters {
 				input := input_coords[id]
 				steps := s.reset_steps[i]
@@ -310,8 +308,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				}
 			}
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 		}
 	}
 }

@@ -119,12 +119,11 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.initial_hold = 25
 }
 
-scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
-	if s.tick == s.step_limit do return false
+scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if s.tick == s.step_limit do return nil, false
 	if s.initial_hold > 0 {
 		s.initial_hold -= 1
-		engine.frame(e, s.characters[:])
-		return true
+		return s.characters[:], true
 	}
 	for id, i in s.characters {
 		steps := s.max_steps[i]
@@ -147,6 +146,5 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.tick += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

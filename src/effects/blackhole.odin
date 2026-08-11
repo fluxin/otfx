@@ -240,7 +240,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	s.phase = .Forming
 }
 
-blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
+blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	current_coords := e.chars.current_coord
 	input_coords := e.chars.input_coord
 	input_symbols := e.chars.input_symbol
@@ -286,8 +286,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				continue
 			}
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 
 		case .Consuming:
 			complete := true
@@ -322,8 +321,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				continue
 			}
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 
 		case .Collapsing:
 			if s.phase_tick == 60 {
@@ -359,11 +357,10 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				visual_fg[id].fg = s.ring_colors[slot]
 			}
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 
 		case .Exploding:
-			if s.phase_tick == s.explode_limit do return false
+			if s.phase_tick == s.explode_limit do return nil, false
 			for id, i in s.characters {
 				age := s.phase_tick
 				visual_symbols[id].symbol = input_symbols[id]
@@ -392,8 +389,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				}
 			}
 			s.phase_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 		}
 	}
 }

@@ -170,7 +170,7 @@ burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 	e.chars.is_visible[id] = true
 }
 
-burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
+burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	fire_ticks := len(s.fire_palette) * 4
 	final_ticks :: 36 // 9 entries, four frames each
 	active := s.next_character < len(s.order)
@@ -189,7 +189,7 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 			}
 		}
 	}
-	if !active do return false
+	if !active do return nil, false
 
 	for _ in 0 ..< rand.int_range(2, 5) {
 		if s.next_character >= len(s.order) do break
@@ -244,6 +244,5 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 		)
 	}
 	s.tick += 1
-	engine.frame(e, s.render_ids[:])
-	return true
+	return s.render_ids[:], true
 }

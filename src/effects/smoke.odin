@@ -163,8 +163,8 @@ smoke_paint_color :: proc(
 	return engine.gradient_between_step(start, finish, 5, step)
 }
 
-smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
-	if s.tick == s.last_tick do return false
+smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if s.tick == s.last_tick do return nil, false
 	smoke_ticks := len(s.smoke_palette) * 3
 	paint_entries := 1 + 5 * len(s.config.final_gradient_stops)
 	input_symbols := e.chars.input_symbol
@@ -189,6 +189,5 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.tick += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

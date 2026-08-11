@@ -198,8 +198,8 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 	)
 }
 
-overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
-	if s.pending_head >= len(s.pending_rows) do return false
+overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if s.pending_head >= len(s.pending_rows) do return nil, false
 	if s.delay == 0 {
 		for _ in 0 ..< rand.int_range(1, s.config.overflow_speed + 1) {
 			if s.pending_head >= len(s.pending_rows) do break
@@ -237,6 +237,5 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	resize(&s.active_rows, write)
-	engine.frame(e)
-	return true
+	return nil, true
 }

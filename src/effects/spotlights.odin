@@ -182,7 +182,7 @@ spotlights_update_positions :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> 
 	return all_arrived
 }
 
-spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
+spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.phase == .Search {
 		spotlights_update_positions(s, e)
 		s.phase_tick += 1
@@ -208,7 +208,7 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 			for i in 0 ..< len(s.spot_positions) do s.spot_positions[i] = e.canvas.center
 		}
 	} else {
-		if s.illuminate_range > s.expand_limit do return false
+		if s.illuminate_range > s.expand_limit do return nil, false
 		s.illuminate_range += 1
 	}
 
@@ -235,6 +235,5 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 			visual_fg[id].fg = bright
 		}
 	}
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

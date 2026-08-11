@@ -242,7 +242,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	}
 }
 
-bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
+bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	active := s.next_bubble < len(s.bubbles.spans)
 	for state in s.bubble_states {
 		if state == .Float || state == .Pop {
@@ -250,7 +250,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 			break
 		}
 	}
-	if !active do return false
+	if !active do return nil, false
 	if s.next_bubble < len(s.bubbles.spans) {
 		if s.delay == 0 {
 			bi := s.next_bubble
@@ -346,6 +346,5 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 		if s.rainbow_index == len(s.rainbow_palette) do s.rainbow_index = 0
 	}
 	s.tick += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

@@ -451,7 +451,7 @@ build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 	}
 }
 
-next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> bool {
+next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	switch &s in effect.state {
 	case Slide_State:
 		return effect_next(&s, ctx)
@@ -528,7 +528,7 @@ next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> bool {
 	case Thunderstorm_State:
 		return effect_next(&s, ctx)
 	case:
-		return false
+		return nil, false
 	}
 }
 
@@ -550,7 +550,9 @@ run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> 
 			engine.reset_canvas_area(ctx.visible_top)
 			return .Terminal_Resized
 		}
-		if !next_frame(effect, ctx) do break
+		render_candidates, produced := next_frame(effect, ctx)
+		if !produced do break
+		engine.frame(ctx, render_candidates)
 		if resize_aware && engine.resize_settled(ctx) {
 			engine.reset_canvas_area(ctx.visible_top)
 			return .Terminal_Resized

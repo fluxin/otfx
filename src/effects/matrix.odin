@@ -499,7 +499,7 @@ matrix_step_resolve_scenes :: proc(s: ^Matrix_State, chars: ^engine.Character_St
 	resize(&s.resolve_active, write)
 }
 
-matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> bool {
+matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	column_characters := s.column_characters[:]
 	visible_characters := s.visible_characters[:]
 	columns := s.columns[:]
@@ -673,14 +673,12 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> bool {
 	   s.pending_columns.count > 0 ||
 	   !s.rain_complete {
 		matrix_step_resolve_scenes(s, chars)
-		engine.frame(e)
-		return true
+		return nil, true
 	}
 	if !s.final_frame_shown {
 		s.final_frame_shown = true
 		matrix_step_resolve_scenes(s, chars)
-		engine.frame(e)
-		return true
+		return nil, true
 	}
-	return false
+	return nil, false
 }

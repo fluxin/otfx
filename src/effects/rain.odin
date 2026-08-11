@@ -154,7 +154,7 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	for row, i in rows do s.by_row[i] = row.id
 }
 
-rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
+rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	by_row := s.by_row[:]
 	pending := &s.pending
 	input_coords := e.chars.input_coord[:]
@@ -168,7 +168,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	if !active {
-		return false
+		return nil, false
 	}
 	if len(pending^) == 0 && s.by_row_head < len(by_row) {
 		// Consume the next row span by advancing a cursor; the sorted pool stays
@@ -218,6 +218,5 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 		)
 	}
 	s.tick += 1
-	engine.frame(e, s.revealed[:])
-	return true
+	return s.revealed[:], true
 }

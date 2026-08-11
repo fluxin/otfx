@@ -132,10 +132,10 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	}
 }
 
-bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
+bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	active :=
 		s.next_group < len(s.row_groups.spans) || len(s.pending) > 0 || len(s.active_slots) > 0
-	if !active do return false
+	if !active do return nil, false
 	if len(s.pending) == 0 && s.next_group < len(s.row_groups.spans) {
 		append(&s.pending, ..engine.group_members(s.row_groups, s.next_group))
 		s.next_group += 1
@@ -189,6 +189,5 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

@@ -389,8 +389,8 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	}
 }
 
-rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool {
-	if s.phase == .Complete do return false
+rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if s.phase == .Complete do return nil, false
 	switch s.phase {
 	case .Start:
 		if s.start_remaining == 0 {
@@ -434,6 +434,5 @@ rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool {
 	rings_update_colors(s, e)
 	rings_update_motion(s, e)
 	s.color_tick += 1
-	engine.frame(e, s.render_ids[:])
-	return true
+	return s.render_ids[:], true
 }

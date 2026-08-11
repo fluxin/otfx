@@ -261,7 +261,11 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.spark_free, 18)
 }
 
-thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_spawn_rain :: proc(
+	s: ^Thunderstorm_State,
+	chars: ^engine.Character_Storage,
+	canvas: engine.Canvas,
+) {
 	if s.rain_delay > 0 {
 		s.rain_delay -= 1
 		return
@@ -270,10 +274,10 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	for _ in 0 ..< count {
 		slot := thunderstorm_take_rain(s)
 		origin := engine.coord(
-			rand.int_range(1 - e.canvas.top, e.canvas.right + 1) - 1,
-			e.canvas.top + 1,
+			rand.int_range(1 - canvas.top, canvas.right + 1) - 1,
+			canvas.top + 1,
 		)
-		target := engine.coord(origin.column + e.canvas.top + 1, e.canvas.bottom - 1)
+		target := engine.coord(origin.column + canvas.top + 1, canvas.bottom - 1)
 		s.rain_starts[slot] = s.tick
 		s.rain_origins[slot], s.rain_targets[slot] = origin, target
 		s.rain_steps[slot] = max(
@@ -283,11 +287,11 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			1,
 		)
 		id := s.rain_ids[slot]
-		e.chars.current_coord[id] = origin
-		e.chars.visual[id].symbol =
+		chars.current_coord[id] = origin
+		chars.visual[id].symbol =
 			s.config.raindrop_symbols[rand.int_max(len(s.config.raindrop_symbols))]
-		e.chars.visual[id].fg = engine.Color{0xAA, 0xAA, 0xFF}
-		e.chars.is_visible[id] = true
+		chars.visual[id].fg = engine.Color{0xAA, 0xAA, 0xFF}
+		chars.is_visible[id] = true
 		append(&s.rain_active, slot)
 	}
 	s.rain_delay = rand.int_range(1, 8)
@@ -295,17 +299,17 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 
 thunderstorm_append_strike_segment :: proc(
 	s: ^Thunderstorm_State,
-	e: ^engine.Engine,
+	chars: ^engine.Character_Storage,
 	column, row: int,
 	symbol: string,
 ) {
 	segment := len(s.strike_pending)
 	assert(segment < len(s.strike_ids))
 	id := s.strike_ids[segment]
-	e.chars.current_coord[id] = engine.coord(column, row)
-	e.chars.visual[id].symbol = symbol
-	e.chars.visual[id].fg = s.config.lightning_color
-	e.chars.is_visible[id] = false
+	chars.current_coord[id] = engine.coord(column, row)
+	chars.visual[id].symbol = symbol
+	chars.visual[id].fg = s.config.lightning_color
+	chars.is_visible[id] = false
 	append(&s.strike_pending, id)
 }
 
@@ -314,12 +318,13 @@ thunderstorm_append_strike_segment :: proc(
 // branch-neighbor guard while keeping the strike as flat SoA-backed rows.
 thunderstorm_append_strike_branch :: proc(
 	s: ^Thunderstorm_State,
-	e: ^engine.Engine,
+	chars: ^engine.Character_Storage,
+	canvas: engine.Canvas,
 	column, row: int,
 ) {
 	branch_column, branch_row := column, row
 	first := true
-	for branch_row >= e.canvas.bottom {
+	for branch_row >= canvas.bottom {
 		symbol: string
 		if first {
 			right := rand.int_max(2) != 0
@@ -329,7 +334,7 @@ thunderstorm_append_strike_branch :: proc(
 			symbol_index := rand.int_max(3)
 			symbol = symbol_index == 0 ? "\\" : symbol_index == 1 ? "/" : "|"
 		}
-		thunderstorm_append_strike_segment(s, e, branch_column, branch_row, symbol)
+		thunderstorm_append_strike_segment(s, chars, branch_column, branch_row, symbol)
 		branch_row -= 1
 		if symbol == "\\" {
 			branch_column += 1
@@ -339,18 +344,22 @@ thunderstorm_append_strike_branch :: proc(
 	}
 }
 
-thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_begin_strike :: proc(
+	s: ^Thunderstorm_State,
+	chars: ^engine.Character_Storage,
+	canvas: engine.Canvas,
+) {
 	clear(&s.strike_pending)
 	s.strike_pending_head, s.strike_delay, s.strike_flash_age = 0, 0, -1
-	column := rand.int_range(e.canvas.left, e.canvas.right + 1)
-	row := e.canvas.top
-	for row >= e.canvas.bottom {
+	column := rand.int_range(canvas.left, canvas.right + 1)
+	row := canvas.top
+	for row >= canvas.bottom {
 		symbol_index := rand.int_max(3)
 		symbol := symbol_index == 0 ? "\\" : symbol_index == 1 ? "/" : "|"
-		thunderstorm_append_strike_segment(s, e, column, row, symbol)
+		thunderstorm_append_strike_segment(s, chars, column, row, symbol)
 		// The reference draws this random value for every trunk segment and
 		// inserts a non-recursive arm at a successful branch point.
-		if rand.float64() < 0.05 do thunderstorm_append_strike_branch(s, e, column, row)
+		if rand.float64() < 0.05 do thunderstorm_append_strike_branch(s, chars, canvas, column, row)
 		row -= 1
 		if symbol == "\\" {
 			column += 1
@@ -459,7 +468,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	s.strike_flash_age += 1
 }
 
-thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, chars: ^engine.Character_Storage) {
 	active := &s.rain_active
 	write := 0
 	for read in 0 ..< len(active^) {
@@ -467,11 +476,11 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		age := s.tick - s.rain_starts[slot]
 		id := s.rain_ids[slot]
 		if age >= s.rain_steps[slot] {
-			e.chars.is_visible[id] = false
+			chars.is_visible[id] = false
 			append(&s.rain_free, slot)
 			continue
 		}
-		e.chars.current_coord[id] = engine.coord_on_line(
+		chars.current_coord[id] = engine.coord_on_line(
 			s.rain_origins[slot],
 			s.rain_targets[slot],
 			f64(age + 1) / f64(s.rain_steps[slot]),
@@ -482,7 +491,11 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	resize(active, write)
 }
 
-thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_update_sparks :: proc(
+	s: ^Thunderstorm_State,
+	chars: ^engine.Character_Storage,
+	background: engine.Color,
+) {
 	active := &s.spark_active
 	write := 0
 	for read in 0 ..< len(active^) {
@@ -490,7 +503,7 @@ thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		age := s.tick - s.spark_starts[slot]
 		id := s.spark_ids[slot]
 		if age < s.spark_steps[slot] {
-			e.chars.current_coord[id] = engine.coord_on_quadratic_bezier(
+			chars.current_coord[id] = engine.coord_on_quadratic_bezier(
 				s.spark_origins[slot],
 				s.spark_controls[slot],
 				s.spark_targets[slot],
@@ -499,14 +512,14 @@ thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		} else {
 			cool_step := (age - s.spark_steps[slot]) / s.config.spark_glow_time
 			if cool_step > 7 {
-				e.chars.is_visible[id] = false
+				chars.is_visible[id] = false
 				s.spark_starts[slot] = -1
 				append(&s.spark_free, slot)
 				continue
 			}
-			e.chars.visual[id].fg = engine.gradient_between_step(
+			chars.visual[id].fg = engine.gradient_between_step(
 				s.config.spark_glow_color,
-				e.cfg.terminal_background_color,
+				background,
 				7,
 				cool_step,
 			)
@@ -517,8 +530,8 @@ thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	resize(active, write)
 }
 
-thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
-	visual_fg := e.chars.visual
+thunderstorm_update_text :: proc(s: ^Thunderstorm_State, chars: ^engine.Character_Storage) {
+	visual_fg := chars.visual
 	write := 0
 	for i in s.glow_active {
 		id := s.characters[i]
@@ -541,19 +554,20 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	resize(&s.glow_active, write)
 }
 
-thunderstorm_render :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Char_Id {
 	resize(&s.render_ids, len(s.characters))
 	for slot in s.rain_active do append(&s.render_ids, s.rain_ids[slot])
 	append(&s.render_ids, ..s.strike_pending[:])
 	for slot in s.spark_active do append(&s.render_ids, s.spark_ids[slot])
-	engine.frame(e, s.render_ids[:])
+	return s.render_ids[:]
 }
 
-thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
+thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	chars := &e.chars
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / 12, 7)
-		for id, i in s.characters do e.chars.visual[id].fg = engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step)
+		for id, i in s.characters do chars.visual[id].fg = engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step)
 		s.phase_tick += 1
 		if s.phase_tick > 84 {
 			s.phase = .Storm
@@ -561,16 +575,16 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
 			s.storm_started = time.tick_now()
 		}
 	case .Storm:
-		thunderstorm_spawn_rain(s, e)
-		if !s.strike_live && rand.float64() < 0.008 do thunderstorm_begin_strike(s, e)
+		thunderstorm_spawn_rain(s, chars, e.canvas)
+		if !s.strike_live && rand.float64() < 0.008 do thunderstorm_begin_strike(s, chars, e.canvas)
 		thunderstorm_reveal_strike(s, e)
-		thunderstorm_update_rain(s, e)
-		thunderstorm_update_sparks(s, e)
-		thunderstorm_update_text(s, e)
+		thunderstorm_update_rain(s, chars)
+		thunderstorm_update_sparks(s, chars, e.cfg.terminal_background_color)
+		thunderstorm_update_text(s, chars)
 		if time.duration_seconds(time.tick_since(s.storm_started)) >= f64(s.config.storm_time) &&
 		   !s.strike_live {
-			for id in s.rain_ids do e.chars.is_visible[id] = false
-			for id in s.spark_ids do e.chars.is_visible[id] = false
+			for id in s.rain_ids do chars.is_visible[id] = false
+			for id in s.spark_ids do chars.is_visible[id] = false
 			clear(&s.rain_active)
 			clear(&s.spark_active)
 			s.phase = .Poststorm
@@ -578,11 +592,10 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
 		}
 	case .Poststorm:
 		step := min(s.phase_tick / 12, 7)
-		for id, i in s.characters do e.chars.visual[id].fg = engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step)
+		for id, i in s.characters do chars.visual[id].fg = engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step)
 		s.phase_tick += 1
-		if s.phase_tick > 84 do return false
+		if s.phase_tick > 84 do return nil, false
 	}
 	s.tick += 1
-	thunderstorm_render(s, e)
-	return true
+	return thunderstorm_render_candidates(s), true
 }

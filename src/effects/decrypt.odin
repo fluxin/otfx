@@ -160,7 +160,7 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	}
 }
 
-decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
+decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.phase == .Typing {
 		if s.typing_head == len(s.characters) && s.typing_tick >= s.typing_finish_tick {
 			s.phase = .Decrypting
@@ -185,12 +185,11 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 				e.chars.visual[id].fg = s.typing_colors[i * Decrypt_Typing_Frames + frame]
 			}
 			s.typing_tick += 1
-			engine.frame(e, s.characters[:])
-			return true
+			return s.characters[:], true
 		}
 	}
 	if s.phase == .Decrypting {
-		if s.decrypt_tick == s.decrypt_finish_tick do return false
+		if s.decrypt_tick == s.decrypt_finish_tick do return nil, false
 		for id, i in s.characters {
 			if s.decrypt_tick < Decrypt_Fast_Ticks {
 				e.chars.visual[id].symbol =
@@ -217,8 +216,7 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 				discovered_tick < Decrypt_Discovered_Ticks ? engine.gradient_between_step(engine.Color{0xff, 0xff, 0xff}, s.final_colors[i], 10, min(discovered_tick / 5, 10)) : s.final_colors[i]
 		}
 		s.decrypt_tick += 1
-		engine.frame(e, s.characters[:])
-		return true
+		return s.characters[:], true
 	}
-	return false
+	return nil, false
 }

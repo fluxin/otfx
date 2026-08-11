@@ -137,7 +137,7 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	}
 }
 
-errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
+errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.swapped_head < len(s.swapped) && s.swap_delay == 0 {
 		pair := s.swapped[s.swapped_head]; s.swapped_head += 1
 		s.start_ticks[pair.first] = s.tick
@@ -145,7 +145,7 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 		append(&s.active, pair.first, pair.second)
 		s.swap_delay = s.config.swap_delay
 	} else if s.swap_delay != 0 do s.swap_delay -= 1
-	if len(s.active) == 0 do return false
+	if len(s.active) == 0 do return nil, false
 	first_wipe := [8]string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
 	last_wipe := [7]string{"▇", "▆", "▅", "▄", "▃", "▂", "▁"}
 	white := engine.Color{0xff, 0xff, 0xff}
@@ -195,6 +195,5 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 	}
 	resize(&s.active, write)
 	s.tick += 1
-	engine.frame(e)
-	return true
+	return nil, true
 }

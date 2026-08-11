@@ -220,9 +220,9 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 	s.heads = make([dynamic]int, len(s.groups.spans))
 }
 
-slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
+slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.next_group >= len(s.groups.spans) && len(s.active_slots) == 0 {
-		return false
+		return nil, false
 	}
 	if s.current_gap == s.config.gap && s.next_group < len(s.groups.spans) {
 		s.next_group += 1
@@ -280,6 +280,5 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	resize(&s.active_slots, write)
-	engine.frame(e, s.characters[:])
-	return true
+	return s.characters[:], true
 }

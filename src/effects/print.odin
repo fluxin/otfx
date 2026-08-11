@@ -154,9 +154,9 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 	s.typing = len(s.rows) > 0
 }
 
-print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
+print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	white := engine.Color{0xff, 0xff, 0xff}
-	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return false
+	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return nil, false
 	if s.head_return_active {
 		// carriage return is still active
 	} else if s.typing {
@@ -249,6 +249,5 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	s.tick += 1
-	engine.frame(e)
-	return true
+	return nil, true
 }

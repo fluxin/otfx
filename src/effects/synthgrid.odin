@@ -338,7 +338,7 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 	s.active_limit = max(int(f64(group_count) * s.config.max_active_blocks), 1)
 }
 
-synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
+synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	visible := e.chars.is_visible
 	visual_symbols := e.chars.visual
 	visual_fg := e.chars.visual
@@ -358,8 +358,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 		if all_extended {
 			s.phase = .Text
 		}
-		engine.frame(e)
-		return true
+		return nil, true
 	}
 
 	if s.phase == .Text {
@@ -401,8 +400,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 		if s.next_group == len(s.groups.spans) && s.active_count == 0 {
 			s.phase = .Grid_Collapse
 		}
-		engine.frame(e)
-		return true
+		return nil, true
 	}
 
 	all_collapsed := true
@@ -419,7 +417,6 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 		}
 		s.grid_extended[line] = stop
 	}
-	if all_collapsed do return false
-	engine.frame(e)
-	return true
+	if all_collapsed do return nil, false
+	return nil, true
 }

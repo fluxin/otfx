@@ -262,8 +262,8 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	for id in s.render_ids do e.chars.is_visible[id] = true
 }
 
-slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
-	if len(s.motion_ids) == 0 do return false
+slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if len(s.motion_ids) == 0 do return nil, false
 	ids := s.motion_ids[:]
 	origins := s.motion_origins[:]
 	steps := s.motion_steps[:]
@@ -290,6 +290,5 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
 	resize(&s.motion_origins, write)
 	resize(&s.motion_steps, write)
 	resize(&s.motion_max_steps, write)
-	engine.frame(e, s.render_ids[:])
-	return true
+	return s.render_ids[:], true
 }

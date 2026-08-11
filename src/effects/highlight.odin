@@ -124,9 +124,9 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 	}
 }
 
-highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
+highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if len(s.active_slots) == 0 && engine.group_reveal_complete(s.reveal) {
-		return false
+		return nil, false
 	}
 	change := engine.group_reveal_step(&s.reveal)
 	for gi in change.added.start ..< change.added.start + change.added.len {
@@ -146,6 +146,5 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	engine.frame(e)
-	return true
+	return nil, true
 }
