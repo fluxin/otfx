@@ -105,6 +105,23 @@ Different frame counts in the same time window are expected with the two
 renderer designs. A speed or parity claim for these effects needs a shared
 virtual clock and a fixed logical-frame capture harness.
 
+### Paced 60 fps duty cycle
+
+The default frame rate is 60 fps. The following three-run sample uses the
+same dense 200×50 input and seed, with `--rain-time 1` or `--storm-time 1`.
+Output is redirected, so these are application-process costs rather than
+terminal-emulator costs. CPU is user plus system CPU seconds per run.
+
+| Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Interpretation |
+|---|---:|---:|---:|---|
+| Matrix | 22.29 s / 0.21 s | 21.68 s / 0.14 s | 44.5 / 10.9 MiB | Odin uses about 32% less application CPU at a comparable duration. |
+| Thunderstorm | 5.79 s / 0.12 s | 3.83 s / 0.01 s | 135.5 / 10.8 MiB | Lower CPU and RSS, but Odin is 34% shorter; do not treat this as a parity-safe speed win. |
+
+The frame-rate setting is a fixed application target, selected with
+`--frame-rate N` (60 by default; `0` disables pacing). Terminal applications
+do not have a portable, reliable display-refresh query or a vsynced terminal
+output path.
+
 Run the current production benchmark with:
 
 ```sh
@@ -240,18 +257,23 @@ logical frames.
 
 ## Remaining parity work
 
-Effect-command coverage and resize rebuilding are complete. The remaining work
-is deliberately tracked separately from throughput claims:
+Effect-command coverage and resize rebuilding are complete. Input SGR state is
+now preprocessed into immutable source-style columns; `--xterm-colors` and
+`--existing-color-handling=always|dynamic` are implemented in the renderer and
+the effects that need dynamic final-color lanes. The remaining work is
+deliberately tracked separately from throughput claims:
 
-- Parse and preserve input SGR state, including `--xterm-colors` and
-  `--existing-color-handling=always|dynamic`; that requires source color columns
-  and effect-level dynamic-color behavior, not just accepting the flags.
+- Add a shared virtual-clock, logical-frame capture harness, then use it to
+  reconcile random draw order, phase progression, and terminal output where
+  byte parity is wanted. The renderer intentionally has a different stream.
+- Reconcile paced end-to-end durations effect by effect. Matrix is close in the
+  60 fps sample above; Thunderstorm currently ends too early and must not be
+  called a parity-safe performance win until corrected.
+- Add regression captures for input SGR combinations, xterm-color emission,
+  and `always`/`dynamic` behavior across effects; implementation coverage is
+  present, but that reference matrix is not yet automated.
 - Add the remaining reference global CLI surface: `--include-effects`,
   `--exclude-effects`, and `--print-completion`.
-- If byte parity becomes a goal, add a shared virtual-clock/frame-capture
-  harness and then reconcile random draw order and each effect's intermediate
-  choreography. The current renderer intentionally has a different terminal
-  stream.
 
 ## Credit and license
 
