@@ -1352,6 +1352,10 @@ reset_canvas_area :: proc(visible_top: int) {
 }
 
 restore_cursor :: proc(no_restore_cursor, no_eol: bool) {
+	// Delta frames can leave the terminal at any dirty cell. The saved DEC
+	// position is the canvas bottom established by prep_canvas, so return there
+	// before completing just as a full-frame renderer naturally would.
+	os.write_string(os.stdout, ANSI_RESTORE_CURSOR)
 	if !no_restore_cursor do os.write_string(os.stdout, ANSI_SHOW_CURSOR)
 	if !no_eol do os.write_string(os.stdout, "\n")
 	os.flush(os.stdout)

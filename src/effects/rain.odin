@@ -84,7 +84,8 @@ Rain_State :: struct {
 	index_by_id:  [dynamic]int,
 	pending:      [dynamic]engine.Char_Id,
 	by_row:       [dynamic]engine.Char_Id, // flat pool sorted by input row asc
-	revealed:     [dynamic]engine.Char_Id,
+	render_ids:   [dynamic]engine.Char_Id, // every drop already made visible
+	active_slots: [dynamic]int, // dense slots that still move or fade
 	final_colors: [dynamic]engine.Color,
 	drop_colors:  [dynamic]engine.Color,
 	drop_symbols: [dynamic]string,
@@ -126,6 +127,9 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	s.drop_symbols = make([dynamic]string, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
+	reserve(&s.pending, n)
+	reserve(&s.render_ids, n)
+	reserve(&s.active_slots, n)
 	rows := make([]Rain_Row, n)
 	defer delete(rows)
 
@@ -159,15 +163,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	pending := &s.pending
 	input_coords := e.chars.input_coord[:]
 	visible := e.chars.is_visible[:]
-	active := s.by_row_head < len(by_row) || len(pending^) > 0
-	for _, i in s.characters {
-		start := s.start_ticks[i]
-		if start >= 0 && s.tick - start < s.max_steps[i] + 23 {
-			active = true
-			break
-		}
-	}
-	if !active {
+	if s.by_row_head >= len(by_row) && len(pending^) == 0 && len(s.active_slots) == 0 {
 		return nil, false
 	}
 	if len(pending^) == 0 && s.by_row_head < len(by_row) {
@@ -187,36 +183,45 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			idx := rand.int_max(len(pending^))
 			next := pending[idx]
 			unordered_remove(pending, idx)
-			s.start_ticks[s.index_by_id[next]] = s.tick
+			slot := s.index_by_id[next]
+			s.start_ticks[slot] = s.tick
 			visible[next] = true
-			append(&s.revealed, next)
+			append(&s.render_ids, next)
+			append(&s.active_slots, slot)
 		}
 	}
-	for id, i in s.characters {
-		start := s.start_ticks[i]
-		if start < 0 do continue
+	write := 0
+	for slot in s.active_slots {
+		id := s.characters[slot]
+		start := s.start_ticks[slot]
 		age := s.tick - start
-		if age < s.max_steps[i] - 1 {
-			progress := f64(age + 1) / f64(s.max_steps[i])
+		if age < s.max_steps[slot] - 1 {
+			progress := f64(age + 1) / f64(s.max_steps[slot])
 			e.chars.current_coord[id] = engine.coord_on_line(
 				engine.coord(e.chars.input_coord[id].column, e.canvas.top),
 				e.chars.input_coord[id],
 				ease.ease(s.config.movement_easing, progress),
 			)
-			e.chars.visual[id].symbol = s.drop_symbols[i]
-			e.chars.visual[id].fg = s.drop_colors[i]
-			continue
+			e.chars.visual[id].symbol = s.drop_symbols[slot]
+			e.chars.visual[id].fg = s.drop_colors[slot]
+		} else {
+			e.chars.current_coord[id] = e.chars.input_coord[id]
+			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			fade_tick := age - (s.max_steps[slot] - 1)
+			e.chars.visual[id].fg = engine.gradient_between_step(
+				s.drop_colors[slot],
+				s.final_colors[slot],
+				7,
+				min(fade_tick / 3, 7),
+			)
 		}
-		e.chars.current_coord[id] = e.chars.input_coord[id]
-		e.chars.visual[id].symbol = e.chars.input_symbol[id]
-		fade_tick := age - (s.max_steps[i] - 1)
-		e.chars.visual[id].fg = engine.gradient_between_step(
-			s.drop_colors[i],
-			s.final_colors[i],
-			7,
-			min(fade_tick / 3, 7),
-		)
+		// The final full-color fade is at age max_steps + 22.
+		if age + 1 < s.max_steps[slot] + 23 {
+			s.active_slots[write] = slot
+			write += 1
+		}
 	}
+	resize(&s.active_slots, write)
 	s.tick += 1
-	return s.revealed[:], true
+	return s.render_ids[:], true
 }
