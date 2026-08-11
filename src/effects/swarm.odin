@@ -121,7 +121,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	n := len(s.characters)
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)

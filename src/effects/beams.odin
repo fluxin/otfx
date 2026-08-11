@@ -190,7 +190,7 @@ beams_make_group :: proc(
 beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	s.final_wipe_groups = engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		.Diagonal_TL2BR,
 	)
 
@@ -216,7 +216,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 
 	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
 	max_slot := 0
@@ -243,7 +243,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	// scenes on the row pass only (rows and columns share characters)
 	row_groups := engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		.Row_B2T,
 	)
 	for gi in 0 ..< len(row_groups.spans) {
@@ -253,7 +253,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	engine.groups_delete(&row_groups)
 	col_groups := engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		.Column_L2R,
 	)
 	for gi in 0 ..< len(col_groups.spans) {

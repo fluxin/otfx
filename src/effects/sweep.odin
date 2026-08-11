@@ -99,7 +99,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 
 	chars := engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
@@ -144,14 +144,14 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 
 	s.reveal.groups = engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		s.config.first_sweep_direction,
 	)
 	s.reveal.ease = .Circular_In_Out
 	s.reveal.duration = 100
 	s.second_groups = engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_all_fills(),
+		engine.CHAR_FILTER_ALL_FILLS,
 		s.config.second_sweep_direction,
 	)
 	s.first_phase = true

@@ -75,7 +75,7 @@ Wipe_State :: struct {
 wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 	groups := engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		s.config.wipe_direction,
 	)
 	s.reveal = engine.Group_Reveal {
@@ -100,7 +100,7 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 
 	chars := engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])

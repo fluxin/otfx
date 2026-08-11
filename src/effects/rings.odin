@@ -160,7 +160,7 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	chars := engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	chars := engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	defer delete(chars[:])
 	n := len(chars)
 	append(&s.ids, ..chars[:])

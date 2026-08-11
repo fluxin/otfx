@@ -125,7 +125,11 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	characters := engine.get_characters(query, engine.filter_all_fills(), .Top_Bottom_Left_Right)
+	characters := engine.get_characters(
+		query,
+		engine.CHAR_FILTER_ALL_FILLS,
+		.Top_Bottom_Left_Right,
+	)
 	defer delete(characters[:])
 	final_colors := make([]engine.Color, len(e.chars), context.temp_allocator)
 	black := engine.Color{0x00, 0x00, 0x00}
@@ -141,7 +145,7 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		}
 	}
 
-	input_rows := engine.get_characters_grouped(query, engine.filter_input(), .Row_T2B)
+	input_rows := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_T2B)
 	defer engine.groups_delete(&input_rows)
 	row_order := make([]int, len(input_rows.spans), context.temp_allocator)
 	for &row_index, i in row_order do row_index = i
@@ -167,7 +171,7 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 	}
 
 	query = {e.character_sets, e.chars.input_coord[:], e.canvas}
-	final_rows := engine.get_characters_grouped(query, engine.filter_all_fills(), .Row_T2B)
+	final_rows := engine.get_characters_grouped(query, engine.CHAR_FILTER_ALL_FILLS, .Row_T2B)
 	defer engine.groups_delete(&final_rows)
 	for row_index in 0 ..< len(final_rows.spans) {
 		row := engine.group_members(final_rows, row_index)

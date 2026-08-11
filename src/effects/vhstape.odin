@@ -130,7 +130,7 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	// Char_Id is the Character_Storage index, so this is a direct color column.
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
 	input_coords := e.chars.input_coord
@@ -141,7 +141,7 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 		visual_fg[id].fg = s.final_colors[id]
 		visible[id] = true
 	}
-	s.rows = engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
+	s.rows = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
 	row_count := len(s.rows.spans)
 	s.row_starts = make([dynamic]int, row_count)
 	s.row_durations = make([dynamic]int, row_count)

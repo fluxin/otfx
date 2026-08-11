@@ -143,7 +143,7 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 		grouping = .Column_R2L
 	}
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	groups := engine.get_characters_grouped(query, engine.filter_input(), grouping)
+	groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, grouping)
 	n := len(e.character_sets.input)
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)

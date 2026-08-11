@@ -143,9 +143,9 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	if group, has_group := s.config.etch_pattern.?; has_group {
-		grouped := engine.get_characters_grouped(query, engine.filter_input(), group)
+		grouped := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, group)
 		defer engine.groups_delete(&grouped)
 		append(&s.pending, ..grouped.members[:])
 	} else {

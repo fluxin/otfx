@@ -109,7 +109,11 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	characters := engine.get_characters(query, engine.filter_all_fills(), .Top_Bottom_Left_Right)
+	characters := engine.get_characters(
+		query,
+		engine.CHAR_FILTER_ALL_FILLS,
+		.Top_Bottom_Left_Right,
+	)
 	defer delete(characters[:])
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
 	s.char_start_ticks = make([dynamic]int, len(e.chars))
@@ -127,7 +131,7 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		}
 	}
 
-	groups := engine.get_characters_grouped(query, engine.filter_all_fills(), .Row_T2B)
+	groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_ALL_FILLS, .Row_T2B)
 	defer engine.groups_delete(&groups)
 	for group_index in 0 ..< len(groups.spans) {
 		group := engine.group_members(groups, group_index)

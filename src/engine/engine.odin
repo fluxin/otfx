@@ -378,28 +378,17 @@ character_set_visual :: proc(chars: ^Character_Storage, id: Char_Id, visual: Vis
 
 Char_Id :: distinct int
 
-Character_Filter :: struct {
-	input:      bool,
-	inner_fill: bool,
-	outer_fill: bool,
-	added:      bool,
+Character_Kind :: enum {
+	Input,
+	Inner_Fill,
+	Outer_Fill,
+	Added,
 }
 
-filter_input :: proc() -> Character_Filter {
-	return {input = true}
-}
+Character_Filter :: bit_set[Character_Kind;u8]
 
-filter_fills :: proc() -> Character_Filter {
-	return {inner_fill = true, outer_fill = true}
-}
-
-filter_all_fills :: proc() -> Character_Filter {
-	return {input = true, inner_fill = true, outer_fill = true}
-}
-
-filter_added :: proc() -> Character_Filter {
-	return {added = true}
-}
+CHAR_FILTER_INPUT :: Character_Filter{.Input}
+CHAR_FILTER_ALL_FILLS :: Character_Filter{.Input, .Inner_Fill, .Outer_Fill}
 
 Character_Sort :: enum {
 	Top_Bottom_Left_Right,
@@ -1035,10 +1024,10 @@ Character_Query :: struct {
 
 collect_characters :: proc(q: Character_Query, filter: Character_Filter) -> [dynamic]Char_Id {
 	all: [dynamic]Char_Id
-	if filter.input do append(&all, ..q.sets.input[:])
-	if filter.inner_fill do append(&all, ..q.sets.inner_fill[:])
-	if filter.outer_fill do append(&all, ..q.sets.outer_fill[:])
-	if filter.added do append(&all, ..q.sets.added[:])
+	if .Input in filter do append(&all, ..q.sets.input[:])
+	if .Inner_Fill in filter do append(&all, ..q.sets.inner_fill[:])
+	if .Outer_Fill in filter do append(&all, ..q.sets.outer_fill[:])
+	if .Added in filter do append(&all, ..q.sets.added[:])
 	return all
 }
 

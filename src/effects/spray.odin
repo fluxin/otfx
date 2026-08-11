@@ -156,7 +156,7 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 	)
 	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)

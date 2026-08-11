@@ -114,8 +114,8 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
-	s.final_wipe = engine.get_characters_grouped(query, engine.filter_input(), .Diagonal_TR2BL)
+	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	s.final_wipe = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Diagonal_TR2BL)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.final_colors_by_id = make([dynamic]engine.Color, len(e.chars))

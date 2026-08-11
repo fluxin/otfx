@@ -270,7 +270,11 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 	// fill character. Keep the same dense direct lookup: block static fills are
 	// real characters, not a texture synthesized only where text exists.
 	base_query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.cells = engine.get_characters(base_query, engine.filter_all_fills(), .Top_Bottom_Left_Right)
+	s.cells = engine.get_characters(
+		base_query,
+		engine.CHAR_FILTER_ALL_FILLS,
+		.Top_Bottom_Left_Right,
+	)
 	cell_ids := make([dynamic]engine.Char_Id, e.canvas.width * e.canvas.height)
 	defer delete(cell_ids[:])
 	for id in s.cells {

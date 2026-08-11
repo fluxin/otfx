@@ -74,7 +74,7 @@ Highlight_State :: struct {
 highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 	groups := engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		s.config.highlight_direction,
 	)
 	s.reveal = engine.Group_Reveal {
@@ -99,7 +99,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 
 	s.characters = engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	s.index_by_id = make([dynamic]int, len(e.chars))

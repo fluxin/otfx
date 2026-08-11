@@ -117,7 +117,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	characters := engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	characters := engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	defer delete(characters[:])
 	for id in characters {
 		color := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
@@ -130,7 +130,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	if s.config.slice_direction == .Horizontal {
 		all_fills := engine.get_characters(
 			query,
-			engine.filter_all_fills(),
+			engine.CHAR_FILTER_ALL_FILLS,
 			.Top_Bottom_Left_Right,
 		)
 		defer delete(all_fills[:])
@@ -159,7 +159,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	speed := s.config.movement_speed
 	switch s.config.slice_direction {
 	case .Vertical:
-		groups := engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
+		groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
 		defer engine.groups_delete(&groups)
 		count := len(groups.spans)
 		for group_index in 0 ..< count {
@@ -192,7 +192,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		}
 	case .Horizontal:
 		speed *= 2
-		groups := engine.get_characters_grouped(query, engine.filter_all_fills(), .Column_R2L)
+		groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_ALL_FILLS, .Column_R2L)
 		defer engine.groups_delete(&groups)
 		count := len(groups.spans)
 		for group_index in 0 ..< count {
@@ -236,7 +236,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 			}
 		}
 	case .Diagonal:
-		groups := engine.get_characters_grouped(query, engine.filter_input(), .Diagonal_BL2TR)
+		groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Diagonal_BL2TR)
 		defer engine.groups_delete(&groups)
 		count := len(groups.spans)
 		middle := count / 2

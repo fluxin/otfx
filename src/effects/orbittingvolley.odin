@@ -127,7 +127,7 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.launch_starts = make([dynamic]int, n)
@@ -145,7 +145,11 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 
 	// Center-to-outside source ordering, then branch-wrapped round-robin
 	// assignment into four flat magazine spans.
-	center_groups := engine.get_characters_grouped(query, engine.filter_input(), .Center_Outside)
+	center_groups := engine.get_characters_grouped(
+		query,
+		engine.CHAR_FILTER_INPUT,
+		.Center_Outside,
+	)
 	defer engine.groups_delete(&center_groups)
 	counts: [4]int
 	launcher := 0

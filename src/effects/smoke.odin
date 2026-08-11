@@ -109,11 +109,8 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	// Smoke always needs the text rectangle, including its spaces. The
 	// whole-canvas option expands that population with outer fill cells.
-	filter := engine.Character_Filter {
-		input      = true,
-		inner_fill = true,
-		outer_fill = s.config.use_whole_canvas,
-	}
+	filter := engine.Character_Filter{.Input, .Inner_Fill}
+	if s.config.use_whole_canvas do filter += {.Outer_Fill}
 	s.characters = engine.get_characters(query, filter, .Top_Bottom_Left_Right)
 	n := len(s.characters)
 	s.arrivals = make([dynamic]int, n)

@@ -146,7 +146,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.filter_input(), .Top_Bottom_Left_Right)
+	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
 	s.circle_dx = make([dynamic]int, len(e.chars))
 	s.circle_dy = make([dynamic]int, len(e.chars))
@@ -164,7 +164,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 		visible[id] = false
 	}
 
-	rows := engine.get_characters_grouped(query, engine.filter_input(), .Row_B2T)
+	rows := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
 	defer engine.groups_delete(&rows)
 	read := 0
 	for read < len(rows.members) {

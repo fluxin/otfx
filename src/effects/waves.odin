@@ -152,7 +152,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 
 	chars := engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
@@ -169,7 +169,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 
 	s.pending_cols = engine.get_characters_grouped(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.filter_input(),
+		engine.CHAR_FILTER_INPUT,
 		s.config.wave_direction,
 	)
 }
