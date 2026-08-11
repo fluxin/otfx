@@ -70,19 +70,24 @@ gray_shades: [5]engine.Color = {
 }
 
 Sweep_State :: struct {
-	config:        Sweep_Config,
-	final_colors:  [dynamic]engine.Color_Pair,
-	first_scenes:  [dynamic]engine.Scene,
-	second_scenes: [dynamic]engine.Scene,
-	active:        [dynamic]engine.Char_Id,
-	active_phase:  [dynamic]i8, // -1 inactive, 0 first scene, 1 second scene
-	reveal:        engine.Group_Reveal,
-	second_groups: engine.Char_Groups,
-	first_phase:   bool,
-	complete:      bool,
+	config:                       Sweep_Config,
+	frames:                       engine.Frame_Timeline,
+	first_frame_spans:            [dynamic]engine.Span,
+	second_frame_spans:           [dynamic]engine.Span,
+	start_ticks:                  [dynamic]int,
+	active:                       [dynamic]engine.Char_Id,
+	active_phase:                 [dynamic]i8, // -1 inactive, 0 first lane, 1 second lane
+	reveal:                       engine.Group_Reveal,
+	second_groups:                engine.Char_Groups,
+	dynamic_second_sweep_palette: [dynamic]engine.Color,
+	first_phase:                  bool,
+	complete:                     bool,
+	color_handling:               engine.Existing_Color_Handling,
+	tick:                         int,
 }
 
 sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -103,43 +108,65 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.first_scenes = make([dynamic]engine.Scene, max_slot + 1)
-	s.second_scenes = make([dynamic]engine.Scene, max_slot + 1)
-	s.active_phase = make([dynamic]i8, max_slot + 1)
-	for i in 0 ..= max_slot do s.active_phase[i] = -1
+	s.first_frame_spans = make([dynamic]engine.Span, len(e.chars))
+	s.second_frame_spans = make([dynamic]engine.Span, len(e.chars))
+	s.start_ticks = make([dynamic]int, len(e.chars))
+	s.active_phase = make([dynamic]i8, len(e.chars))
+	for i in 0 ..< len(s.active_phase) {
+		s.active_phase[i] = -1
+		s.start_ticks[i] = -1
+	}
+	reserve(&s.frames, len(chars) * (len(s.config.sweep_symbols) + 1) * 2)
+	switch s.color_handling {
+	case .Dynamic:
+		for id in e.character_sets.input {
+			style := e.chars.input_style[id]
+			if fg, ok := style.fg.?; ok do append(&s.dynamic_second_sweep_palette, fg)
+			if bg, ok := style.bg.?; ok do append(&s.dynamic_second_sweep_palette, bg)
+		}
+		if len(s.dynamic_second_sweep_palette) == 0 {
+			append(&s.dynamic_second_sweep_palette, ..spectrum[:])
+		}
+	case .Ignore, .Always:
+	}
 
 	for id in chars {
-		c := e.chars.input_coord[id]
-		is_fill := e.chars.is_fill[id]
-		if is_fill {
-			s.final_colors[id] = engine.Color_Pair {
-				fg = engine.Color{0x00, 0x00, 0x00},
-				bg = nil,
-			}
-		} else {
-			s.final_colors[id] = engine.Color_Pair {
-				fg = engine.gradient_sample(sampler, spectrum[:], c),
-				bg = nil,
+		final: engine.Color_Pair
+		switch s.color_handling {
+		case .Dynamic:
+			if !e.chars.is_fill[id] do final = {e.chars.input_style[id].fg, e.chars.input_style[id].bg}
+		case .Ignore, .Always:
+			if e.chars.is_fill[id] {
+				final = {
+					fg = engine.Color{0x00, 0x00, 0x00},
+					bg = nil,
+				}
+			} else {
+				final = {
+					fg = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id]),
+					bg = nil,
+				}
 			}
 		}
 		sym := e.chars.input_symbol[id]
 
-		// initial sweep: gray shimmer then a neutral final frame
+		first_start := len(s.frames)
 		for symbol in s.config.sweep_symbols {
 			gray := gray_shades[rand.int_max(5)]
-			engine.scene_add_frame(&s.first_scenes[id], symbol, 5, gray, nil, false)
+			engine.timeline_append_frame(&s.frames, {symbol, gray, nil, false}, 5)
 		}
-		engine.scene_add_frame(&s.first_scenes[id], sym, 1, gray_shades[1], nil, false)
+		engine.timeline_append_frame(&s.frames, {sym, gray_shades[1], nil, false}, 1)
+		s.first_frame_spans[id] = {first_start, len(s.config.sweep_symbols) + 1}
 
-		// second sweep: final gradient colors then the final frame
+		second_start := len(s.frames)
 		for symbol in s.config.sweep_symbols {
-			col := spectrum[rand.int_max(len(spectrum))]
-			engine.scene_add_frame(&s.second_scenes[id], symbol, 5, col, nil, false)
+			colors :=
+				s.color_handling == .Dynamic ? s.dynamic_second_sweep_palette[:] : spectrum[:]
+			col := colors[rand.int_max(len(colors))]
+			engine.timeline_append_frame(&s.frames, {symbol, col, nil, false}, 5)
 		}
-		engine.scene_add_frame(&s.second_scenes[id], sym, 1, s.final_colors[id].fg, nil, false)
+		engine.timeline_append_frame(&s.frames, {sym, final.fg, final.bg, false}, 1)
+		s.second_frame_spans[id] = {second_start, len(s.config.sweep_symbols) + 1}
 	}
 
 	s.reveal.groups = engine.get_characters_grouped(
@@ -166,14 +193,12 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		for id in engine.group_members(s.reveal.groups, gi) {
 			if s.first_phase do e.chars.is_visible[id] = true
 			phase: i8 = 0
-			scene := &s.first_scenes[id]
 			if !s.first_phase {
 				phase = 1
-				scene = &s.second_scenes[id]
 			}
-			e.chars.visual[id] = engine.scene_first_visual(scene^)
 			if s.active_phase[id] < 0 do append(&s.active, id)
 			s.active_phase[id] = phase
+			s.start_ticks[id] = s.tick
 		}
 	}
 	if engine.group_reveal_complete(s.reveal) {
@@ -190,10 +215,11 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	for id in s.active {
 		phase := s.active_phase[id]
 		if phase < 0 do continue
-		scene := phase == 0 ? &s.first_scenes[id] : &s.second_scenes[id]
-		visual, scene_complete := engine.step_animation(scene)
-		e.chars.visual[id] = visual
-		if scene_complete {
+		span := phase == 0 ? s.first_frame_spans[id] : s.second_frame_spans[id]
+		age := s.tick - s.start_ticks[id]
+		frame := age / 5
+		e.chars.visual[id] = s.frames[span.start + frame].visual
+		if age + 1 == (span.len - 1) * 5 + 1 {
 			s.active_phase[id] = -1
 		} else {
 			s.active[write] = id
@@ -201,5 +227,6 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		}
 	}
 	resize(&s.active, write)
+	s.tick += 1
 	return nil, true
 }

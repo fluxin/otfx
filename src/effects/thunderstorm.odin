@@ -98,6 +98,8 @@ Thunderstorm_State :: struct {
 	characters:          [dynamic]engine.Char_Id,
 	final_colors:        [dynamic]engine.Color,
 	storm_colors:        [dynamic]engine.Color,
+	visible_bg:          [dynamic]Maybe(engine.Color),
+	storm_bg:            [dynamic]Maybe(engine.Color),
 	input_slot_by_id:    [dynamic]int,
 	input_at_cell:       [dynamic]i32,
 	glow_starts:         [dynamic]int,
@@ -140,6 +142,7 @@ Thunderstorm_State :: struct {
 	phase_tick:          int,
 	storm_started:       time.Tick,
 	tick:                int,
+	color_handling:      engine.Existing_Color_Handling,
 }
 
 thunderstorm_cell_index :: #force_inline proc(c: engine.Canvas, p: engine.Coord) -> int {
@@ -176,6 +179,7 @@ thunderstorm_take_spark :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> in
 }
 
 thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -194,6 +198,8 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.storm_colors = make([dynamic]engine.Color, n)
+	s.visible_bg = make([dynamic]Maybe(engine.Color), n)
+	s.storm_bg = make([dynamic]Maybe(engine.Color), n)
 	s.glow_starts = make([dynamic]int, n)
 	s.input_slot_by_id = make([dynamic]int, len(e.chars))
 	for i in 0 ..< len(s.input_slot_by_id) do s.input_slot_by_id[i] = -1
@@ -206,12 +212,20 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	for id, i in s.characters {
 		p := input_coords[id]
 		final := engine.gradient_sample(sampler, spectrum[:], p)
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			final = engine.Color{0x80, 0x80, 0x80}
+			if fg, ok := style.fg.?; ok do final = fg
+			s.visible_bg[i] = style.bg
+			if bg, ok := style.bg.?; ok do s.storm_bg[i] = engine.adjust_color_brightness(bg, 0.5)
+		}
 		s.final_colors[i] = final
 		s.storm_colors[i] = engine.adjust_color_brightness(final, 0.5)
 		s.glow_starts[i] = -1
 		s.input_slot_by_id[id] = i
 		s.input_at_cell[thunderstorm_cell_index(e.canvas, p)] = i32(id)
 		visual_fg[id].fg = final
+		visual_fg[id].bg = s.visible_bg[i]
 		visible[id] = true
 	}
 	// Input glyphs are the permanent render prefix. Weather rows append only
@@ -540,6 +554,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, chars: ^engine.Characte
 		if step > 7 {
 			s.glow_starts[i] = -1
 			visual_fg[id].fg = s.storm_colors[i]
+			visual_fg[id].bg = s.color_handling == .Dynamic ? s.storm_bg[i] : nil
 			continue
 		}
 		visual_fg[id].fg = engine.gradient_between_step(
@@ -548,6 +563,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, chars: ^engine.Characte
 			7,
 			step,
 		)
+		visual_fg[id].bg = s.color_handling == .Dynamic ? s.storm_bg[i] : nil
 		s.glow_active[write] = i
 		write += 1
 	}
@@ -567,7 +583,26 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / 12, 7)
-		for id, i in s.characters do chars.visual[id].fg = engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step)
+		for id, i in s.characters {
+			chars.visual[id].fg = engine.gradient_between_step(
+				s.final_colors[i],
+				s.storm_colors[i],
+				7,
+				step,
+			)
+			if s.color_handling == .Dynamic {
+				if bg, ok := s.visible_bg[i].?; ok {
+					chars.visual[id].bg = engine.gradient_between_step(
+						bg,
+						s.storm_bg[i].?,
+						7,
+						step,
+					)
+				} else {
+					chars.visual[id].bg = nil
+				}
+			}
+		}
 		s.phase_tick += 1
 		if s.phase_tick > 84 {
 			s.phase = .Storm
@@ -592,9 +627,33 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		}
 	case .Poststorm:
 		step := min(s.phase_tick / 12, 7)
-		for id, i in s.characters do chars.visual[id].fg = engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step)
+		for id, i in s.characters {
+			chars.visual[id].fg = engine.gradient_between_step(
+				s.storm_colors[i],
+				s.final_colors[i],
+				7,
+				step,
+			)
+			if s.color_handling == .Dynamic {
+				if bg, ok := s.storm_bg[i].?; ok {
+					chars.visual[id].bg = engine.gradient_between_step(
+						bg,
+						s.visible_bg[i].?,
+						7,
+						step,
+					)
+				} else {
+					chars.visual[id].bg = nil
+				}
+			}
+		}
 		s.phase_tick += 1
-		if s.phase_tick > 84 do return nil, false
+		if s.phase_tick > 84 {
+			if s.color_handling == .Dynamic {
+				for id in s.characters do engine.dynamic_apply_input_colors(&chars.visual[id], chars.input_style[id])
+			}
+			return nil, false
+		}
 	}
 	s.tick += 1
 	return thunderstorm_render_candidates(s), true

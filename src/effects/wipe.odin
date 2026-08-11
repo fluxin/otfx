@@ -63,13 +63,16 @@ wipe_parse :: proc(cfg: ^Wipe_Config, args: []string) -> bool {
 }
 
 Wipe_State :: struct {
-	config:       Wipe_Config,
-	final_colors: [dynamic]engine.Color_Pair,
-	scenes:       [dynamic]engine.Scene,
-	active:       [dynamic]engine.Char_Id,
-	active_by_id: [dynamic]u8,
-	reveal:       engine.Group_Reveal,
-	wipe_delay:   int,
+	config:         Wipe_Config,
+	frames:         engine.Frame_Timeline,
+	frame_spans:    [dynamic]engine.Span,
+	start_ticks:    [dynamic]int,
+	active:         [dynamic]engine.Char_Id,
+	active_by_id:   [dynamic]u8,
+	reveal:         engine.Group_Reveal,
+	wipe_delay:     int,
+	color_handling: engine.Existing_Color_Handling,
+	tick:           int,
 }
 
 wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
@@ -104,33 +107,39 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.scenes = make([dynamic]engine.Scene, max_slot + 1)
-	s.active_by_id = make([dynamic]u8, max_slot + 1)
+	s.color_handling = e.cfg.existing_color_handling
+	s.frame_spans = make([dynamic]engine.Span, len(e.chars))
+	s.start_ticks = make([dynamic]int, len(e.chars))
+	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
+	s.active_by_id = make([dynamic]u8, len(e.chars))
+	gradient_steps := s.config.final_gradient_steps[0]
+	reserve(&s.frames, len(chars) * (gradient_steps + 1))
 
 	for id in chars {
-		c := e.chars.input_coord[id]
-		final := engine.Color_Pair {
-			fg = engine.gradient_sample(sampler, spectrum[:], c),
-			bg = nil,
+		switch s.color_handling {
+		case .Dynamic:
+			s.frame_spans[id] = engine.create_timeline(
+				&s.frames,
+				{
+					e.chars.input_symbol[id],
+					e.chars.input_style[id].fg,
+					e.chars.input_style[id].bg,
+					false,
+				},
+				s.config.final_gradient_frames,
+				gradient_steps + 1,
+			)
+		case .Ignore, .Always:
+			final := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+			s.frame_spans[id] = engine.create_timeline(
+				&s.frames,
+				e.chars.input_symbol[id],
+				s.config.final_gradient_frames,
+				spectrum[0],
+				final,
+				gradient_steps,
+			)
 		}
-		s.final_colors[id] = final
-		// wipe gradient from spectrum[0] to the final fg color
-		wg := engine.gradient_make(
-			[]engine.Color{spectrum[0], final.fg.?},
-			s.config.final_gradient_steps[:],
-			false,
-		)
-		defer delete(wg[:])
-		engine.scene_add_gradient(
-			&s.scenes[id],
-			[]string{e.chars.input_symbol[id]},
-			s.config.final_gradient_frames,
-			wg[:],
-			nil,
-		)
 	}
 	s.wipe_delay = s.config.wipe_delay
 }
@@ -143,9 +152,8 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		change := engine.group_reveal_step(&s.reveal)
 		for gi in change.added.start ..< change.added.start + change.added.len {
 			for id in engine.group_members(s.reveal.groups, gi) {
-				scene := &s.scenes[id]
-				e.chars.visual[id] = engine.scene_first_visual(scene^)
 				e.chars.is_visible[id] = true
+				s.start_ticks[id] = s.tick
 				if s.active_by_id[id] == 0 {
 					s.active_by_id[id] = 1
 					append(&s.active, id)
@@ -155,7 +163,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		for gi in change.removed.start ..< change.removed.start + change.removed.len {
 			for id in engine.group_members(s.reveal.groups, gi) {
 				s.active_by_id[id] = 0
-				engine.scene_reset(&s.scenes[id])
+				s.start_ticks[id] = -1
 				e.chars.is_visible[id] = false
 			}
 		}
@@ -166,9 +174,11 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	write := 0
 	for id in s.active {
 		if s.active_by_id[id] == 0 do continue
-		visual, complete := engine.step_animation(&s.scenes[id])
-		e.chars.visual[id] = visual
-		if complete {
+		span := s.frame_spans[id]
+		age := s.tick - s.start_ticks[id]
+		frame := age / s.config.final_gradient_frames
+		e.chars.visual[id] = s.frames[span.start + frame].visual
+		if age + 1 == span.len * s.config.final_gradient_frames {
 			s.active_by_id[id] = 0
 		} else {
 			s.active[write] = id
@@ -176,5 +186,6 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		}
 	}
 	resize(&s.active, write)
+	s.tick += 1
 	return nil, true
 }

@@ -77,6 +77,8 @@ Spotlights_State :: struct {
 	characters:       [dynamic]engine.Char_Id,
 	bright_colors:    [dynamic]engine.Color,
 	dark_colors:      [dynamic]engine.Color,
+	bright_bg:        [dynamic]Maybe(engine.Color),
+	dark_bg:          [dynamic]Maybe(engine.Color),
 	spot_positions:   [dynamic]engine.Coord,
 	spot_origins:     [dynamic]engine.Coord,
 	spot_targets:     [dynamic]engine.Coord,
@@ -88,6 +90,7 @@ Spotlights_State :: struct {
 	phase_tick:       int,
 	illuminate_range: int,
 	expand_limit:     int,
+	color_handling:   engine.Existing_Color_Handling,
 }
 
 spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) {
@@ -111,6 +114,7 @@ spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) {
 }
 
 spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -129,14 +133,24 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.bright_colors = make([dynamic]engine.Color, n)
 	s.dark_colors = make([dynamic]engine.Color, n)
+	s.bright_bg = make([dynamic]Maybe(engine.Color), n)
+	s.dark_bg = make([dynamic]Maybe(engine.Color), n)
 	input_coords := e.chars.input_coord
 	visible := e.chars.is_visible
 	visual_fg := e.chars.visual
 	for id, i in s.characters {
 		bright := engine.gradient_sample(sampler, spectrum[:], input_coords[id])
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			bright = engine.Color{0x80, 0x80, 0x80}
+			if fg, ok := style.fg.?; ok do bright = fg
+			s.bright_bg[i] = style.bg
+			if bg, ok := style.bg.?; ok do s.dark_bg[i] = engine.adjust_color_brightness(bg, 0.2)
+		}
 		s.bright_colors[i] = bright
 		s.dark_colors[i] = engine.adjust_color_brightness(bright, 0.2)
 		visual_fg[id].fg = s.dark_colors[i]
+		visual_fg[id].bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
 		visible[id] = true
 	}
 
@@ -218,8 +232,16 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 		p := input_coords[id]
 		nearest := engine.line_length(s.spot_positions[0], p, true)
 		for j in 1 ..< len(s.spot_positions) do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
+		if s.color_handling == .Dynamic &&
+		   s.phase == .Expand &&
+		   e.chars.input_style[id].fg == nil {
+			visual_fg[id].fg = nil
+			visual_fg[id].bg = e.chars.input_style[id].bg
+			continue
+		}
 		if nearest > f64(s.illuminate_range) {
 			visual_fg[id].fg = s.dark_colors[i]
+			visual_fg[id].bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
 			continue
 		}
 		bright := s.bright_colors[i]
@@ -231,8 +253,12 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 				0.2,
 			)
 			visual_fg[id].fg = engine.adjust_color_brightness(bright, factor)
+			if s.color_handling == .Dynamic {
+				if bg, ok := s.bright_bg[i].?; ok do visual_fg[id].bg = engine.adjust_color_brightness(bg, factor)
+			}
 		} else {
 			visual_fg[id].fg = bright
+			visual_fg[id].bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
 		}
 	}
 	return s.characters[:], true

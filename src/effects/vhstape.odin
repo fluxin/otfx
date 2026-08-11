@@ -152,9 +152,11 @@ Vhstape_State :: struct {
 	tick:                  int,
 	redraw_row:            int,
 	redrawing:             bool,
+	color_handling:        engine.Existing_Color_Handling,
 }
 
 vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -181,7 +183,13 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], input_coords[id])
-		visual_fg[id].fg = s.final_colors[id]
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			visual_fg[id].fg = style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80}
+			visual_fg[id].bg = style.bg
+		} else {
+			visual_fg[id].fg = s.final_colors[id]
+		}
 		visible[id] = true
 	}
 	s.rows = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
@@ -232,6 +240,36 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.redraw_row = row_count - 1
 }
 
+vhstape_set_stable_visual :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+) {
+	chars.visual[id].symbol = chars.input_symbol[id]
+	if s.color_handling == .Dynamic {
+		style := chars.input_style[id]
+		chars.visual[id].fg = style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80}
+		chars.visual[id].bg = style.bg
+	} else {
+		chars.visual[id].fg = s.final_colors[id]
+		chars.visual[id].bg = nil
+	}
+}
+
+vhstape_set_final_visual :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+) {
+	chars.visual[id].symbol = chars.input_symbol[id]
+	if s.color_handling == .Dynamic {
+		engine.dynamic_apply_input_colors(&chars.visual[id], chars.input_style[id])
+	} else {
+		chars.visual[id].fg = s.final_colors[id]
+		chars.visual[id].bg = nil
+	}
+}
+
 
 vhstape_activate_character :: proc(s: ^Vhstape_State, id: engine.Char_Id) {
 	if s.active_character_bits[id] != 0 do return
@@ -273,10 +311,7 @@ vhstape_start_scene :: proc(
 		}
 	case .Base:
 		s.scene_ticks[id] = 0
-		chars.visual[id] = {
-			symbol = symbol,
-			fg     = s.final_colors[id],
-		}
+		vhstape_set_stable_visual(s, chars, id)
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
@@ -288,10 +323,7 @@ vhstape_start_scene :: proc(
 				step / 2,
 			)
 		} else {
-			chars.visual[id] = {
-				symbol = symbol,
-				fg     = s.final_colors[id],
-			}
+			vhstape_set_stable_visual(s, chars, id)
 		}
 	case .Final_Snow:
 		s.scene_ticks[id] = 0
@@ -543,10 +575,7 @@ vhstape_scene_step :: proc(
 			}
 		}
 	case .Base:
-		chars.visual[id] = {
-			symbol = symbol,
-			fg     = s.final_colors[id],
-		}
+		vhstape_set_stable_visual(s, chars, id)
 		s.scenes[id] = .Idle
 	case .Snow:
 		step := s.scene_ticks[id]
@@ -559,10 +588,7 @@ vhstape_scene_step :: proc(
 				step / 2,
 			)
 		} else {
-			chars.visual[id] = {
-				symbol = symbol,
-				fg     = s.final_colors[id],
-			}
+			vhstape_set_stable_visual(s, chars, id)
 		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == VHSTAPE_SNOW_FRAMES * 2 + 1 {
@@ -587,10 +613,7 @@ vhstape_scene_step :: proc(
 				fg     = engine.Color{0xFF, 0xFF, 0xFF},
 			}
 		} else {
-			chars.visual[id] = {
-				symbol = symbol,
-				fg     = s.final_colors[id],
-			}
+			vhstape_set_final_visual(s, chars, id)
 		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == 7 do s.scenes[id] = .Idle

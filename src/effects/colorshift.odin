@@ -84,13 +84,15 @@ colorshift_parse :: proc(cfg: ^Colorshift_Config, args: []string) -> bool {
 }
 
 Colorshift_State :: struct {
-	config:        Colorshift_Config,
-	gradient:      [dynamic]engine.Color, // one shared palette
-	shifts:        [dynamic]int, // indexed like character_sets.input
-	final_colors:  [dynamic]engine.Color, // indexed like character_sets.input
-	tick:          int,
-	palette_index: int,
-	palette_tick:  int,
+	config:            Colorshift_Config,
+	gradient:          [dynamic]engine.Color, // one shared palette
+	shifts:            [dynamic]int, // indexed like character_sets.input
+	final_colors:      [dynamic]engine.Color, // indexed like character_sets.input
+	tick:              int,
+	palette_index:     int,
+	palette_tick:      int,
+	color_handling:    engine.Existing_Color_Handling,
+	dynamic_has_color: bool,
 }
 
 colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
@@ -115,6 +117,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	)
 	assert(s.config.gradient_frames >= 1)
 	ids := e.character_sets.input[:]
+	s.color_handling = e.cfg.existing_color_handling
 	s.shifts = make([dynamic]int, len(ids))
 	if s.config.cycles != 0 && !s.config.skip_final_gradient {
 		s.final_colors = make([dynamic]engine.Color, len(ids))
@@ -160,6 +163,10 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		if len(s.final_colors) != 0 {
 			s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		}
+		if s.color_handling == .Dynamic &&
+		   (e.chars.input_style[id].fg != nil || e.chars.input_style[id].bg != nil) {
+			s.dynamic_has_color = true
+		}
 	}
 }
 
@@ -184,6 +191,7 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Ch
 	} else {
 		if s.config.skip_final_gradient do return nil, false
 		transition_tick := s.tick - cycle_ticks
+		if s.color_handling == .Dynamic && transition_tick >= (s.dynamic_has_color ? 9 * frames : frames) do return nil, false
 		transition_step := transition_tick / frames
 		transition_steps :: 8
 		if transition_step > transition_steps do return nil, false
@@ -191,12 +199,22 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Ch
 			start_index := s.shifts[i] - 1
 			if start_index < 0 do start_index += n
 			start := s.gradient[start_index]
-			visual_fg[id].fg = engine.gradient_between_step(
-				start,
-				s.final_colors[i],
-				transition_steps,
-				transition_step,
-			)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&visual_fg[id],
+					start,
+					e.chars.input_style[id],
+					transition_steps,
+					transition_step,
+				)
+			} else {
+				visual_fg[id].fg = engine.gradient_between_step(
+					start,
+					s.final_colors[i],
+					transition_steps,
+					transition_step,
+				)
+			}
 		}
 	}
 	s.tick += 1

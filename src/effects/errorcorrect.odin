@@ -4,6 +4,12 @@ import "../engine"
 import "core:fmt"
 import "core:math/rand"
 
+@(private, rodata)
+Errorcorrect_First_Wipe: [8]string = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
+
+@(private, rodata)
+Errorcorrect_Last_Wipe: [7]string = {"▇", "▆", "▅", "▄", "▃", "▂", "▁"}
+
 Errorcorrect_Config :: struct {
 	error_pairs:              f64,
 	swap_delay:               int,
@@ -65,16 +71,17 @@ Errorcorrect_Pair :: struct {
 
 // One flat active-id column; each id's phase is derived from its start tick.
 Errorcorrect_State :: struct {
-	config:       Errorcorrect_Config,
-	swapped:      [dynamic]Errorcorrect_Pair,
-	swapped_head: int,
-	final_colors: [dynamic]engine.Color,
-	origins:      [dynamic]engine.Coord,
-	max_steps:    [dynamic]int,
-	start_ticks:  [dynamic]int,
-	active:       [dynamic]engine.Char_Id,
-	swap_delay:   int,
-	tick:         int,
+	config:         Errorcorrect_Config,
+	swapped:        [dynamic]Errorcorrect_Pair,
+	swapped_head:   int,
+	final_colors:   [dynamic]engine.Color,
+	origins:        [dynamic]engine.Coord,
+	max_steps:      [dynamic]int,
+	start_ticks:    [dynamic]int,
+	active:         [dynamic]engine.Char_Id,
+	swap_delay:     int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
@@ -98,6 +105,7 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	)
 	defer delete(characters[:])
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.color_handling = e.cfg.existing_color_handling
 	s.origins = make([dynamic]engine.Coord, len(e.chars))
 	s.max_steps = make([dynamic]int, len(e.chars))
 	s.start_ticks = make([dynamic]int, len(e.chars))
@@ -105,7 +113,12 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	for id in characters {
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
 		e.chars.visual[id].symbol = e.chars.input_symbol[id]
-		e.chars.visual[id].fg = s.final_colors[id]
+		if s.color_handling == .Dynamic {
+			e.chars.visual[id].fg = e.chars.input_style[id].fg
+			e.chars.visual[id].bg = e.chars.input_style[id].bg
+		} else {
+			e.chars.visual[id].fg = s.final_colors[id]
+		}
 		e.chars.is_visible[id] = true
 	}
 	available := make([dynamic]engine.Char_Id, 0, len(characters), context.temp_allocator)
@@ -146,8 +159,6 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 		s.swap_delay = s.config.swap_delay
 	} else if s.swap_delay != 0 do s.swap_delay -= 1
 	if len(s.active) == 0 do return nil, false
-	first_wipe := [8]string{"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
-	last_wipe := [7]string{"▇", "▆", "▅", "▄", "▃", "▂", "▁"}
 	white := engine.Color{0xff, 0xff, 0xff}
 	write := 0
 	for id in s.active {
@@ -160,7 +171,7 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 			if (age / 3) % 2 ==
 			   0 {e.chars.visual[id].symbol = "▓"; e.chars.visual[id].fg = s.config.error_color} else {e.chars.visual[id].symbol = e.chars.input_symbol[id]; e.chars.visual[id].fg = white}
 		case age < 84:
-			e.chars.visual[id].symbol = first_wipe[(age - 60) / 3]
+			e.chars.visual[id].symbol = Errorcorrect_First_Wipe[(age - 60) / 3]
 			e.chars.visual[id].fg = s.config.error_color
 		case age < last_start:
 			progress := f64(age - motion_start + 1) / f64(s.max_steps[id])
@@ -180,16 +191,27 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 		case age < last_start + 21:
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 			e.chars.layer[id] = 0
-			e.chars.visual[id].symbol = last_wipe[(age - last_start) / 3]
+			e.chars.visual[id].symbol = Errorcorrect_Last_Wipe[(age - last_start) / 3]
 			e.chars.visual[id].fg = s.config.correct_color
 		case:
 			e.chars.visual[id].symbol = e.chars.input_symbol[id]
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.config.correct_color,
-				s.final_colors[id],
-				10,
-				min((age - last_start - 21) / 3, 10),
-			)
+			step := min((age - last_start - 21) / 3, 10)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					s.config.correct_color,
+					e.chars.input_style[id],
+					10,
+					step,
+				)
+			} else {
+				e.chars.visual[id].fg = engine.gradient_between_step(
+					s.config.correct_color,
+					s.final_colors[id],
+					10,
+					step,
+				)
+			}
 		}
 		s.active[write] = id; write += 1
 	}

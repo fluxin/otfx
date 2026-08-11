@@ -78,6 +78,7 @@ Overflow_State :: struct {
 	active_rows:       [dynamic]Overflow_Row,
 	overflow_gradient: [dynamic]engine.Color,
 	delay:             int,
+	color_handling:    engine.Existing_Color_Handling,
 }
 
 overflow_append_row :: proc(state: ^Overflow_State, characters: []engine.Char_Id, final: bool) {
@@ -114,6 +115,7 @@ overflow_row_color :: proc(
 }
 
 overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -167,6 +169,9 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 					e.chars.input_symbol[id],
 					e.chars.input_coord[id],
 				)
+				e.chars.input_style[copy_id] = e.chars.input_style[id]
+				e.chars.uses_input_preexisting_colors[copy_id] =
+					e.chars.uses_input_preexisting_colors[id]
 				append(&s.row_characters, copy_id)
 			}
 			append(&s.pending_rows, Overflow_Row{{start, len(source)}, false})
@@ -180,9 +185,13 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		row := engine.group_members(final_rows, row_index)
 		for id in row {
 			if id < engine.Char_Id(len(final_colors)) {
-				e.chars.visual[id] = {
-					symbol = e.chars.visual[id].symbol,
-					fg     = final_colors[id],
+				if s.color_handling == .Dynamic {
+					engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+				} else {
+					e.chars.visual[id] = {
+						symbol = e.chars.visual[id].symbol,
+						fg     = final_colors[id],
+					}
 				}
 			}
 		}

@@ -103,17 +103,18 @@ spray_parse :: proc(cfg: ^Spray_Config, args: []string) -> bool {
 }
 
 Spray_State :: struct {
-	config:       Spray_Config,
-	characters:   [dynamic]engine.Char_Id,
-	index_by_id:  [dynamic]int,
-	pending:      [dynamic]engine.Char_Id,
-	final_colors: [dynamic]engine.Color,
-	start_colors: [dynamic]engine.Color,
-	max_steps:    [dynamic]int,
-	start_ticks:  [dynamic]int,
-	origin:       engine.Coord,
-	volume:       int,
-	tick:         int,
+	config:         Spray_Config,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	pending:        [dynamic]engine.Char_Id,
+	final_colors:   [dynamic]engine.Color,
+	start_colors:   [dynamic]engine.Color,
+	max_steps:      [dynamic]int,
+	start_ticks:    [dynamic]int,
+	origin:         engine.Coord,
+	volume:         int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 spray_origin :: proc(position: Spray_Position, canvas: engine.Canvas) -> engine.Coord {
@@ -160,6 +161,7 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.start_colors = make([dynamic]engine.Color, n)
@@ -221,7 +223,16 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 			e.chars.layer[id] = 0
 		}
-		if age < 160 {
+		if s.color_handling == .Dynamic {
+			step := min(age / 20, 7)
+			engine.dynamic_gradient_to_input(
+				&e.chars.visual[id],
+				s.start_colors[i],
+				e.chars.input_style[id],
+				7,
+				step,
+			)
+		} else if age < 160 {
 			e.chars.visual[id].fg = engine.gradient_between_step(
 				s.start_colors[i],
 				s.final_colors[i],

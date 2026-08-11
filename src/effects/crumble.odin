@@ -57,6 +57,9 @@ Crumble_State :: struct {
 	final_colors:    [dynamic]engine.Color,
 	weak_colors:     [dynamic]engine.Color,
 	dust_colors:     [dynamic]engine.Color,
+	weak_bg:         [dynamic]Maybe(engine.Color),
+	dust_bg:         [dynamic]Maybe(engine.Color),
+	has_dim_fg:      [dynamic]u8,
 	fall_starts:     [dynamic]int,
 	fall_steps:      [dynamic]int,
 	vacuum_starts:   [dynamic]int,
@@ -76,9 +79,11 @@ Crumble_State :: struct {
 	phase:           Crumble_Phase,
 	phase_tick:      int,
 	reset_max_ticks: int,
+	color_handling:  engine.Existing_Color_Handling,
 }
 
 crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -98,6 +103,9 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.weak_colors = make([dynamic]engine.Color, n)
 	s.dust_colors = make([dynamic]engine.Color, n)
+	s.weak_bg = make([dynamic]Maybe(engine.Color), n)
+	s.dust_bg = make([dynamic]Maybe(engine.Color), n)
+	s.has_dim_fg = make([dynamic]u8, n)
 	s.fall_starts = make([dynamic]int, n)
 	s.fall_steps = make([dynamic]int, n)
 	s.vacuum_starts = make([dynamic]int, n)
@@ -115,8 +123,32 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		input := input_coords[id]
 		final_color := engine.gradient_sample(sampler, spectrum[:], input)
 		s.final_colors[i] = final_color
-		s.weak_colors[i] = engine.adjust_color_brightness(final_color, 0.65)
-		s.dust_colors[i] = engine.adjust_color_brightness(final_color, 0.55)
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			if fg, ok := style.fg.?; ok {
+				s.weak_colors[i] = engine.adjust_color_brightness(fg, 0.65)
+				s.dust_colors[i] = engine.adjust_color_brightness(fg, 0.55)
+				s.has_dim_fg[i] = 1
+			} else if style.bg == nil {
+				s.weak_colors[i] = engine.adjust_color_brightness(
+					engine.Color{0x80, 0x80, 0x80},
+					0.65,
+				)
+				s.dust_colors[i] = engine.adjust_color_brightness(
+					engine.Color{0x80, 0x80, 0x80},
+					0.55,
+				)
+				s.has_dim_fg[i] = 1
+			}
+			if bg, ok := style.bg.?; ok {
+				s.weak_bg[i] = engine.adjust_color_brightness(bg, 0.65)
+				s.dust_bg[i] = engine.adjust_color_brightness(bg, 0.55)
+			}
+		} else {
+			s.weak_colors[i] = engine.adjust_color_brightness(final_color, 0.65)
+			s.dust_colors[i] = engine.adjust_color_brightness(final_color, 0.55)
+			s.has_dim_fg[i] = 1
+		}
 		s.fall_starts[i] = -1
 		s.vacuum_starts[i] = -1
 		s.fall_steps[i] = max(
@@ -139,11 +171,22 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 			engine.round_half_even(engine.line_length(vacuum_end, input, true)),
 			1,
 		)
-		s.reset_max_ticks = max(s.reset_max_ticks, s.reset_steps[i] + 68)
+		reset_tail := 68
+		if s.color_handling == .Dynamic &&
+		   e.chars.input_style[id].fg == nil &&
+		   e.chars.input_style[id].bg == nil {
+			reset_tail = 32
+		}
+		s.reset_max_ticks = max(s.reset_max_ticks, s.reset_steps[i] + reset_tail)
 		for j in 0 ..< 5 do s.dust_symbols[i * 5 + j] = dust_choices[rand.int_max(len(dust_choices))]
 		s.fall_order[i] = i
 		s.vacuum_order[i] = i
-		visual_fg[id].fg = s.weak_colors[i]
+		if s.has_dim_fg[i] != 0 {
+			visual_fg[id].fg = s.weak_colors[i]
+		} else {
+			visual_fg[id].fg = nil
+		}
+		visual_fg[id].bg = s.weak_bg[i]
 		visible[id] = true
 	}
 	rand.shuffle(s.fall_order[:])
@@ -211,12 +254,26 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				if age >= 40 + s.fall_steps[i] do continue
 				if age < 40 {
 					visual_symbols[id].symbol = input_symbols[id]
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.weak_colors[i],
-						s.dust_colors[i],
-						9,
-						age / 4,
-					)
+					if s.has_dim_fg[i] != 0 {
+						visual_fg[id].fg = engine.gradient_between_step(
+							s.weak_colors[i],
+							s.dust_colors[i],
+							9,
+							age / 4,
+						)
+					} else {
+						visual_fg[id].fg = nil
+					}
+					if weak_bg, ok := s.weak_bg[i].?; ok {
+						visual_fg[id].bg = engine.gradient_between_step(
+							weak_bg,
+							s.dust_bg[i].?,
+							9,
+							age / 4,
+						)
+					} else {
+						visual_fg[id].bg = nil
+					}
 					s.fall_active[fall_write] = i
 					fall_write += 1
 					continue
@@ -231,7 +288,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				)
 				dust_index := min((fall_age * 5) / s.fall_steps[i], 4)
 				visual_symbols[id].symbol = s.dust_symbols[i * 5 + dust_index]
-				visual_fg[id].fg = s.dust_colors[i]
+				visual_fg[id].fg = s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil
+				visual_fg[id].bg = s.dust_bg[i]
 				s.fall_active[fall_write] = i
 				fall_write += 1
 			}
@@ -286,25 +344,67 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 						f64(s.phase_tick + 1) / f64(steps),
 					)
 					visual_symbols[id].symbol = input_symbols[id]
-					visual_fg[id].fg = s.dust_colors[i]
+					visual_fg[id].fg = s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil
+					visual_fg[id].bg = s.dust_bg[i]
 					continue
 				}
 				flash_age := s.phase_tick - steps
 				visual_symbols[id].symbol = input_symbols[id]
 				if flash_age < 28 {
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.final_colors[i],
-						engine.Color{0xFF, 0xFF, 0xFF},
-						6,
-						flash_age / 4,
-					)
+					if s.color_handling == .Dynamic {
+						style := e.chars.input_style[id]
+						if s.has_dim_fg[i] != 0 {
+							start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
+							visual_fg[id].fg = engine.gradient_between_step(
+								start,
+								engine.Color{0xFF, 0xFF, 0xFF},
+								6,
+								flash_age / 4,
+							)
+						} else {
+							visual_fg[id].fg = nil
+						}
+						if bg, ok := style.bg.?; ok {
+							visual_fg[id].bg = engine.gradient_between_step(
+								bg,
+								engine.Color{0xFF, 0xFF, 0xFF},
+								6,
+								flash_age / 4,
+							)
+						} else {
+							visual_fg[id].bg = nil
+						}
+					} else {
+						visual_fg[id].fg = engine.gradient_between_step(
+							s.final_colors[i],
+							engine.Color{0xFF, 0xFF, 0xFF},
+							6,
+							flash_age / 4,
+						)
+					}
 				} else {
-					visual_fg[id].fg = engine.gradient_between_step(
-						engine.Color{0xFF, 0xFF, 0xFF},
-						s.final_colors[i],
-						9,
-						min((flash_age - 28) / 4, 9),
-					)
+					if s.color_handling == .Dynamic {
+						style := e.chars.input_style[id]
+						if style.fg == nil && style.bg == nil {
+							visual_fg[id].fg = nil
+							visual_fg[id].bg = nil
+						} else {
+							engine.dynamic_gradient_to_input(
+								&visual_fg[id],
+								engine.Color{0xFF, 0xFF, 0xFF},
+								style,
+								9,
+								min((flash_age - 28) / 4, 9),
+							)
+						}
+					} else {
+						visual_fg[id].fg = engine.gradient_between_step(
+							engine.Color{0xFF, 0xFF, 0xFF},
+							s.final_colors[i],
+							9,
+							min((flash_age - 28) / 4, 9),
+						)
+					}
 				}
 			}
 			s.phase_tick += 1

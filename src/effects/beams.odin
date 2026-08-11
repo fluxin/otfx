@@ -137,10 +137,10 @@ Beams_State :: struct {
 	delay:             int,
 	tick:              int,
 	phase:             Beams_Phase,
+	color_handling:    engine.Existing_Color_Handling,
 }
 
-// Expand symbols with the same contiguous distribution used by
-// scene_add_gradient. It is build-only; playback indexes this flat row.
+// Expand symbols into the build-time lane; playback indexes the flat row.
 beams_expand_symbols :: proc(symbols: []string, count: int) -> [dynamic]string {
 	out := make([dynamic]string, count)
 	repeat_factor := count / len(symbols)
@@ -219,6 +219,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 		engine.CHAR_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
+	s.color_handling = e.cfg.existing_color_handling
 	max_slot := 0
 	for id in s.characters do max_slot = max(max_slot, int(id))
 	s.final_colors = make([dynamic]engine.Color, max_slot + 1)
@@ -315,12 +316,40 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 					e.chars.visual[id].fg = s.beam_palette[palette_index]
 				} else {
 					e.chars.visual[id].symbol = e.chars.input_symbol[id]
-					e.chars.visual[id].fg = engine.gradient_between_step(
-						s.final_colors[id],
-						s.faded_colors[id],
+					step := min(
+						(age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2,
 						10,
-						min((age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2, 10),
 					)
+					if s.color_handling == .Dynamic && !e.chars.is_fill[id] {
+						style := e.chars.input_style[id]
+						if fg, ok := style.fg.?; ok {
+							e.chars.visual[id].fg = engine.gradient_between_step(
+								fg,
+								engine.adjust_color_brightness(fg, 0.3),
+								10,
+								step,
+							)
+						} else {
+							e.chars.visual[id].fg = nil
+						}
+						if bg, ok := style.bg.?; ok {
+							e.chars.visual[id].bg = engine.gradient_between_step(
+								bg,
+								engine.adjust_color_brightness(bg, 0.3),
+								10,
+								step,
+							)
+						} else {
+							e.chars.visual[id].bg = nil
+						}
+					} else {
+						e.chars.visual[id].fg = engine.gradient_between_step(
+							s.final_colors[id],
+							s.faded_colors[id],
+							10,
+							step,
+						)
+					}
 				}
 				continue
 			}
@@ -330,12 +359,37 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 			age := s.tick - wipe_start
 			if age < 11 * s.config.final_gradient_frames {
 				e.chars.visual[id].symbol = e.chars.input_symbol[id]
-				e.chars.visual[id].fg = engine.gradient_between_step(
-					s.faded_colors[id],
-					s.final_colors[id],
-					10,
-					min(age / s.config.final_gradient_frames, 10),
-				)
+				step := min(age / s.config.final_gradient_frames, 10)
+				if s.color_handling == .Dynamic && !e.chars.is_fill[id] {
+					style := e.chars.input_style[id]
+					if fg, ok := style.fg.?; ok {
+						e.chars.visual[id].fg = engine.gradient_between_step(
+							engine.adjust_color_brightness(fg, 0.3),
+							fg,
+							10,
+							step,
+						)
+					} else {
+						e.chars.visual[id].fg = nil
+					}
+					if bg, ok := style.bg.?; ok {
+						e.chars.visual[id].bg = engine.gradient_between_step(
+							engine.adjust_color_brightness(bg, 0.3),
+							bg,
+							10,
+							step,
+						)
+					} else {
+						e.chars.visual[id].bg = nil
+					}
+				} else {
+					e.chars.visual[id].fg = engine.gradient_between_step(
+						s.faded_colors[id],
+						s.final_colors[id],
+						10,
+						step,
+					)
+				}
 			}
 		}
 	}

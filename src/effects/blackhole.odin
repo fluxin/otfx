@@ -102,6 +102,8 @@ Blackhole_State :: struct {
 	phase:               Blackhole_Phase,
 	phase_tick:          int,
 	explode_limit:       int,
+	color_handling:      engine.Existing_Color_Handling,
+	dynamic_has_style:   bool,
 }
 
 blackhole_ring_position :: #force_inline proc(s: ^Blackhole_State, slot: int) -> engine.Coord {
@@ -111,6 +113,7 @@ blackhole_ring_position :: #force_inline proc(s: ^Blackhole_State, slot: int) ->
 }
 
 blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -174,6 +177,9 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	}
 	for id, i in s.characters {
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], input_coords[id])
+		if e.chars.input_style[id].fg != nil || e.chars.input_style[id].bg != nil {
+			s.dynamic_has_style = true
+		}
 		s.star_colors[i] = engine.gradient_between_step(
 			engine.Color{0x4A, 0x4A, 0x4D},
 			engine.Color{0xFF, 0xFF, 0xFF},
@@ -194,6 +200,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 			1,
 		)
 	}
+	if s.color_handling == .Dynamic && !s.dynamic_has_style do s.color_handling = .Ignore
 	for slot in 0 ..< ring_count {
 		pick := rand.int_max(len(available))
 		source := available[pick]
@@ -380,12 +387,28 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 							ease.ease(.Cubic_In, f64(return_age + 1) / f64(s.return_steps[i])),
 						)
 					}
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.explode_colors[i],
-						s.final_colors[i],
-						10,
-						min(return_age / 3, 10),
-					)
+					if s.color_handling == .Dynamic {
+						style := e.chars.input_style[id]
+						if style.fg == nil && style.bg == nil {
+							visual_fg[id].fg = nil
+							visual_fg[id].bg = nil
+						} else {
+							engine.dynamic_gradient_to_input(
+								&visual_fg[id],
+								s.explode_colors[i],
+								style,
+								10,
+								min(return_age / 3, 10),
+							)
+						}
+					} else {
+						visual_fg[id].fg = engine.gradient_between_step(
+							s.explode_colors[i],
+							s.final_colors[i],
+							10,
+							min(return_age / 3, 10),
+						)
+					}
 				}
 			}
 			s.phase_tick += 1

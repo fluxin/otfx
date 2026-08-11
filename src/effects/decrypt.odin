@@ -82,6 +82,7 @@ Decrypt_State :: struct {
 	decrypt_finish_tick: int,
 	phase:               Decrypt_Phase,
 	encrypted_symbols:   [dynamic]string,
+	color_handling:      engine.Existing_Color_Handling,
 }
 
 encrypted_symbols_build :: proc() -> [dynamic]string {
@@ -114,6 +115,7 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.typing_start_ticks = make([dynamic]int, n)
 	s.typing_colors = make([dynamic]engine.Color, n * Decrypt_Typing_Frames)
@@ -212,8 +214,27 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 			}
 			discovered_tick := slow_tick - s.slow_totals[i]
 			e.chars.visual[id].symbol = e.chars.input_symbol[id]
-			e.chars.visual[id].fg =
-				discovered_tick < Decrypt_Discovered_Ticks ? engine.gradient_between_step(engine.Color{0xff, 0xff, 0xff}, s.final_colors[i], 10, min(discovered_tick / 5, 10)) : s.final_colors[i]
+			if s.color_handling == .Dynamic {
+				step := min(discovered_tick / 5, 10)
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					engine.Color{0xff, 0xff, 0xff},
+					e.chars.input_style[id],
+					10,
+					step,
+				)
+			} else {
+				if discovered_tick < Decrypt_Discovered_Ticks {
+					e.chars.visual[id].fg = engine.gradient_between_step(
+						engine.Color{0xff, 0xff, 0xff},
+						s.final_colors[i],
+						10,
+						min(discovered_tick / 5, 10),
+					)
+				} else {
+					e.chars.visual[id].fg = s.final_colors[i]
+				}
+			}
 		}
 		s.decrypt_tick += 1
 		return s.characters[:], true

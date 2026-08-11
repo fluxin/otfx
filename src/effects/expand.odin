@@ -56,12 +56,13 @@ expand_parse :: proc(cfg: ^Expand_Config, args: []string) -> bool {
 }
 
 Expand_State :: struct {
-	config:       Expand_Config,
-	characters:   [dynamic]engine.Char_Id,
-	final_colors: [dynamic]engine.Color,
-	max_steps:    [dynamic]int,
-	step_limit:   int,
-	tick:         int,
+	config:         Expand_Config,
+	characters:     [dynamic]engine.Char_Id,
+	final_colors:   [dynamic]engine.Color,
+	max_steps:      [dynamic]int,
+	step_limit:     int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
@@ -85,6 +86,7 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.max_steps = make([dynamic]int, n)
 
@@ -115,15 +117,31 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 			e.chars.input_coord[id],
 			factor,
 		)
-		e.chars.visual[id].fg = engine.gradient_between_step(
-			s.config.final_gradient_stops[0],
-			s.final_colors[i],
-			10,
-			min(engine.round_half_even(factor * 10), 10),
-		)
+		step := min(engine.round_half_even(factor * 10), 10)
+		if s.color_handling == .Dynamic {
+			engine.dynamic_gradient_to_input(
+				&e.chars.visual[id],
+				s.config.final_gradient_stops[0],
+				e.chars.input_style[id],
+				10,
+				step,
+			)
+		} else {
+			e.chars.visual[id].fg = engine.gradient_between_step(
+				s.config.final_gradient_stops[0],
+				s.final_colors[i],
+				10,
+				step,
+			)
+		}
 		if s.tick + 1 >= maximum {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual[id].fg = s.final_colors[i]
+			if s.color_handling == .Dynamic {
+				e.chars.visual[id].fg = e.chars.input_style[id].fg
+				e.chars.visual[id].bg = e.chars.input_style[id].bg
+			} else {
+				e.chars.visual[id].fg = s.final_colors[i]
+			}
 			e.chars.layer[id] = 0
 		}
 	}

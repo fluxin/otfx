@@ -99,21 +99,22 @@ pour_parse :: proc(cfg: ^Pour_Config, args: []string) -> bool {
 }
 
 Pour_State :: struct {
-	config:       Pour_Config,
-	pool:         [dynamic]engine.Char_Id, // all groups, concatenated
-	group_spans:  [dynamic]engine.Span, // one span per group
-	revealed:     [dynamic]engine.Char_Id,
-	index_by_id:  [dynamic]int,
-	final_colors: [dynamic]engine.Color,
-	origins:      [dynamic]engine.Coord,
-	max_steps:    [dynamic]int,
-	start_ticks:  [dynamic]int,
-	active_slots: [dynamic]int,
-	color_steps:  int,
-	group_idx:    int, // group currently being poured
-	head:         int, // cursor within the current group
-	gap:          int,
-	tick:         int,
+	config:         Pour_Config,
+	pool:           [dynamic]engine.Char_Id, // all groups, concatenated
+	group_spans:    [dynamic]engine.Span, // one span per group
+	revealed:       [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	final_colors:   [dynamic]engine.Color,
+	origins:        [dynamic]engine.Coord,
+	max_steps:      [dynamic]int,
+	start_ticks:    [dynamic]int,
+	active_slots:   [dynamic]int,
+	color_steps:    int,
+	group_idx:      int, // group currently being poured
+	head:           int, // cursor within the current group
+	gap:            int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
@@ -145,6 +146,7 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, grouping)
 	n := len(e.character_sets.input)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.origins = make([dynamic]engine.Coord, n)
@@ -223,11 +225,16 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			s.gap -= 1
 		}
 	}
-	color_ticks := (s.color_steps + 1) * s.config.final_gradient_frames
 	write := 0
 	for slot in s.active_slots {
 		id := s.pool[slot]
 		age := s.tick - s.start_ticks[slot]
+		style := e.chars.input_style[id]
+		color_steps := s.color_handling == .Dynamic ? 10 : s.color_steps
+		color_ticks := (color_steps + 1) * s.config.final_gradient_frames
+		if s.color_handling == .Dynamic && style.fg == nil && style.bg == nil {
+			color_ticks = s.config.final_gradient_frames
+		}
 		life := max(s.max_steps[slot], color_ticks)
 		if age >= life do continue
 		if age < s.max_steps[slot] {
@@ -241,14 +248,30 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 		}
 		if age < color_ticks {
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.config.starting_color,
-				s.final_colors[slot],
-				s.color_steps,
-				min(age / s.config.final_gradient_frames, s.color_steps),
-			)
+			step := min(age / s.config.final_gradient_frames, color_steps)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					s.config.starting_color,
+					style,
+					10,
+					step,
+				)
+			} else {
+				e.chars.visual[id].fg = engine.gradient_between_step(
+					s.config.starting_color,
+					s.final_colors[slot],
+					s.color_steps,
+					step,
+				)
+			}
 		} else {
-			e.chars.visual[id].fg = s.final_colors[slot]
+			if s.color_handling == .Dynamic {
+				e.chars.visual[id].fg = style.fg
+				e.chars.visual[id].bg = style.bg
+			} else {
+				e.chars.visual[id].fg = s.final_colors[slot]
+			}
 		}
 		if age + 1 < life {s.active_slots[write] = slot; write += 1}
 	}

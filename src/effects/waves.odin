@@ -105,17 +105,18 @@ waves_parse :: proc(cfg: ^Waves_Config, args: []string) -> bool {
 }
 
 Waves_State :: struct {
-	config:        Waves_Config,
-	pending_cols:  engine.Char_Groups,
-	wave_spectrum: [dynamic]engine.Color,
-	wave_colors:   [dynamic]engine.Color,
-	wave_symbols:  [dynamic]string,
-	final_colors:  [dynamic]engine.Color, // indexed by Char_Id
-	start_ticks:   [dynamic]int, // -1 pending, -2 complete
-	revealed:      [dynamic]engine.Char_Id,
-	col_idx:       int,
-	tick:          int,
-	active_count:  int,
+	config:         Waves_Config,
+	pending_cols:   engine.Char_Groups,
+	wave_spectrum:  [dynamic]engine.Color,
+	wave_colors:    [dynamic]engine.Color,
+	wave_symbols:   [dynamic]string,
+	final_colors:   [dynamic]engine.Color, // indexed by Char_Id
+	start_ticks:    [dynamic]int, // -1 pending, -2 complete
+	revealed:       [dynamic]engine.Char_Id,
+	col_idx:        int,
+	tick:           int,
+	active_count:   int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
@@ -159,6 +160,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	input_coords := e.chars.input_coord[:]
 	visible := e.chars.is_visible
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.color_handling = e.cfg.existing_color_handling
 	s.start_ticks = make([dynamic]int, len(e.chars))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	for id in chars {
@@ -195,7 +197,6 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	wave_ticks := wave_frames * wave_length
 	assert(wave_ticks >= 1 && len(s.config.final_gradient_steps) > 0)
 	final_steps := s.config.final_gradient_steps[0]
-	final_ticks := (final_steps + 1) * 10
 	last_wave := s.wave_colors[wave_frames - 1]
 	input_symbols := e.chars.input_symbol
 	visual_symbols := e.chars.visual
@@ -213,12 +214,30 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			final_age := age - (wave_ticks - 1)
 			final_step := final_age == 0 ? 0 : min((final_age - 1) / 10, final_steps)
 			visual_symbols[id].symbol = input_symbols[id]
-			visual_fg[id].fg = engine.gradient_between_step(
-				last_wave,
-				s.final_colors[id],
-				final_steps,
-				final_step,
-			)
+			final_ticks := (final_steps + 1) * 10
+			if s.color_handling == .Dynamic {
+				style := e.chars.input_style[id]
+				if style.fg == nil && style.bg == nil {
+					visual_fg[id].fg = nil
+					visual_fg[id].bg = nil
+					final_ticks = 10
+				} else {
+					engine.dynamic_gradient_to_input(
+						&visual_fg[id],
+						last_wave,
+						style,
+						final_steps,
+						final_step,
+					)
+				}
+			} else {
+				visual_fg[id].fg = engine.gradient_between_step(
+					last_wave,
+					s.final_colors[id],
+					final_steps,
+					final_step,
+				)
+			}
 			if final_age == final_ticks {
 				s.start_ticks[id] = -2
 				s.active_count -= 1

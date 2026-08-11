@@ -89,6 +89,7 @@ Unstable_State :: struct {
 	explosion_max_steps:  int,
 	reassembly_max_steps: int,
 	rumble_delay:         int,
+	color_handling:       engine.Existing_Color_Handling,
 }
 
 unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
@@ -112,6 +113,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.jumbled_coords = make([dynamic]engine.Coord, n)
 	s.explosion_targets = make([dynamic]engine.Coord, n)
 	s.final_colors = make([dynamic]engine.Color, n)
@@ -163,7 +165,13 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		s.explosion_max_steps = max(s.explosion_max_steps, s.explosion_steps[i])
 		s.reassembly_max_steps = max(s.reassembly_max_steps, s.reassembly_steps[i])
 		current_coords[id] = jumbled
-		visual_fg[id].fg = final_color
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			visual_fg[id].fg = style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
+			visual_fg[id].bg = style.bg
+		} else {
+			visual_fg[id].fg = final_color
+		}
 		visible[id] = true
 	}
 	s.phase = .Rumble
@@ -189,12 +197,33 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 			}
 			color_step := min(s.phase_tick / 10, 12)
 			for id, i in s.characters {
-				visual_fg[id].fg = engine.gradient_between_step(
-					s.final_colors[i],
-					s.config.unstable_color,
-					12,
-					color_step,
-				)
+				if s.color_handling == .Dynamic {
+					style := e.chars.input_style[id]
+					start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
+					visual_fg[id].fg = engine.gradient_between_step(
+						start,
+						s.config.unstable_color,
+						12,
+						color_step,
+					)
+					if bg, ok := style.bg.?; ok {
+						visual_fg[id].bg = engine.gradient_between_step(
+							bg,
+							s.config.unstable_color,
+							12,
+							color_step,
+						)
+					} else {
+						visual_fg[id].bg = nil
+					}
+				} else {
+					visual_fg[id].fg = engine.gradient_between_step(
+						s.final_colors[i],
+						s.config.unstable_color,
+						12,
+						color_step,
+					)
+				}
 			}
 			jitter := s.phase_tick > 30 && s.phase_tick % s.rumble_delay == 0
 			if jitter {
@@ -242,6 +271,14 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 			// 13 gradient entries at three frames each. Motion and color settle
 			// together, exactly as the old path + scene combination did.
 			final_ticks := max(s.reassembly_max_steps, 39)
+			if s.color_handling == .Dynamic {
+				for id in s.characters {
+					if e.chars.input_style[id].fg == nil {
+						final_ticks = max(final_ticks, 42)
+						break
+					}
+				}
+			}
 			if s.phase_tick == final_ticks do return nil, false
 			color_step := min(s.phase_tick / 3, 12)
 			for id, i in s.characters {
@@ -252,12 +289,43 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 					input_coords[id],
 					ease.ease(s.config.reassembly_ease, progress),
 				)
-				visual_fg[id].fg = engine.gradient_between_step(
-					s.config.unstable_color,
-					s.final_colors[i],
-					12,
-					color_step,
-				)
+				if s.color_handling == .Dynamic {
+					style := e.chars.input_style[id]
+					if style.fg == nil && s.phase_tick >= 39 {
+						visual_fg[id].fg = nil
+					} else if fg, ok := style.fg.?; ok {
+						visual_fg[id].fg = engine.gradient_between_step(
+							s.config.unstable_color,
+							fg,
+							12,
+							color_step,
+						)
+					} else {
+						visual_fg[id].fg = engine.gradient_between_step(
+							s.config.unstable_color,
+							engine.Color{0x80, 0x80, 0x80},
+							12,
+							color_step,
+						)
+					}
+					if bg, ok := style.bg.?; ok {
+						visual_fg[id].bg = engine.gradient_between_step(
+							s.config.unstable_color,
+							bg,
+							12,
+							color_step,
+						)
+					} else {
+						visual_fg[id].bg = nil
+					}
+				} else {
+					visual_fg[id].fg = engine.gradient_between_step(
+						s.config.unstable_color,
+						s.final_colors[i],
+						12,
+						color_step,
+					)
+				}
 			}
 			s.phase_tick += 1
 			return s.characters[:], true

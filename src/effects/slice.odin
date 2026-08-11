@@ -81,6 +81,7 @@ Slice_State :: struct {
 	motion_steps:     [dynamic]int,
 	motion_max_steps: [dynamic]int,
 	render_ids:       [dynamic]engine.Char_Id,
+	color_handling:   engine.Existing_Color_Handling,
 }
 
 slice_schedule :: proc(
@@ -119,11 +120,13 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	characters := engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	defer delete(characters[:])
+	s.color_handling = e.cfg.existing_color_handling
 	for id in characters {
 		color := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
 		e.chars.visual[id] = {
 			symbol = e.chars.input_symbol[id],
-			fg     = color,
+			fg     = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : color,
+			bg     = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
 		}
 	}
 

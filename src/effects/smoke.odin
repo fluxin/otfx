@@ -67,18 +67,20 @@ smoke_parse :: proc(cfg: ^Smoke_Config, args: []string) -> bool {
 // visible and the front replaces its glyph with smoke before restoring it
 // through the final palette. There are no per-character scenes or graph maps.
 Smoke_State :: struct {
-	config:        Smoke_Config,
-	characters:    [dynamic]engine.Char_Id,
-	arrivals:      [dynamic]int,
-	final_colors:  [dynamic]engine.Color,
-	smoke_palette: [dynamic]engine.Color,
-	paint_pairs:   [dynamic]int,
-	paint_steps:   [dynamic]int,
-	tick:          int,
-	last_tick:     int,
+	config:         Smoke_Config,
+	characters:     [dynamic]engine.Char_Id,
+	arrivals:       [dynamic]int,
+	final_colors:   [dynamic]engine.Color,
+	smoke_palette:  [dynamic]engine.Color,
+	paint_pairs:    [dynamic]int,
+	paint_steps:    [dynamic]int,
+	tick:           int,
+	last_tick:      int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -128,7 +130,12 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 		s.arrivals[i] = arrival
 		s.last_tick = max(s.last_tick, arrival)
 		s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
-		visual_fg[id].fg = s.config.starting_color
+		if s.color_handling == .Dynamic {
+			visual_fg[id].fg = engine.Color{0x00, 0x00, 0x00}
+			visual_fg[id].bg = nil
+		} else {
+			visual_fg[id].fg = s.config.starting_color
+		}
 		visible[id] = true
 	}
 
@@ -147,7 +154,11 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 			step = 1
 		}
 	}
-	s.last_tick += len(s.smoke_palette) * 3 + paint_entries * 5
+	if s.color_handling == .Dynamic {
+		s.last_tick += len(s.config.smoke_symbols) * 10 + 5
+	} else {
+		s.last_tick += len(s.smoke_palette) * 3 + paint_entries * 5
+	}
 }
 
 smoke_paint_color :: proc(
@@ -164,7 +175,8 @@ smoke_paint_color :: proc(
 
 smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.tick == s.last_tick do return nil, false
-	smoke_ticks := len(s.smoke_palette) * 3
+	smoke_ticks :=
+		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) * 10 : len(s.smoke_palette) * 3
 	paint_entries := 1 + 5 * len(s.config.final_gradient_stops)
 	input_symbols := e.chars.input_symbol
 	visual_symbols := e.chars.visual
@@ -173,18 +185,27 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		age := s.tick - s.arrivals[i]
 		if age < 0 do continue
 		if age < smoke_ticks {
-			visual_symbols[id].symbol =
-				s.config.smoke_symbols[min(age / 3, len(s.config.smoke_symbols) - 1)]
-			visual_fg[id].fg = s.smoke_palette[age / 3]
+			if s.color_handling == .Dynamic {
+				visual_symbols[id].symbol = s.config.smoke_symbols[age / 10]
+				engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			} else {
+				visual_symbols[id].symbol =
+					s.config.smoke_symbols[min(age / 3, len(s.config.smoke_symbols) - 1)]
+				visual_fg[id].fg = s.smoke_palette[age / 3]
+			}
 		} else {
-			paint_entry := min((age - smoke_ticks) / 5, paint_entries - 1)
 			visual_symbols[id].symbol = input_symbols[id]
-			visual_fg[id].fg = smoke_paint_color(
-				s.config.final_gradient_stops[:],
-				s.final_colors[i],
-				s.paint_pairs[paint_entry],
-				s.paint_steps[paint_entry],
-			)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			} else {
+				paint_entry := min((age - smoke_ticks) / 5, paint_entries - 1)
+				visual_fg[id].fg = smoke_paint_color(
+					s.config.final_gradient_stops[:],
+					s.final_colors[i],
+					s.paint_pairs[paint_entry],
+					s.paint_steps[paint_entry],
+				)
+			}
 		}
 	}
 	s.tick += 1

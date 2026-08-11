@@ -3,3 +3,7 @@ third_party/
 PERFORMANCE_METHODOLOGY.md
 src.bin
 otfx
+bench/bench
+bench/bench.bin
+bench/__pycache__/
+*.pyc

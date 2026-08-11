@@ -92,18 +92,19 @@ slide_parse :: proc(cfg: ^Slide_Config, args: []string) -> bool {
 }
 
 Slide_State :: struct {
-	config:       Slide_Config,
-	characters:   [dynamic]engine.Char_Id,
-	index_by_id:  [dynamic]int,
-	final_colors: [dynamic]engine.Color,
-	groups:       engine.Char_Groups,
-	heads:        [dynamic]int,
-	origins:      [dynamic]engine.Coord,
-	steps:        [dynamic]int,
-	max_steps:    [dynamic]int,
-	active_slots: [dynamic]int,
-	next_group:   int,
-	current_gap:  int,
+	config:         Slide_Config,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	final_colors:   [dynamic]engine.Color,
+	groups:         engine.Char_Groups,
+	heads:          [dynamic]int,
+	origins:        [dynamic]engine.Coord,
+	steps:          [dynamic]int,
+	max_steps:      [dynamic]int,
+	active_slots:   [dynamic]int,
+	next_group:     int,
+	current_gap:    int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
@@ -127,6 +128,7 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.origins = make([dynamic]engine.Coord, n)
@@ -262,20 +264,28 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 				ease.ease(s.config.movement_easing, progress),
 			)
 		}
-		gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
-		e.chars.visual[id].fg = engine.gradient_between_step(
-			base_color,
-			s.final_colors[i],
-			10,
-			gradient_step,
-		)
+		if s.color_handling == .Dynamic {
+			engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+		} else {
+			gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
+			e.chars.visual[id].fg = engine.gradient_between_step(
+				base_color,
+				s.final_colors[i],
+				10,
+				gradient_step,
+			)
+		}
 		s.steps[i] += 1
 		if s.steps[i] < max(s.max_steps[i], gradient_ticks) {
 			s.active_slots[write] = i
 			write += 1
 		} else {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual[id].fg = s.final_colors[i]
+			if s.color_handling == .Dynamic {
+				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+			} else {
+				e.chars.visual[id].fg = s.final_colors[i]
+			}
 		}
 	}
 	resize(&s.active_slots, write)

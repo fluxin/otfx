@@ -97,9 +97,11 @@ Binarypath_State :: struct {
 	max_active:         int,
 	tick:               int,
 	wiping:             bool,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -197,7 +199,11 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 			if s.wipe_group == groups do break
 			for id in engine.group_members(s.final_wipe, s.wipe_group) {
 				visual_symbols[id].symbol = input_symbols[id]
-				visual_fg[id].fg = s.final_colors_by_id[id]
+				if s.color_handling == .Dynamic {
+					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+				} else {
+					visual_fg[id].fg = s.final_colors_by_id[id]
+				}
 				visible[id] = true
 			}
 			s.wipe_group += 1
@@ -250,13 +256,25 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 		if s.states[i] != .Collapse do continue
 		age := s.tick - s.starts[i]
 		if age < 21 {
-			dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
-			visual_fg[id].fg = engine.gradient_between_step(
-				engine.Color{0xFF, 0xFF, 0xFF},
-				dim,
-				6,
-				age / 3,
-			)
+			if s.color_handling == .Dynamic {
+				style := e.chars.input_style[id]
+				engine.dynamic_gradient_to_dimmed_input(
+					&visual_fg[id],
+					engine.Color{0xFF, 0xFF, 0xFF},
+					style,
+					0.5,
+					6,
+					age / 3,
+				)
+			} else {
+				dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
+				visual_fg[id].fg = engine.gradient_between_step(
+					engine.Color{0xFF, 0xFF, 0xFF},
+					dim,
+					6,
+					age / 3,
+				)
+			}
 			any_collapse = true
 		} else {
 			visible[id] = false

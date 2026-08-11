@@ -83,9 +83,11 @@ Burn_State :: struct {
 	next_smoke:        int,
 	render_ids:        [dynamic]engine.Char_Id,
 	tick:              int,
+	color_handling:    engine.Existing_Color_Handling,
 }
 
 burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -174,10 +176,19 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	fire_ticks := len(s.fire_palette) * 4
 	final_ticks :: 36 // 9 entries, four frames each
 	active := s.next_character < len(s.order)
-	for start_tick in s.start_ticks {
-		if start_tick >= 0 && s.tick - start_tick < fire_ticks + final_ticks {
-			active = true
-			break
+	for start_tick, i in s.start_ticks {
+		if start_tick >= 0 {
+			id := s.characters[i]
+			life := final_ticks
+			if s.color_handling == .Dynamic &&
+			   e.chars.input_style[id].fg == nil &&
+			   e.chars.input_style[id].bg == nil {
+				life = 4
+			}
+			if s.tick - start_tick < fire_ticks + life {
+				active = true
+				break
+			}
 		}
 	}
 	if !active {
@@ -212,12 +223,22 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		} else {
 			if age == fire_ticks do burn_emit_smoke(s, e, i)
 			visual_symbols[id].symbol = input_symbols[id]
-			visual_fg[id].fg = engine.gradient_between_step(
-				s.fire_palette[len(s.fire_palette) - 1],
-				s.final_colors[i],
-				8,
-				min((age - fire_ticks) / 4, 8),
-			)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&visual_fg[id],
+					s.fire_palette[len(s.fire_palette) - 1],
+					e.chars.input_style[id],
+					8,
+					min((age - fire_ticks) / 4, 8),
+				)
+			} else {
+				visual_fg[id].fg = engine.gradient_between_step(
+					s.fire_palette[len(s.fire_palette) - 1],
+					s.final_colors[i],
+					8,
+					min((age - fire_ticks) / 4, 8),
+				)
+			}
 		}
 	}
 

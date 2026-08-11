@@ -70,21 +70,22 @@ bouncyballs_parse :: proc(cfg: ^Bouncyballs_Config, args: []string) -> bool {
 }
 
 Bouncyballs_State :: struct {
-	config:       Bouncyballs_Config,
-	characters:   [dynamic]engine.Char_Id,
-	index_by_id:  [dynamic]int,
-	final_colors: [dynamic]engine.Color,
-	ball_colors:  [dynamic]engine.Color,
-	ball_symbols: [dynamic]string,
-	origins:      [dynamic]engine.Coord,
-	max_steps:    [dynamic]int,
-	start_ticks:  [dynamic]int,
-	row_groups:   engine.Char_Groups,
-	next_group:   int,
-	pending:      [dynamic]engine.Char_Id,
-	active_slots: [dynamic]int,
-	ball_delay:   int,
-	tick:         int,
+	config:         Bouncyballs_Config,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	final_colors:   [dynamic]engine.Color,
+	ball_colors:    [dynamic]engine.Color,
+	ball_symbols:   [dynamic]string,
+	origins:        [dynamic]engine.Coord,
+	max_steps:      [dynamic]int,
+	start_ticks:    [dynamic]int,
+	row_groups:     engine.Char_Groups,
+	next_group:     int,
+	pending:        [dynamic]engine.Char_Id,
+	active_slots:   [dynamic]int,
+	ball_delay:     int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
@@ -105,6 +106,7 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	s.row_groups = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.ball_colors = make([dynamic]engine.Color, n)
@@ -175,12 +177,23 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 			e.chars.visual[id].symbol = e.chars.input_symbol[id]
 			fade_tick := age - (s.max_steps[slot] - 1)
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.ball_colors[slot],
-				s.final_colors[slot],
-				10,
-				min(fade_tick / 6, 10),
-			)
+			fade_step := min(fade_tick / 6, 10)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					s.ball_colors[slot],
+					e.chars.input_style[id],
+					10,
+					fade_step,
+				)
+			} else {
+				e.chars.visual[id].fg = engine.gradient_between_step(
+					s.ball_colors[slot],
+					s.final_colors[slot],
+					10,
+					fade_step,
+				)
+			}
 		}
 		if age + 1 < s.max_steps[slot] + 65 {
 			s.active_slots[write] = slot

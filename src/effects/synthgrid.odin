@@ -108,6 +108,7 @@ Synthgrid_State :: struct {
 	active_limit:            int,
 	tick:                    int,
 	phase:                   Synthgrid_Phase,
+	color_handling:          engine.Existing_Color_Handling,
 }
 
 // Same build-time gap selection as TerminalTextEffects. The resulting grid is
@@ -304,6 +305,7 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 	}
 
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.color_handling = e.cfg.existing_color_handling
 	s.start_ticks = make([dynamic]int, len(e.chars))
 	s.group_by_id = make([dynamic]int, len(e.chars))
 	s.generation_slot_by_id = make([dynamic]int, len(e.chars))
@@ -387,7 +389,11 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char
 				visual_fg[id].fg = s.generation_colors[index]
 			} else {
 				visual_symbols[id].symbol = input_symbols[id]
-				visual_fg[id].fg = is_fill[id] ? nil : s.final_colors[id]
+				if s.color_handling == .Dynamic {
+					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+				} else {
+					visual_fg[id].fg = is_fill[id] ? nil : s.final_colors[id]
+				}
 				if age == frame_count * 2 {
 					s.start_ticks[id] = -2
 					group := s.group_by_id[id]

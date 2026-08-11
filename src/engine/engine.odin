@@ -11,6 +11,7 @@ import "core:slice"
 import "core:strconv"
 import "core:strings"
 import "core:sys/linux"
+import ansi "core:terminal/ansi"
 import "core:time"
 import "core:unicode/utf8"
 
@@ -56,7 +57,9 @@ anchor_parse :: proc(s: string) -> (Anchor, bool) {
 
 Terminal_Config :: struct {
 	tab_width:                  int,
+	xterm_colors:               bool,
 	no_color:                   bool,
+	existing_color_handling:    Existing_Color_Handling,
 	wrap_text:                  bool,
 	frame_rate:                 int,
 	max_frames:                 Maybe(int),
@@ -69,6 +72,27 @@ Terminal_Config :: struct {
 	no_eol:                     bool,
 	no_restore_cursor:          bool,
 	terminal_background_color:  Color,
+}
+
+// Existing input colors are either ignored, held at the renderer boundary, or
+// consumed by an effect's own final lanes. Dynamic intentionally stays an
+// effect decision: a global override would hide temporary effect visuals.
+Existing_Color_Handling :: enum {
+	Ignore,
+	Always,
+	Dynamic,
+}
+
+existing_color_handling_parse :: proc(s: string) -> (Existing_Color_Handling, bool) {
+	switch s {
+	case "ignore":
+		return .Ignore, true
+	case "always":
+		return .Always, true
+	case "dynamic":
+		return .Dynamic, true
+	}
+	return .Ignore, false
 }
 
 // SIGWINCH only records a signal-safe flag. The interactive run loop consumes
@@ -176,193 +200,142 @@ Visual :: struct {
 	bold:   bool,
 }
 
+// Captured once while the input mini-terminal is built. It is immutable after
+// construction, so the renderer and direct effect lanes can read it without
+// any animation bookkeeping.
+Input_Style :: struct {
+	fg, bg: Maybe(Color),
+	bold:   bool,
+}
+
+// Dynamic color handling is an input-style data transform, not a timeline.
+// Effects own when they call these helpers; they simply avoid repeating the
+// same nullable FG/BG writes in every direct next loop.
+dynamic_apply_input_colors :: #force_inline proc(visual: ^Visual, input: Input_Style) {
+	visual.fg = input.fg
+	visual.bg = input.bg
+}
+
+// Lerp both source colour lanes with the established, stepped gradient rule.
+// The caller owns the tick-to-step conversion and all phase lifetime policy.
+dynamic_gradient_to_input :: #force_inline proc(
+	visual: ^Visual,
+	start: Color,
+	input: Input_Style,
+	steps, step: int,
+) {
+	if fg, ok := input.fg.?; ok {
+		visual.fg = gradient_between_step(start, fg, steps, step)
+	} else {
+		visual.fg = nil
+	}
+	if bg, ok := input.bg.?; ok {
+		visual.bg = gradient_between_step(start, bg, steps, step)
+	} else {
+		visual.bg = nil
+	}
+}
+
+// Binarypath's collapse target is the source style darkened in both lanes.
+// Keep that exceptional transform here rather than open-coding nullable lanes.
+dynamic_gradient_to_dimmed_input :: #force_inline proc(
+	visual: ^Visual,
+	start: Color,
+	input: Input_Style,
+	brightness: f64,
+	steps, step: int,
+) {
+	if fg, ok := input.fg.?; ok {
+		visual.fg = gradient_between_step(
+			start,
+			adjust_color_brightness(fg, brightness),
+			steps,
+			step,
+		)
+	} else {
+		visual.fg = nil
+	}
+	if bg, ok := input.bg.?; ok {
+		visual.bg = gradient_between_step(
+			start,
+			adjust_color_brightness(bg, brightness),
+			steps,
+			step,
+		)
+	} else {
+		visual.bg = nil
+	}
+}
+
 Frame :: struct {
 	visual:   Visual,
 	duration: int,
 }
 
-Scene :: struct {
-	frames:      #soa[dynamic]Frame,
-	frame_index: int,
-	frame_tick:  int,
-}
+// Effect-owned frame lanes use this contiguous SoA storage. Construction is
+// shared; each effect owns activation, tick arithmetic, and completion.
+Frame_Timeline :: #soa[dynamic]Frame
 
-scene_complete :: proc(s: Scene) -> bool {
-	return s.frame_index >= len(s.frames)
-}
-
-scene_add_frame :: proc(
-	s: ^Scene,
-	symbol: string,
+timeline_append_frame :: #force_inline proc(
+	frames: ^Frame_Timeline,
+	visual: Visual,
 	duration: int,
-	fg, bg: Maybe(Color),
-	bold: bool,
 ) {
 	assert(duration >= 1)
-	append(&s.frames, Frame{Visual{symbol, fg, bg, bold}, duration})
+	append(frames, Frame{visual, duration})
 }
 
-// Upstream apply_gradient_to_symbols over a fg/bg spectrum pair.
-scene_add_gradient :: proc(
-	s: ^Scene,
-	symbols: []string,
+create_hold_timeline :: proc(
+	frames: ^Frame_Timeline,
+	visual: Visual,
+	duration, count: int,
+) -> Span {
+	assert(count >= 1)
+	start := len(frames^)
+	for _ in 0 ..< count do timeline_append_frame(frames, visual, duration)
+	return {start, count}
+}
+
+create_gradient_timeline :: proc(
+	frames: ^Frame_Timeline,
+	symbol: string,
 	duration: int,
-	fg_spectrum, bg_spectrum: []Color,
-) {
-	pairs := gradient_pairs(fg_spectrum, bg_spectrum)
-	defer delete(pairs[:])
-	assert(len(symbols) > 0)
-	assert(len(pairs) > 0)
-	// Match Animation.apply_gradient_to_symbols: distribute the shorter input
-	// in contiguous runs across the longer one. Round-robin symbol selection
-	// turns a beam's fat-to-thin profile into scattered glyphs.
-	repeat_factor: int
-	overflow_count: int
-	overflow_used := false
-	small_index := 0
-	current_repeat := 0
-	if len(symbols) >= len(pairs) {
-		repeat_factor = len(symbols) / len(pairs)
-		overflow_count = len(symbols) % len(pairs)
-		for sym in symbols {
-			if current_repeat >= repeat_factor {
-				if overflow_count > 0 {
-					if overflow_used {
-						small_index += 1
-						current_repeat = 0
-						overflow_used = false
-					} else {
-						overflow_used = true
-						overflow_count -= 1
-					}
-				} else {
-					small_index += 1
-					current_repeat = 0
-				}
-			}
-			current_repeat += 1
-			p := pairs[small_index]
-			scene_add_frame(s, sym, duration, p.fg, p.bg, false)
-		}
-	} else {
-		repeat_factor = len(pairs) / len(symbols)
-		overflow_count = len(pairs) % len(symbols)
-		for i in 0 ..< len(pairs) {
-			if current_repeat >= repeat_factor {
-				if overflow_count > 0 {
-					if overflow_used {
-						small_index += 1
-						current_repeat = 0
-						overflow_used = false
-					} else {
-						overflow_used = true
-						overflow_count -= 1
-					}
-				} else {
-					small_index += 1
-					current_repeat = 0
-				}
-			}
-			current_repeat += 1
-			p := pairs[i]
-			scene_add_frame(s, symbols[small_index], duration, p.fg, p.bg, false)
-		}
+	start, end: Color,
+	steps: int,
+) -> Span {
+	assert(steps >= 1)
+	timeline_start := len(frames^)
+	for step in 0 ..= steps {
+		timeline_append_frame(
+			frames,
+			Visual{symbol, gradient_between_step(start, end, steps, step), nil, false},
+			duration,
+		)
 	}
+	return {timeline_start, steps + 1}
 }
 
-// Cyclic distribution of the larger spectrum over the smaller, upstream style.
-gradient_pairs :: proc(fg, bg: []Color) -> [dynamic]Color_Pair {
-	pairs: [dynamic]Color_Pair
-	cyclic :: proc(pairs: ^[dynamic]Color_Pair, larger, smaller: []Color, larger_is_fg: bool) {
-		repeat_factor := len(larger) / len(smaller)
-		overflow_count := len(larger) % len(smaller)
-		overflow_used := false
-		small_index := 0
-		current_repeat := 0
-		for element in larger {
-			if current_repeat >= repeat_factor {
-				if overflow_count > 0 {
-					if overflow_used {
-						small_index += 1
-						current_repeat = 0
-						overflow_used = false
-					} else {
-						overflow_used = true
-						overflow_count -= 1
-					}
-				} else {
-					small_index += 1
-					current_repeat = 0
-				}
-			}
-			current_repeat += 1
-			other := smaller[small_index]
-			p := larger_is_fg ? Color_Pair{element, other} : Color_Pair{other, element}
-			append(pairs, p)
-		}
-	}
-	switch {
-	case len(fg) > 0 && len(bg) > 0:
-		if len(fg) >= len(bg) {
-			cyclic(&pairs, fg, bg, true)
-		} else {
-			cyclic(&pairs, bg, fg, false)
-		}
-	case len(fg) > 0:
-		for c in fg do append(&pairs, Color_Pair{c, nil})
-	case:
-		for c in bg do append(&pairs, Color_Pair{nil, c})
-	}
-	return pairs
-}
-
-scene_reset :: proc(s: ^Scene) {
-	s.frame_index, s.frame_tick = 0, 0
-}
-
-// First visual of the remaining queue (resume semantics).
-scene_first_visual :: proc(s: Scene) -> Visual {
-	assert(len(s.frames) > 0)
-	return s.frames[s.frame_index].visual
-}
-
-scene_next_visual :: proc(s: ^Scene) -> Visual {
-	i := s.frame_index
-	v := s.frames[i].visual
-	s.frame_tick += 1
-	if s.frame_tick == s.frames.duration[i] {
-		s.frame_tick = 0
-		s.frame_index += 1
-	}
-	return v
-}
-
-scene_reset_if_complete :: proc(s: ^Scene) -> bool {
-	if !scene_complete(s^) do return false
-	scene_reset(s)
-	return true
-}
-
-step_animation :: proc(s: ^Scene) -> (Visual, bool) {
-	assert(len(s.frames) > 0, "step_animation: empty scene")
-	visual := scene_next_visual(s)
-	return visual, scene_reset_if_complete(s)
+create_timeline :: proc {
+	create_hold_timeline,
+	create_gradient_timeline,
 }
 
 Character :: struct {
-	character_id:    int,
-	input_symbol:    string,
-	input_coord:     Coord,
-	is_visible:      bool,
-	is_fill:         bool,
-	layer:           int,
-	current_coord:   Coord,
-	visual:          Visual,
+	character_id:                  int,
+	input_symbol:                  string,
+	input_coord:                   Coord,
+	is_visible:                    bool,
+	is_fill:                       bool,
+	layer:                         int,
+	current_coord:                 Coord,
+	visual:                        Visual,
+	input_style:                   Input_Style,
+	uses_input_preexisting_colors: bool,
 	// Allocation-free derived render column. Logical appearance remains in the
 	// visual above; cached records which visual render_code was built from.
-	render_code:     [64]byte,
-	render_code_len: u8,
-	cached:          Visual,
+	render_code:                   [64]byte,
+	render_code_len:               u8,
+	cached:                        Visual,
 }
 
 Character_Storage :: #soa[dynamic]Character
@@ -487,7 +460,11 @@ engine_make :: proc(
 	input: string,
 	cfg: Terminal_Config,
 	formatted_allocator: mem.Allocator,
-) -> Engine {
+) -> (
+	Engine,
+	string,
+	bool,
+) {
 	e: Engine
 	e.cfg = cfg
 	e.frame_rate = cfg.frame_rate
@@ -495,8 +472,12 @@ engine_make :: proc(
 	e.mono_start = time.tick_now()
 	e.last_print = time.tick_now()
 
-	text := input == "" ? "No Input." : input
-	lines := preprocess_input(text, cfg.tab_width)
+	input_text := input
+	if input_text == "" {
+		input_text = "No Input."
+	}
+	lines, input_error, input_ok := preprocess_input(input_text, cfg.tab_width)
+	if !input_ok do return {}, input_error, false
 
 	term_w, term_h := terminal_dimensions()
 	e.terminal_width, e.terminal_height = term_w, term_h
@@ -514,8 +495,8 @@ engine_make :: proc(
 	e.visible_left = max(e.canvas.left + e.col_offset, 1)
 	e.move_to_top = fmt.aprintf(
 		"%s%s%s",
-		ANSI_RESTORE_CURSOR,
-		ANSI_SAVE_CURSOR,
+		ansi.DECRC,
+		ansi.DECSC,
 		move_cursor_up(max(e.visible_top, 0)),
 		allocator = formatted_allocator,
 	)
@@ -549,7 +530,7 @@ engine_make :: proc(
 		e.render_cells[(c.row - 1) * e.canvas.right + (c.column - 1)] = i32(id)
 	}
 	make_fill_characters(&e)
-	return e
+	return e, "", true
 }
 
 unix_seconds :: proc(t: time.Time) -> f64 {
@@ -706,58 +687,65 @@ canvas_offsets :: proc(cfg: Terminal_Config, canvas: Canvas, term_w, term_h: int
 }
 
 // ---------------------------------------------------------------------------
-// input preprocessing — plain text; escape sequences skipped, cursor moves
-// honored, no SGR state tracked.
+// input preprocessing — a small build-time terminal which captures terminal
+// SGR state alongside each cell. The hot animation/render loops only read the
+// resulting immutable columns.
 // ---------------------------------------------------------------------------
 
+Input_Cell :: struct {
+	symbol: rune,
+	style:  Input_Style,
+}
+
 Line :: struct {
-	cells: [dynamic]rune,
+	cells: [dynamic]Input_Cell,
 	width: int,
 }
 
-preprocess_input :: proc(input: string, tab_width: int) -> []Line {
+input_style_has_color :: #force_inline proc(style: Input_Style) -> bool {
+	return style.fg != nil || style.bg != nil
+}
+
+preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, string, bool) {
 	lines: [dynamic]Line
 	append(&lines, Line{})
 	row, col := 0, 0
+	active: Input_Style
+	standard_fg: Maybe(int)
 
 	ensure :: proc(lines: ^[dynamic]Line, row, col: int) {
 		for len(lines^) <= row do append(lines, Line{})
 		l := &lines^[row]
-		for len(l.cells) <= col do append(&l.cells, ' ')
+		for len(l.cells) <= col do append(&l.cells, Input_Cell{symbol = ' '})
 	}
 
 	runes := to_runes(input)
+	defer delete(runes)
 	i := 0
 	for i < len(runes) {
 		r := runes[i]
 		if r == '\x1b' {
-			end := skip_escape(runes, i)
-			if end < 0 {
-				i += 1
-				continue
+			end, matched := match_input_escape(runes, i)
+			if !matched do return nil, "unsupported ANSI escape sequence in input", false
+			if runes[i + 1] != '[' {
+				return nil, "unsupported ANSI escape sequence in input", false
 			}
-			if runes[i + 1] == '[' && end - 1 > i + 1 {
-				final := runes[end - 1]
-				params := runes[i + 2:end - 1]
-				d := csi_default_param(params)
-				switch final {
-				case 'A':
-					row = max(0, row - d)
-				case 'B':
-					row += d
-				case 'C':
-					col += d
-				case 'D':
-					col = max(0, col - d)
-				case 'E':
-					row += d; col = 0
-				case 'F':
-					row = max(0, row - d); col = 0
-				case 'G':
-					col = max(0, d - 1)
-				case 'H', 'f':
-					row = max(0, csi_param(params, 0) - 1)
-					col = max(0, csi_param(params, 1) - 1)
+			final := runes[end - 1]
+			params_end := i + 2
+			for params_end < end - 1 &&
+			    runes[params_end] >= '\x30' &&
+			    runes[params_end] <= '\x3f' {
+				params_end += 1
+			}
+			params := runes[i + 2:params_end]
+			intermediates := runes[params_end:end - 1]
+			if final == 'm' {
+				if len(intermediates) != 0 || !input_apply_sgr(params, &active, &standard_fg) {
+					return nil, "unsupported ANSI SGR sequence in input", false
+				}
+			} else if !input_private_mode(params, intermediates, final) {
+				if !input_apply_cursor(params, intermediates, final, &row, &col) {
+					return nil, "unsupported ANSI cursor sequence in input", false
 				}
 			}
 			i = end
@@ -783,7 +771,7 @@ preprocess_input :: proc(input: string, tab_width: int) -> []Line {
 		}
 		for _ in 0 ..< count {
 			ensure(&lines, row, col)
-			lines[row].cells[col] = symbol
+			lines[row].cells[col] = {symbol, active}
 			col += 1
 		}
 		i += 1
@@ -791,11 +779,15 @@ preprocess_input :: proc(input: string, tab_width: int) -> []Line {
 
 	for &l in lines do l.width = len(l.cells)
 	for &l in lines {
-		for l.width > 0 && l.cells[l.width - 1] == ' ' do l.width -= 1
+		for l.width > 0 {
+			last := l.cells[l.width - 1]
+			if last.symbol != ' ' || input_style_has_color(last.style) do break
+			l.width -= 1
+		}
 	}
 	for len(lines) > 0 && lines[len(lines) - 1].width == 0 do pop(&lines)
 	if len(lines) == 0 do append(&lines, Line{width = 0})
-	return lines[:]
+	return lines[:], "", true
 }
 
 to_runes :: proc(s: string) -> []rune {
@@ -804,23 +796,141 @@ to_runes :: proc(s: string) -> []rune {
 	return out[:]
 }
 
-skip_escape :: proc(runes: []rune, start: int) -> int {
-	if start + 1 >= len(runes) do return -1
+// This mirrors ttfx's input regex: OSC/CSI are matched first, then ESC plus
+// one non-newline codepoint. The caller deliberately rejects non-CSI matches.
+match_input_escape :: proc(runes: []rune, start: int) -> (int, bool) {
+	if start + 1 >= len(runes) || runes[start + 1] == '\n' do return 0, false
 	if runes[start + 1] == ']' {
 		t := start + 2
 		for t < len(runes) && runes[t] != '\x07' do t += 1
-		if t < len(runes) do return t + 1
-		return -1
+		if t < len(runes) do return t + 1, true
+		for t := len(runes) - 2; t >= start + 2; t -= 1 {
+			if runes[t] == '\x1b' && runes[t + 1] == '\\' do return t + 2, true
+		}
 	}
 	if runes[start + 1] == '[' {
 		t := start + 2
 		for t < len(runes) && runes[t] >= '\x30' && runes[t] <= '\x3f' do t += 1
 		for t < len(runes) && runes[t] >= '\x20' && runes[t] <= '\x2f' do t += 1
-		if t < len(runes) && runes[t] >= '\x40' && runes[t] <= '\x7e' do return t + 1
-		return -1
+		if t < len(runes) && runes[t] >= '\x40' && runes[t] <= '\x7e' do return t + 1, true
 	}
-	if runes[start + 1] != '\n' do return start + 2
-	return -1
+	return start + 2, true
+}
+
+input_private_mode :: proc(params, intermediates: []rune, final: rune) -> bool {
+	if len(intermediates) != 0 || len(params) != 3 || params[0] != '?' do return false
+	if final != 'h' && final != 'l' do return false
+	return (params[1] == '2' && params[2] == '5') || (params[1] == '7' && params[2] == '0')
+}
+
+input_apply_cursor :: proc(params, intermediates: []rune, final: rune, row, col: ^int) -> bool {
+	if len(intermediates) != 0 || (len(params) > 0 && params[0] == '?') do return false
+	for p in params {
+		if (p < '0' || p > '9') && p != ';' do return false
+	}
+	d := csi_default_param(params)
+	switch final {
+	case 'A':
+		row^ = max(0, row^ - d)
+	case 'B':
+		row^ += d
+	case 'C':
+		col^ += d
+	case 'D':
+		col^ = max(0, col^ - d)
+	case 'E':
+		row^ += d; col^ = 0
+	case 'F':
+		row^ = max(0, row^ - d); col^ = 0
+	case 'G':
+		col^ = max(0, d - 1)
+	case 'H', 'f':
+		row^ = max(0, csi_param(params, 0) - 1)
+		col^ = max(0, csi_param(params, 1) - 1)
+	case:
+		return false
+	}
+	return true
+}
+
+input_apply_sgr :: proc(params: []rune, active: ^Input_Style, standard_fg: ^Maybe(int)) -> bool {
+	values: [dynamic]int
+	defer delete(values[:])
+	if len(params) == 0 {
+		append(&values, 0)
+	} else {
+		value := 0
+		for p in params {
+			if p == ';' {
+				append(&values, value)
+				value = 0
+			} else if p >= '0' && p <= '9' {
+				value = value * 10 + int(p - '0')
+			} else {
+				return false
+			}
+		}
+		append(&values, value)
+	}
+
+	i := 0
+	for i < len(values) {
+		p := values[i]
+		switch {
+		case p == 0:
+			active^ = {}
+			standard_fg^ = nil
+		case p == 1:
+			active.bold = true
+			if standard, ok := standard_fg^.?; ok do active.fg = xterm_to_rgb(u8(standard - 30 + 8))
+		case p == 22:
+			active.bold = false
+			if standard, ok := standard_fg^.?; ok do active.fg = xterm_to_rgb(u8(standard - 30))
+		case p == 39:
+			active.fg = nil
+			standard_fg^ = nil
+		case p == 49:
+			active.bg = nil
+		case p >= 30 && p <= 37:
+			active.fg = xterm_to_rgb(u8(p - 30 + (active.bold ? 8 : 0)))
+			standard_fg^ = p
+		case p >= 90 && p <= 97:
+			active.fg = xterm_to_rgb(u8(p - 90 + 8))
+			standard_fg^ = nil
+		case p >= 40 && p <= 47:
+			active.bg = xterm_to_rgb(u8(p - 40))
+		case p >= 100 && p <= 107:
+			active.bg = xterm_to_rgb(u8(p - 100 + 8))
+		case p == 38 || p == 48:
+			if i + 1 >= len(values) do return false
+			is_fg := p == 38
+			mode := values[i + 1]
+			color: Color
+			switch mode {
+			case 5:
+				if i + 2 >= len(values) || values[i + 2] < 0 || values[i + 2] > 255 do return false
+				color = xterm_to_rgb(u8(values[i + 2]))
+				i += 2
+			case 2:
+				if i + 4 >= len(values) do return false
+				for component in values[i + 2:i + 5] {
+					if component < 0 || component > 255 do return false
+				}
+				color = {u8(values[i + 2]), u8(values[i + 3]), u8(values[i + 4])}
+				i += 4
+			case:
+				return false
+			}
+			if is_fg {
+				active.fg = color
+				standard_fg^ = nil
+			} else {
+				active.bg = color
+			}
+		}
+		i += 1
+	}
+	return true
 }
 
 csi_param :: proc(params: []rune, index: int) -> int {
@@ -857,11 +967,11 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			current := line
 			for current.width > e.canvas.right {
 				part: Line
-				part.cells = make([dynamic]rune, e.canvas.right)
+				part.cells = make([dynamic]Input_Cell, e.canvas.right)
 				copy(part.cells[:], current.cells[:e.canvas.right])
 				part.width = e.canvas.right
 				append(&wrapped, part)
-				remainder := make([dynamic]rune, len(current.cells) - e.canvas.right)
+				remainder := make([dynamic]Input_Cell, len(current.cells) - e.canvas.right)
 				copy(remainder[:], current.cells[e.canvas.right:])
 				current.cells = remainder
 				current.width -= e.canvas.right
@@ -874,20 +984,22 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 	input_height := len(formatted)
 	for line, row_index in formatted {
 		for col0 in 0 ..< line.width {
-			r := line.cells[col0]
+			cell := line.cells[col0]
 			id := e.next_character_id
 			e.next_character_id += 1
-			if r == ' ' {
+			if cell.symbol == ' ' && !input_style_has_color(cell.style) {
 				// upstream allocates ids for spaces too; they become fills
 				continue
 			}
-			sym := rune_to_string(r)
+			sym := rune_to_string(cell.symbol)
 			c: Character
 			c.character_id = id
 			c.input_symbol = sym
 			c.input_coord = coord(col0 + 1, input_height - row_index)
 			c.current_coord = c.input_coord
 			c.visual.symbol = sym
+			c.input_style = cell.style
+			c.uses_input_preexisting_colors = true
 			append(&e.chars, c)
 			append(&e.character_sets.input, Char_Id(len(e.chars) - 1))
 		}
@@ -1220,18 +1332,43 @@ update_render_cells :: proc(e: ^Engine, candidates: []Char_Id = nil) -> (int, in
 	return width, height
 }
 
+effective_visual :: #force_inline proc(
+	raw: Visual,
+	input_style: Input_Style,
+	uses_input_preexisting_colors: bool,
+	handling: Existing_Color_Handling,
+) -> Visual {
+	if handling != .Always || !uses_input_preexisting_colors do return raw
+	out := raw
+	out.fg = input_style.fg
+	out.bg = input_style.bg
+	out.bold = input_style.bold
+	return out
+}
+
 // A stable character can still change its terminal bytes: color effects and
 // scene playback commonly update a visual in place. The cell id alone is not
-// a sufficient dirty key, so compare its visual with the per-character code
-// cache used by the renderer.
+// a sufficient dirty key, so compare its effective renderer visual with the
+// per-character code cache.
 render_cell_dirty :: #force_inline proc(
 	cell, previous_cell: i32,
 	visuals, cached: [^]Visual,
+	input_styles: [^]Input_Style,
+	uses_input_preexisting_colors: [^]bool,
+	handling: Existing_Color_Handling,
 ) -> bool {
 	if cell != previous_cell do return true
 	if cell == EMPTY_CELL do return false
 	id := int(cell)
-	return visuals[id] != cached[id]
+	return(
+		effective_visual(
+			visuals[id],
+			input_styles[id],
+			uses_input_preexisting_colors[id],
+			handling,
+		) !=
+		cached[id] \
+	)
 }
 
 // Build the frame into e.out_buf, top row first.
@@ -1242,6 +1379,8 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 	min_cap := width * height
 	if cap(buf^) < min_cap do reserve(buf, min_cap)
 	visuals := e.chars.visual
+	input_styles := e.chars.input_style
+	uses_input_preexisting_colors := e.chars.uses_input_preexisting_colors
 	render_codes := e.chars.render_code
 	render_code_lens := e.chars.render_code_len
 	cached := e.chars.cached
@@ -1254,7 +1393,15 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 		column := 0
 		for column < width {
 			for column < width {
-				if render_cell_dirty(row_cells[column], previous_row[column], visuals, cached) {
+				if render_cell_dirty(
+					row_cells[column],
+					previous_row[column],
+					visuals,
+					cached,
+					input_styles,
+					uses_input_preexisting_colors,
+					e.cfg.existing_color_handling,
+				) {
 					break
 				}
 				column += 1
@@ -1262,27 +1409,40 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 			if column == width do break
 
 			if screen_row > cursor_row {
-				append(buf, '\x1b', '[')
+				append(buf, ansi.CSI)
 				buf_append_decimal(buf, screen_row - cursor_row)
-				append(buf, 'E') // cursor next line(s), column 1
+				append(buf, ansi.CNL)
 				cursor_row, cursor_column = screen_row, 0
 			}
 			if column > cursor_column {
-				append(buf, '\x1b', '[')
+				append(buf, ansi.CSI)
 				buf_append_decimal(buf, column - cursor_column)
-				append(buf, 'C')
+				append(buf, ansi.CUF)
 				cursor_column = column
 			}
 
 			for column < width &&
-			    render_cell_dirty(row_cells[column], previous_row[column], visuals, cached) {
+			    render_cell_dirty(
+				    row_cells[column],
+				    previous_row[column],
+				    visuals,
+				    cached,
+				    input_styles,
+				    uses_input_preexisting_colors,
+				    e.cfg.existing_color_handling,
+			    ) {
 				cell := row_cells[column]
 				previous_row[column] = cell
 				if cell == EMPTY_CELL {
 					append(buf, ' ')
 				} else {
 					id := int(cell)
-					visual := visuals[id]
+					visual := effective_visual(
+						visuals[id],
+						input_styles[id],
+						uses_input_preexisting_colors[id],
+						e.cfg.existing_color_handling,
+					)
 					symbol := visual.symbol
 					if e.cfg.no_color {
 						append(buf, ..transmute([]byte)symbol)
@@ -1293,19 +1453,19 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 						code: [dynamic; 64]byte
 						styled := false
 						if bold {
-							append(&code, ..transmute([]byte)ANSI_BOLD)
+							append(&code, ansi.CSI + ansi.BOLD + ansi.SGR)
 							styled = true
 						}
 						if fg != nil {
-							buf_append_sgr_color(&code, 38, fg.?)
+							buf_append_sgr_color(&code, 38, fg.?, e.cfg.xterm_colors)
 							styled = true
 						}
 						if bg != nil {
-							buf_append_sgr_color(&code, 48, bg.?)
+							buf_append_sgr_color(&code, 48, bg.?, e.cfg.xterm_colors)
 							styled = true
 						}
 						append(&code, ..transmute([]byte)symbol)
-						if styled do append(&code, ..transmute([]byte)ANSI_RESET_ALL)
+						if styled do append(&code, ansi.CSI + ansi.RESET + ansi.SGR)
 						// A visual is one UTF-8 rune (at most four bytes) plus two
 						// truecolor SGR sequences, bold, and reset: < 64 bytes by the
 						// parser's symbol contract. Keep this structural bound checked.
@@ -1325,7 +1485,7 @@ frame_build :: proc(e: ^Engine, candidates: []Char_Id = nil) {
 }
 
 prep_canvas :: proc(reuse_canvas: bool, move_to_top: string, visible_right, visible_top: int) {
-	os.write_string(os.stdout, ANSI_HIDE_CURSOR)
+	os.write_string(os.stdout, ansi.CSI + ansi.DECTCEM_HIDE)
 	if reuse_canvas do os.write_string(os.stdout, move_to_top)
 	blank := strings.repeat(" ", max(visible_right, 0))
 	defer delete(blank)
@@ -1333,7 +1493,7 @@ prep_canvas :: proc(reuse_canvas: bool, move_to_top: string, visible_right, visi
 		os.write_string(os.stdout, blank)
 		os.write_string(os.stdout, "\n")
 	}
-	os.write_string(os.stdout, ANSI_SAVE_CURSOR)
+	os.write_string(os.stdout, ansi.DECSC)
 }
 
 print_frame :: proc(move_to_top: string, output: []byte) {
@@ -1345,9 +1505,9 @@ print_frame :: proc(move_to_top: string, output: []byte) {
 // A settled resize ends the current run. Keep the cursor hidden and return to
 // the top of the old drawing area so the replacement engine draws in place.
 reset_canvas_area :: proc(visible_top: int) {
-	os.write_string(os.stdout, ANSI_RESTORE_CURSOR)
+	os.write_string(os.stdout, ansi.DECRC)
 	if visible_top > 0 do os.write_string(os.stdout, move_cursor_up(visible_top))
-	os.write_string(os.stdout, ANSI_CLEAR_TO_END)
+	os.write_string(os.stdout, ansi.CSI + "0" + ansi.ED)
 	os.flush(os.stdout)
 }
 
@@ -1355,8 +1515,8 @@ restore_cursor :: proc(no_restore_cursor, no_eol: bool) {
 	// Delta frames can leave the terminal at any dirty cell. The saved DEC
 	// position is the canvas bottom established by prep_canvas, so return there
 	// before completing just as a full-frame renderer naturally would.
-	os.write_string(os.stdout, ANSI_RESTORE_CURSOR)
-	if !no_restore_cursor do os.write_string(os.stdout, ANSI_SHOW_CURSOR)
+	os.write_string(os.stdout, ansi.DECRC)
+	if !no_restore_cursor do os.write_string(os.stdout, ansi.CSI + ansi.DECTCEM_SHOW)
 	if !no_eol do os.write_string(os.stdout, "\n")
 	os.flush(os.stdout)
 }

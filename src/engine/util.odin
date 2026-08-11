@@ -6,6 +6,7 @@ import "core:math/ease"
 import "core:math/linalg"
 import "core:strconv"
 import "core:strings"
+import ansi "core:terminal/ansi"
 
 // ---------------------------------------------------------------------------
 // geometry
@@ -476,18 +477,6 @@ eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease
 // ansi
 // ---------------------------------------------------------------------------
 
-ANSI_SAVE_CURSOR: string = "\x1b7"
-ANSI_RESTORE_CURSOR: string = "\x1b8"
-ANSI_HIDE_CURSOR: string = "\x1b[?25l"
-ANSI_SHOW_CURSOR: string = "\x1b[?25h"
-ANSI_RESET_ALL: string = "\x1b[0m"
-ANSI_CLEAR_TO_END: string = "\x1b[0J"
-ANSI_BOLD: string = "\x1b[1m"
-ANSI_ITALIC: string = "\x1b[3m"
-ANSI_UNDERLINE: string = "\x1b[4m"
-ANSI_BLINK: string = "\x1b[5m"
-ANSI_REVERSE: string = "\x1b[7m"
-
 buf_append_decimal :: proc(buf: ^$Buffer, v: int) {
 	if v >= 100 {
 		append(buf, byte('0') + byte(v / 100))
@@ -498,18 +487,43 @@ buf_append_decimal :: proc(buf: ^$Buffer, v: int) {
 	append(buf, byte('0') + byte(v % 10))
 }
 
-buf_append_sgr_color :: proc(buf: ^$Buffer, selector: int, c: Color) {
-	append(buf, '\x1b', '[')
+color_to_xterm :: proc(c: Color) -> u8 {
+	// Match ttfx's hexterm.py: mean absolute RGB distance, first code wins ties.
+	// The division by three is order preserving, so the integer sum is enough.
+	best_code := 0
+	best_distance := 3 * 255 + 1
+	for code in 0 ..< 256 {
+		candidate := xterm_to_rgb(u8(code))
+		distance :=
+			abs(int(c.r) - int(candidate.r)) +
+			abs(int(c.g) - int(candidate.g)) +
+			abs(int(c.b) - int(candidate.b))
+		if distance < best_distance {
+			best_distance = distance
+			best_code = code
+		}
+	}
+	return u8(best_code)
+}
+
+buf_append_sgr_color :: proc(buf: ^$Buffer, selector: int, c: Color, xterm_colors: bool) {
+	append(buf, ansi.CSI)
 	buf_append_decimal(buf, selector)
+	if xterm_colors {
+		append(buf, ';', '5', ';')
+		buf_append_decimal(buf, int(color_to_xterm(c)))
+		append(buf, ansi.SGR)
+		return
+	}
 	append(buf, ';', '2', ';')
 	buf_append_decimal(buf, int(c.r))
 	append(buf, ';')
 	buf_append_decimal(buf, int(c.g))
 	append(buf, ';')
 	buf_append_decimal(buf, int(c.b))
-	append(buf, 'm')
+	append(buf, ansi.SGR)
 }
 
 move_cursor_up :: proc(n: int) -> string {
-	return fmt.tprintf("\x1b[%dA", n)
+	return fmt.tprintf("%s%d%s", ansi.CSI, n, ansi.CUU)
 }

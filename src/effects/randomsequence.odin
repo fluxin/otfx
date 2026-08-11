@@ -66,25 +66,13 @@ Randomsequence_State :: struct {
 	palette_len:    int,
 	pending:        [dynamic]engine.Char_Id,
 	chars_per_tick: int,
+	color_handling: engine.Existing_Color_Handling,
 	tick:           int,
 }
 
 randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 	s.chars_per_tick = max(int(s.config.speed * f64(len(e.character_sets.input))), 1)
-
-	spectrum := engine.gradient_make(
-		s.config.final_gradient_stops[:],
-		s.config.final_gradient_steps[:],
-		false,
-	)
-	defer delete(spectrum[:])
-	sampler := engine.gradient_sampler(
-		e.canvas.text_bottom,
-		e.canvas.text_top,
-		e.canvas.text_left,
-		e.canvas.text_right,
-		s.config.final_gradient_direction,
-	)
+	s.color_handling = e.cfg.existing_color_handling
 
 	chars := engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
@@ -96,14 +84,31 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 	s.start_ticks = make([dynamic]int, len(chars))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 
-	bg := e.cfg.terminal_background_color
+	if s.color_handling != .Dynamic {
+		spectrum := engine.gradient_make(
+			s.config.final_gradient_stops[:],
+			s.config.final_gradient_steps[:],
+			false,
+		)
+		defer delete(spectrum[:])
+		sampler := engine.gradient_sampler(
+			e.canvas.text_bottom,
+			e.canvas.text_top,
+			e.canvas.text_left,
+			e.canvas.text_right,
+			s.config.final_gradient_direction,
+		)
+		bg := e.cfg.terminal_background_color
+		for id, slot in chars {
+			final := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+			g := engine.gradient_make([]engine.Color{bg, final}, []int{7}, false)
+			if slot == 0 do s.palette_len = len(g)
+			append(&s.palette, ..g[:])
+			delete(g[:])
+		}
+	}
+
 	for id, slot in chars {
-		c := e.chars.input_coord[id]
-		final := engine.gradient_sample(sampler, spectrum[:], c)
-		g := engine.gradient_make([]engine.Color{bg, final}, []int{7}, false)
-		if slot == 0 do s.palette_len = len(g)
-		append(&s.palette, ..g[:])
-		delete(g[:])
 		s.index_by_id[id] = slot
 		e.chars.is_visible[id] = false
 		append(&s.pending, id)
@@ -134,9 +139,39 @@ randomsequence_next :: proc(
 	for slot in s.active_slots {
 		age := s.tick - s.start_ticks[slot]
 		id := s.characters[slot]
-		e.chars.visual[id].fg =
-			s.palette[slot * s.palette_len + age / s.config.final_gradient_frames]
-		if age + 1 < s.palette_len * s.config.final_gradient_frames {
+		life := s.palette_len * s.config.final_gradient_frames
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			if style.fg != nil || style.bg != nil {
+				step := min(age / s.config.final_gradient_frames, 7)
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					e.cfg.terminal_background_color,
+					style,
+					7,
+					step,
+				)
+				life = 8 * s.config.final_gradient_frames
+			} else {
+				if age < 8 * s.config.final_gradient_frames {
+					e.chars.visual[id].fg = engine.gradient_between_step(
+						e.cfg.terminal_background_color,
+						engine.Color{0x80, 0x80, 0x80},
+						7,
+						age / s.config.final_gradient_frames,
+					)
+					e.chars.visual[id].bg = nil
+				} else {
+					e.chars.visual[id].fg = nil
+					e.chars.visual[id].bg = nil
+				}
+				life = 9 * s.config.final_gradient_frames
+			}
+		} else {
+			e.chars.visual[id].fg =
+				s.palette[slot * s.palette_len + age / s.config.final_gradient_frames]
+		}
+		if age + 1 < life {
 			s.active_slots[write] = slot
 			write += 1
 		}

@@ -5,6 +5,9 @@ import "../engine"
 import "core:fmt"
 import "core:math/ease"
 
+@(private, rodata)
+Print_Typing_Symbols: [4]string = {"█", "█", "▓", "▒"}
+
 Print_Config :: struct {
 	print_head_return_speed:  f64,
 	print_speed:              int,
@@ -79,6 +82,7 @@ Print_State :: struct {
 	head_max_steps:     int,
 	head_return_active: bool,
 	tick:               int,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 print_row_characters :: proc(s: ^Print_State, row_index: int) -> []engine.Char_Id {
@@ -116,6 +120,7 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 	)
 	defer delete(characters[:])
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.color_handling = e.cfg.existing_color_handling
 	s.char_start_ticks = make([dynamic]int, len(e.chars))
 	for i in 0 ..< len(s.char_start_ticks) do s.char_start_ticks[i] = -1
 	white := engine.Color{0xff, 0xff, 0xff}
@@ -220,14 +225,34 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		if age >= 18 do continue
 		frame := min(age / 3, 5)
 		if frame < 4 {
-			symbols := [4]string{"█", "█", "▓", "▒"}
-			e.chars.visual[id].symbol = symbols[frame]
+			e.chars.visual[id].symbol = Print_Typing_Symbols[frame]
 		} else if frame == 4 {
 			e.chars.visual[id].symbol = "░"
 		} else {
 			e.chars.visual[id].symbol = e.chars.input_symbol[id]
 		}
-		e.chars.visual[id].fg = engine.gradient_between_step(white, s.final_colors[id], 5, frame)
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			if fg, ok := style.fg.?; ok {
+				e.chars.visual[id].fg = engine.gradient_between_step(white, fg, 5, frame)
+			} else if style.bg == nil && frame < 5 {
+				e.chars.visual[id].fg = white
+			} else {
+				e.chars.visual[id].fg = nil
+			}
+			if bg, ok := style.bg.?; ok {
+				e.chars.visual[id].bg = engine.gradient_between_step(white, bg, 5, frame)
+			} else {
+				e.chars.visual[id].bg = nil
+			}
+		} else {
+			e.chars.visual[id].fg = engine.gradient_between_step(
+				white,
+				s.final_colors[id],
+				5,
+				frame,
+			)
+		}
 		if age + 1 < 18 {
 			s.active_chars[write] = id
 			write += 1

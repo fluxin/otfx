@@ -98,9 +98,11 @@ Orbittingvolley_State :: struct {
 	delay:              int,
 	tick:               int,
 	launchers_hidden:   bool,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -305,7 +307,11 @@ orbittingvolley_next :: proc(
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			)
 		}
-		visual_fg[id].fg = s.final_colors[i]
+		if s.color_handling == .Dynamic {
+			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+		} else {
+			visual_fg[id].fg = s.final_colors[i]
+		}
 		if age >= steps do e.chars.layer[id] = 0
 	}
 	s.tick += 1

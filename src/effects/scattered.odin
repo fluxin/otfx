@@ -61,14 +61,15 @@ scattered_parse :: proc(cfg: ^Scattered_Config, args: []string) -> bool {
 }
 
 Scattered_State :: struct {
-	config:       Scattered_Config,
-	characters:   [dynamic]engine.Char_Id,
-	final_colors: [dynamic]engine.Color,
-	origins:      [dynamic]engine.Coord,
-	max_steps:    [dynamic]int,
-	step_limit:   int,
-	tick:         int,
-	initial_hold: int,
+	config:         Scattered_Config,
+	characters:     [dynamic]engine.Char_Id,
+	final_colors:   [dynamic]engine.Color,
+	origins:        [dynamic]engine.Coord,
+	max_steps:      [dynamic]int,
+	step_limit:     int,
+	tick:           int,
+	initial_hold:   int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
@@ -92,6 +93,7 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
@@ -111,7 +113,8 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		e.chars.layer[id] = 1
 		e.chars.visual[id] = {
 			symbol = e.chars.input_symbol[id],
-			fg     = spectrum[0],
+			fg     = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : spectrum[0],
+			bg     = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
 		}
 		e.chars.is_visible[id] = true
 	}
@@ -132,15 +135,23 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char
 			e.chars.input_coord[id],
 			ease.ease(s.config.movement_easing, progress),
 		)
-		e.chars.visual[id].fg = engine.gradient_between_step(
-			s.config.final_gradient_stops[0],
-			s.final_colors[i],
-			10,
-			min(engine.round_half_even(progress * 9), 10),
-		)
+		if s.color_handling == .Dynamic {
+			engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+		} else {
+			e.chars.visual[id].fg = engine.gradient_between_step(
+				s.config.final_gradient_stops[0],
+				s.final_colors[i],
+				10,
+				min(engine.round_half_even(progress * 9), 10),
+			)
+		}
 		if s.tick + 1 >= steps {
 			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual[id].fg = s.final_colors[i]
+			if s.color_handling == .Dynamic {
+				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+			} else {
+				e.chars.visual[id].fg = s.final_colors[i]
+			}
 			e.chars.layer[id] = 0
 		}
 	}

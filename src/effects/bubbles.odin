@@ -129,9 +129,11 @@ Bubbles_State :: struct {
 	rainbow_palette: [dynamic]engine.Color,
 	rainbow_index:   int,
 	tick:            int,
+	color_handling:  engine.Existing_Color_Handling,
 }
 
 bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -330,15 +332,34 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 						)
 					}
 					visual_symbols[id].symbol = input_symbols[id]
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.config.pop_color,
-						s.final_colors[id],
-						8,
-						min(move_age / 6, 8),
-					)
+					if s.color_handling == .Dynamic {
+						engine.dynamic_gradient_to_input(
+							&visual_fg[id],
+							s.config.pop_color,
+							e.chars.input_style[id],
+							8,
+							min(move_age / 6, 8),
+						)
+					} else {
+						visual_fg[id].fg = engine.gradient_between_step(
+							s.config.pop_color,
+							s.final_colors[id],
+							8,
+							min(move_age / 6, 8),
+						)
+					}
 				}
 			}
-			if age >= 18 + max(max_steps, 54) do s.bubble_states[bi] = .Done
+			final_ticks := 54
+			if s.color_handling == .Dynamic {
+				for id in members {
+					if e.chars.input_style[id].fg == nil && e.chars.input_style[id].bg == nil {
+						final_ticks = 6
+						break
+					}
+				}
+			}
+			if age >= 18 + max(max_steps, final_ticks) do s.bubble_states[bi] = .Done
 		}
 	}
 	if s.config.rainbow {

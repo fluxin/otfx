@@ -91,6 +91,7 @@ Swarm_State :: struct {
 	active_indexes:     [dynamic]int,
 	next_launch_group:  int,
 	tick:               int,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 Swarm_Plan_Event :: struct {
@@ -123,6 +124,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.waypoints = make([dynamic]engine.Coord, n * SWARM_MAX_STAGES)
@@ -412,16 +414,51 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 				continue
 			}
 			if s.tick >= s.lane_finish[i] {
-				visual_fg[id].fg = s.final_colors[i]
+				if s.color_handling == .Dynamic {
+					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+				} else {
+					visual_fg[id].fg = s.final_colors[i]
+				}
 				continue
 			}
 			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
-			visual_fg[id].fg = engine.gradient_between_step(
-				s.config.flash_color,
-				s.final_colors[i],
-				10,
-				landing_step,
-			)
+			if s.color_handling == .Dynamic {
+				style := e.chars.input_style[id]
+				if fg, ok := style.fg.?; ok {
+					visual_fg[id].fg = engine.gradient_between_step(
+						s.config.flash_color,
+						fg,
+						10,
+						landing_step,
+					)
+				} else if style.bg == nil {
+					visual_fg[id].fg = engine.gradient_between_step(
+						s.config.flash_color,
+						engine.Color{0xff, 0xff, 0xff},
+						10,
+						landing_step,
+					)
+				} else {
+					visual_fg[id].fg = nil
+				}
+				if bg, ok := style.bg.?; ok {
+					visual_fg[id].bg = engine.gradient_between_step(
+						s.config.flash_color,
+						bg,
+						10,
+						landing_step,
+					)
+				} else {
+					visual_fg[id].bg = nil
+				}
+			} else {
+				visual_fg[id].fg = engine.gradient_between_step(
+					s.config.flash_color,
+					s.final_colors[i],
+					10,
+					landing_step,
+				)
+			}
 			current_coords[id] = swarm_waypoint(s, i, stage)
 			s.active_indexes[write] = i
 			write += 1

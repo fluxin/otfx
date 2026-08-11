@@ -120,7 +120,7 @@ matrix_parse :: proc(cfg: ^Matrix_Config, args: []string) -> bool {
 		case "--rain-column-delay-range":
 			if !parse_int_range_flag(&cfg.rain_column_delay_range, args, &i, value, has_value) do return false
 		case "--rain-time":
-			if !parse_int_flag(&cfg.rain_time, args, &i, value, has_value) do return false
+			if !parse_int_flag(&cfg.rain_time, args, &i, value, has_value) || cfg.rain_time <= 0 do return false
 		case "--symbol-swap-chance":
 			if !parse_float_flag(&cfg.symbol_swap_chance, args, &i, value, has_value) do return false
 		case "--color-swap-chance":
@@ -193,6 +193,7 @@ Matrix_State :: struct {
 	rain_complete:        bool,
 	phase:                Matrix_Phase,
 	rain_start:           f64,
+	color_handling:       engine.Existing_Color_Handling,
 }
 
 matrix_column_visible :: proc(
@@ -424,6 +425,7 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	)
 	defer delete(chars[:])
 	s.resolve_final_colors = make([]engine.Color, len(e.chars))
+	s.color_handling = e.cfg.existing_color_handling
 	s.resolve_ticks = make([]int, len(e.chars))
 	s.resolve_active_ids = make([]u8, len(e.chars))
 	input_coords := e.chars.input_coord[:]
@@ -482,17 +484,32 @@ matrix_step_resolve :: proc(s: ^Matrix_State, chars: ^engine.Character_Storage) 
 	write := 0
 	for id in s.resolve_active {
 		tick := s.resolve_ticks[id]
-		chars.visual[id] = {
-			symbol = chars.input_symbol[id],
-			fg     = engine.gradient_between_step(
+		step := min(tick / s.config.final_gradient_frames, 8)
+		chars.visual[id].symbol = chars.input_symbol[id]
+		if s.color_handling == .Dynamic {
+			engine.dynamic_gradient_to_input(
+				&chars.visual[id],
+				s.config.highlight_color,
+				chars.input_style[id],
+				8,
+				step,
+			)
+		} else {
+			chars.visual[id].fg = engine.gradient_between_step(
 				s.config.highlight_color,
 				s.resolve_final_colors[id],
 				8,
-				min(tick / s.config.final_gradient_frames, 8),
-			),
+				step,
+			)
 		}
 		tick += 1
-		if tick == 9 * s.config.final_gradient_frames {
+		limit := 9 * s.config.final_gradient_frames
+		if s.color_handling == .Dynamic &&
+		   chars.input_style[id].fg == nil &&
+		   chars.input_style[id].bg == nil {
+			limit = s.config.final_gradient_frames
+		}
+		if tick == limit {
 			s.resolve_active_ids[id] = 0
 		} else {
 			s.resolve_ticks[id] = tick
@@ -640,7 +657,9 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 						next := visible[idx]
 						visible[idx] = visible[len(visible) - 1]
 						column.visible_count -= 1
-						if input_symbols[next] != " " {
+						if input_symbols[next] != " " ||
+						   e.chars.input_style[next].fg != nil ||
+						   e.chars.input_style[next].bg != nil {
 							if s.resolve_active_ids[next] == 0 {
 								s.resolve_active_ids[next] = 1
 								s.resolve_ticks[next] = 0

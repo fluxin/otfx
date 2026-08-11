@@ -97,6 +97,7 @@ Middleout_State :: struct {
 	full_limit:       int,
 	phase_full:       bool,
 	phase_tick:       int,
+	color_handling:   engine.Existing_Color_Handling,
 }
 
 middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
@@ -120,6 +121,7 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.center_targets = make([dynamic]engine.Coord, n)
 	s.center_max_steps = make([dynamic]int, n)
@@ -172,12 +174,22 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 				)
 			}
 			gradient_step := min(s.phase_tick / 6, 10)
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.config.starting_color,
-				s.final_colors[i],
-				10,
-				gradient_step,
-			)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					s.config.starting_color,
+					e.chars.input_style[id],
+					10,
+					gradient_step,
+				)
+			} else {
+				e.chars.visual[id].fg = engine.gradient_between_step(
+					s.config.starting_color,
+					s.final_colors[i],
+					10,
+					gradient_step,
+				)
+			}
 		} else if s.phase_tick < s.center_max_steps[i] {
 			progress := f64(s.phase_tick + 1) / f64(s.center_max_steps[i])
 			e.chars.current_coord[id] = engine.coord_on_line(

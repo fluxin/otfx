@@ -79,20 +79,21 @@ rain_parse :: proc(cfg: ^Rain_Config, args: []string) -> bool {
 }
 
 Rain_State :: struct {
-	config:       Rain_Config,
-	characters:   [dynamic]engine.Char_Id,
-	index_by_id:  [dynamic]int,
-	pending:      [dynamic]engine.Char_Id,
-	by_row:       [dynamic]engine.Char_Id, // flat pool sorted by input row asc
-	render_ids:   [dynamic]engine.Char_Id, // every drop already made visible
-	active_slots: [dynamic]int, // dense slots that still move or fade
-	final_colors: [dynamic]engine.Color,
-	drop_colors:  [dynamic]engine.Color,
-	drop_symbols: [dynamic]string,
-	max_steps:    [dynamic]int,
-	start_ticks:  [dynamic]int,
-	by_row_head:  int,
-	tick:         int,
+	config:         Rain_Config,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	pending:        [dynamic]engine.Char_Id,
+	by_row:         [dynamic]engine.Char_Id, // flat pool sorted by input row asc
+	render_ids:     [dynamic]engine.Char_Id, // every drop already made visible
+	active_slots:   [dynamic]int, // dense slots that still move or fade
+	final_colors:   [dynamic]engine.Color,
+	drop_colors:    [dynamic]engine.Color,
+	drop_symbols:   [dynamic]string,
+	max_steps:      [dynamic]int,
+	start_ticks:    [dynamic]int,
+	by_row_head:    int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
@@ -121,6 +122,7 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 		row, column: int,
 	}
 	n := len(s.characters)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.drop_colors = make([dynamic]engine.Color, n)
@@ -208,12 +210,23 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			e.chars.current_coord[id] = e.chars.input_coord[id]
 			e.chars.visual[id].symbol = e.chars.input_symbol[id]
 			fade_tick := age - (s.max_steps[slot] - 1)
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.drop_colors[slot],
-				s.final_colors[slot],
-				7,
-				min(fade_tick / 3, 7),
-			)
+			fade_step := min(fade_tick / 3, 7)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&e.chars.visual[id],
+					s.drop_colors[slot],
+					e.chars.input_style[id],
+					7,
+					fade_step,
+				)
+			} else {
+				e.chars.visual[id].fg = engine.gradient_between_step(
+					s.drop_colors[slot],
+					s.final_colors[slot],
+					7,
+					fade_step,
+				)
+			}
 		}
 		// The final full-color fade is at age max_steps + 22.
 		if age + 1 < s.max_steps[slot] + 23 {

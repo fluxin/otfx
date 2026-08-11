@@ -121,6 +121,7 @@ Rings_State :: struct {
 	cycles_remaining:   int,
 	start_remaining:    int,
 	color_tick:         int,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 rings_coords :: proc(s: ^Rings_State, slot: int) -> []engine.Coord {
@@ -146,6 +147,7 @@ rings_begin_line :: proc(
 }
 
 rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -184,7 +186,11 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	for id, slot in chars {
 		s.final_colors[slot] = engine.gradient_sample(sampler, final_spectrum[:], input_coords[id])
 		s.ring_by_slot[slot] = -1
-		visual_fg[id].fg = s.final_colors[slot]
+		if s.color_handling == .Dynamic {
+			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+		} else {
+			visual_fg[id].fg = s.final_colors[slot]
+		}
 		visible[id] = true
 	}
 
@@ -294,13 +300,17 @@ rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) {
 rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	visual_fg := e.chars.visual
 	for slot in 0 ..< len(s.ids) {
+		id := s.ids[slot]
+		if s.color_handling == .Dynamic {
+			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			continue
+		}
 		ring_index := s.ring_by_slot[slot]
 		if ring_index < 0 {
-			if s.phase == .Final do visual_fg[s.ids[slot]].fg = s.final_colors[slot]
+			if s.phase == .Final do visual_fg[id].fg = s.final_colors[slot]
 			continue
 		}
 		ring_color := s.rings[ring_index].color
-		id := s.ids[slot]
 		switch s.phase {
 		case .Disperse:
 			visual_fg[id].fg = engine.gradient_between_step(

@@ -126,9 +126,11 @@ Laseretch_State :: struct {
 	next_spark:       int,
 	delay:            int,
 	tick:             int,
+	color_handling:   engine.Existing_Color_Handling,
 }
 
 laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -249,15 +251,23 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 	input_symbols := e.chars.input_symbol
 	// Only the short cooling tail needs updates. Completed source glyphs retain
 	// their final visual, so scanning the full input every frame is wasted work.
-	source_lifetime := 3 + len(s.cool_spectrum) * 3 + 8 * s.config.final_gradient_frames + 1
 	source_write := 0
 	for i in s.active_sources {
 		id := s.characters[i]
 		start := s.source_starts[i]
 		age := s.tick - start
+		source_lifetime := 3 + len(s.cool_spectrum) * 3 + 8 * s.config.final_gradient_frames + 1
+		if s.color_handling == .Dynamic {
+			has_style := e.chars.input_style[id].fg != nil || e.chars.input_style[id].bg != nil
+			source_lifetime = 3 + len(s.cool_spectrum) * 3 + (has_style ? 9 : 10) * 3
+		}
 		if age >= source_lifetime {
 			visual_symbols[id].symbol = input_symbols[id]
-			visual_fg[id].fg = s.final_colors[i]
+			if s.color_handling == .Dynamic {
+				engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			} else {
+				visual_fg[id].fg = s.final_colors[i]
+			}
 			continue
 		}
 		visual_symbols[id].symbol = age < 3 ? "^" : input_symbols[id]
@@ -267,12 +277,36 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 			visual_fg[id].fg = s.cool_spectrum[(age - 3) / 3]
 		} else {
 			cool_age := age - 3 - len(s.cool_spectrum) * 3
-			visual_fg[id].fg = engine.gradient_between_step(
-				s.cool_spectrum[len(s.cool_spectrum) - 1],
-				s.final_colors[i],
-				8,
-				min(cool_age / s.config.final_gradient_frames, 8),
-			)
+			if s.color_handling == .Dynamic {
+				style := e.chars.input_style[id]
+				if style.fg != nil || style.bg != nil {
+					engine.dynamic_gradient_to_input(
+						&visual_fg[id],
+						s.cool_spectrum[len(s.cool_spectrum) - 1],
+						style,
+						8,
+						min(cool_age / 3, 8),
+					)
+				} else if cool_age < 27 {
+					visual_fg[id].fg = engine.gradient_between_step(
+						s.cool_spectrum[len(s.cool_spectrum) - 1],
+						engine.Color{0xFF, 0xFF, 0xFF},
+						8,
+						cool_age / 3,
+					)
+					visual_fg[id].bg = nil
+				} else {
+					visual_fg[id].fg = nil
+					visual_fg[id].bg = nil
+				}
+			} else {
+				visual_fg[id].fg = engine.gradient_between_step(
+					s.cool_spectrum[len(s.cool_spectrum) - 1],
+					s.final_colors[i],
+					8,
+					min(cool_age / s.config.final_gradient_frames, 8),
+				)
+			}
 		}
 		s.active_sources[source_write] = i
 		source_write += 1

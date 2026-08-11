@@ -60,15 +60,16 @@ highlight_parse :: proc(cfg: ^Highlight_Config, args: []string) -> bool {
 }
 
 Highlight_State :: struct {
-	config:       Highlight_Config,
-	reveal:       engine.Group_Reveal,
-	characters:   [dynamic]engine.Char_Id,
-	index_by_id:  [dynamic]int,
-	palette:      [dynamic]engine.Color,
-	start_ticks:  [dynamic]int,
-	active_slots: [dynamic]int,
-	palette_len:  int,
-	tick:         int,
+	config:         Highlight_Config,
+	reveal:         engine.Group_Reveal,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	palette:        [dynamic]engine.Color,
+	start_ticks:    [dynamic]int,
+	active_slots:   [dynamic]int,
+	palette_len:    int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
@@ -102,6 +103,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		engine.CHAR_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
+	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.start_ticks = make([dynamic]int, len(e.chars))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
@@ -109,6 +111,9 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		s.index_by_id[id] = i
 		c := e.chars.input_coord[id]
 		base := engine.gradient_sample(sampler, spectrum[:], c)
+		if s.color_handling == .Dynamic {
+			if fg, ok := e.chars.input_style[id].fg.?; ok do base = fg
+		}
 		// base -> bright -> bright -> base with widths 3/width/3
 		bright := engine.adjust_color_brightness(base, s.config.highlight_brightness)
 		hl := engine.gradient_make(
@@ -121,7 +126,8 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		delete(hl[:])
 		e.chars.visual[id] = {
 			symbol = e.chars.input_symbol[id],
-			fg     = base,
+			fg     = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : base,
+			bg     = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
 		}
 		e.chars.is_visible[id] = true
 	}
@@ -142,10 +148,18 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Char
 	write := 0
 	for slot in s.active_slots {
 		age := s.tick - s.start_ticks[slot]
-		if age >= s.palette_len * 2 do continue
 		id := s.characters[slot]
-		e.chars.visual[id].fg = s.palette[slot * s.palette_len + age / 2]
-		if age + 1 < s.palette_len * 2 {s.active_slots[write] = slot; write += 1}
+		limit := s.palette_len * 2
+		if s.color_handling == .Dynamic && e.chars.input_style[id].fg == nil do limit = 2
+		if age >= limit do continue
+		if s.color_handling == .Dynamic {
+			style := e.chars.input_style[id]
+			if style.fg != nil do e.chars.visual[id].fg = s.palette[slot * s.palette_len + age / 2]
+			e.chars.visual[id].bg = style.bg
+		} else {
+			e.chars.visual[id].fg = s.palette[slot * s.palette_len + age / 2]
+		}
+		if age + 1 < limit {s.active_slots[write] = slot; write += 1}
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1

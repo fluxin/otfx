@@ -103,6 +103,7 @@ Fireworks_State :: struct {
 	next_shell:         int,
 	launch_delay:       int,
 	tick:               int,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 // Pick directly from TerminalTextEffects' filled terminal-aspect ellipse.
@@ -129,6 +130,7 @@ fireworks_random_explode_target :: proc(origin: engine.Coord, diameter: int) -> 
 }
 
 fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
+	s.color_handling = e.cfg.existing_color_handling
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -238,7 +240,14 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 			shell := s.shell_index[i]
 			start := s.shell_start_ticks[shell]
 			if start < 0 do continue
-			fall_time := max(s.fall_steps[i], 160)
+			fall_color_ticks := 160
+			if s.color_handling == .Dynamic {
+				id := s.characters[i]
+				if e.chars.input_style[id].fg == nil && e.chars.input_style[id].bg == nil {
+					fall_color_ticks = 10
+				}
+			}
+			fall_time := max(s.fall_steps[i], fall_color_ticks)
 			if s.tick - start <
 			   s.apex_steps[i] + s.explode_steps[i] + s.bloom_steps[i] + fall_time {
 				active = true
@@ -371,12 +380,22 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				)
 			}
 			visual_symbols[id].symbol = input_symbols[id]
-			visual_fg[id].fg = engine.gradient_between_step(
-				color,
-				s.final_colors[i],
-				15,
-				min(fall_age / 10, 15),
-			)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&visual_fg[id],
+					color,
+					e.chars.input_style[id],
+					15,
+					min(fall_age / 10, 15),
+				)
+			} else {
+				visual_fg[id].fg = engine.gradient_between_step(
+					color,
+					s.final_colors[i],
+					15,
+					min(fall_age / 10, 15),
+				)
+			}
 		}
 	}
 	for shell in 0 ..< len(launch_phases) {

@@ -430,8 +430,16 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 			opts.cfg.anchor_text = a
 		case "--wrap-text":
 			opts.cfg.wrap_text = true
+		case "--xterm-colors":
+			opts.cfg.xterm_colors = true
 		case "--no-color":
 			opts.cfg.no_color = true
+		case "--existing-color-handling":
+			v, ok := value_of(args, &i, value, has_value)
+			if !ok do return opts, false
+			handling, ok2 := engine.existing_color_handling_parse(v)
+			if !ok2 do return opts, false
+			opts.cfg.existing_color_handling = handling
 		case "--no-eol":
 			opts.cfg.no_eol = true
 		case "--no-restore-cursor":
@@ -493,7 +501,7 @@ print_usage :: proc() {
 	fmt.println("  --frame-rate N   --canvas-width N   --canvas-height N")
 	fmt.println("  --anchor-canvas X   --anchor-text X   --wrap-text")
 	fmt.println(
-		"  --no-color --no-eol --no-restore-cursor --ignore-terminal-dimensions --reuse-canvas",
+		"  --xterm-colors --no-color --existing-color-handling M --no-eol --no-restore-cursor",
 	)
 	fmt.println("  --tab-width N --terminal-background-color C --seed N -i FILE -R")
 	fmt.println("")
@@ -525,7 +533,11 @@ run_effect_once :: proc(
 ) -> effects.Run_Outcome {
 	context.allocator = allocator
 
-	ctx := engine.engine_make(input, opts.cfg, context.allocator)
+	ctx, input_error, input_ok := engine.engine_make(input, opts.cfg, context.allocator)
+	if !input_ok {
+		fmt.eprintln("Error: ", input_error)
+		os.exit(1)
+	}
 	effect, effect_ok := effects.make_effect(opts.kind, opts.effect_args)
 	if !effect_ok do os.exit(1)
 	return effects.run_effect(&effect, &ctx, resize_aware)
