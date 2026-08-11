@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Laseretch_Config :: struct {
@@ -155,8 +156,8 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.source_starts = make([dynamic]int, n)
-	s.cool_spectrum = engine.gradient_with_steps(s.config.cool_gradient_stops[:], 8, false)
-	s.laser_spectrum = engine.gradient_with_steps(s.config.laser_gradient_stops[:], 6, true)
+	s.cool_spectrum = engine.gradient_make(s.config.cool_gradient_stops[:], []int{8}, false)
+	s.laser_spectrum = engine.gradient_make(s.config.laser_gradient_stops[:], []int{6}, true)
 	s.spark_spectrum = engine.gradient_make(s.config.spark_gradient_stops[:], []int{3, 8}, false)
 
 	input_coords := e.chars.input_coord
@@ -308,10 +309,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 				s.spark_origins[i],
 				s.spark_controls[i],
 				s.spark_targets[i],
-				engine.easing_apply(
-					engine.ease_of(.Sine_Out),
-					f64(age + 1) / f64(s.spark_steps[i]),
-				),
+				ease.ease(.Sine_Out, f64(age + 1) / f64(s.spark_steps[i])),
 			)
 			visual_fg[id] = s.spark_spectrum[0]
 		} else {

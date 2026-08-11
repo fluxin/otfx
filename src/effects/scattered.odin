@@ -3,13 +3,14 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // scattered — characters fly in from random coordinates with a slight
 // overshoot easing, synced to movement distance.
 
 Scattered_Config :: struct {
 	movement_speed:           f64,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_frames:    int,
@@ -19,7 +20,7 @@ Scattered_Config :: struct {
 scattered_config_default :: proc() -> Scattered_Config {
 	cfg := Scattered_Config {
 		movement_speed           = 0.5,
-		movement_easing          = engine.ease_of(.Back_In_Out),
+		movement_easing          = .Back_In_Out,
 		final_gradient_frames    = 9,
 		final_gradient_direction = .Vertical,
 	}
@@ -108,7 +109,11 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
 		e.chars.layer[id] = 1
-		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], spectrum[0], nil)
+		engine.character_set_visual(
+			&e.chars,
+			id,
+			{symbol = e.chars.input_symbol[id], fg = spectrum[0]},
+		)
 		e.chars.is_visible[id] = true
 	}
 	s.initial_hold = 25
@@ -127,7 +132,7 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 		e.chars.current_coord[id] = engine.coord_on_line(
 			s.origins[i],
 			e.chars.input_coord[id],
-			engine.easing_apply(s.config.movement_easing, progress),
+			ease.ease(s.config.movement_easing, progress),
 		)
 		e.chars.visual_fg[id] = engine.gradient_between_step(
 			s.config.final_gradient_stops[0],

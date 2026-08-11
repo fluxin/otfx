@@ -106,7 +106,7 @@ overflow_row_color :: proc(
 	color: engine.Color,
 ) {
 	for id in characters {
-		engine.set_appearance(chars, id, chars.input_symbol[id], color, nil)
+		engine.character_set_visual(chars, id, {symbol = chars.input_symbol[id], fg = color})
 	}
 }
 
@@ -173,12 +173,10 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		row := engine.group_slice(final_rows, row_index)
 		for id in row {
 			if id < engine.Char_Id(len(final_colors)) {
-				engine.set_appearance(
+				engine.character_set_visual(
 					&e.chars,
 					id,
-					e.chars.visual_symbol[id],
-					final_colors[id],
-					nil,
+					{symbol = e.chars.visual_symbol[id], fg = final_colors[id]},
 				)
 			}
 		}
@@ -189,9 +187,9 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		math.floor_div(e.canvas.top, max(1, len(s.config.overflow_gradient_stops) - 1)),
 		1,
 	)
-	s.overflow_gradient = engine.gradient_with_steps(
+	s.overflow_gradient = engine.gradient_make(
 		s.config.overflow_gradient_stops[:],
-		steps,
+		[]int{steps},
 		false,
 	)
 }
@@ -235,7 +233,6 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	resize(&s.active_rows, write)
-	engine.update(e)
 	engine.frame(e)
 	return true
 }

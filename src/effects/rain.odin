@@ -1,6 +1,7 @@
 package effects
 
 import engine "../engine"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 import "core:fmt"
@@ -16,14 +17,14 @@ Rain_Config :: struct {
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 }
 
 rain_config_default :: proc() -> Rain_Config {
 	cfg := Rain_Config {
 		movement_speed           = {0.33, 0.57},
 		final_gradient_direction = .Diagonal,
-		movement_easing          = engine.ease_of(.Quartic_In),
+		movement_easing          = .Quartic_In,
 	}
 	append(
 		&cfg.rain_colors,
@@ -200,7 +201,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = engine.coord_on_line(
 				engine.coord(e.chars.input_coord[id].column, e.canvas.top),
 				e.chars.input_coord[id],
-				engine.easing_apply(s.config.movement_easing, progress),
+				ease.ease(s.config.movement_easing, progress),
 			)
 			e.chars.visual_symbol[id] = s.drop_symbols[i]
 			e.chars.visual_fg[id] = s.drop_colors[i]

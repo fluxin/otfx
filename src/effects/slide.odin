@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // slide — characters slide in from outside the canvas, group by group.
 
@@ -18,7 +19,7 @@ Slide_Config :: struct {
 	gap:                      int,
 	reverse_direction:        bool,
 	merge:                    bool,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_frames:    int,
@@ -30,7 +31,7 @@ slide_config_default :: proc() -> Slide_Config {
 		movement_speed           = 0.8,
 		grouping                 = .Row,
 		gap                      = 2,
-		movement_easing          = engine.ease_of(.Quadratic_In_Out),
+		movement_easing          = .Quadratic_In_Out,
 		final_gradient_frames    = 6,
 		final_gradient_direction = .Vertical,
 	}
@@ -134,12 +135,10 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		c := e.chars.input_coord[id]
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		engine.set_appearance(
+		engine.character_set_visual(
 			&e.chars,
 			id,
-			e.chars.input_symbol[id],
-			s.config.final_gradient_stops[0],
-			nil,
+			{symbol = e.chars.input_symbol[id], fg = s.config.final_gradient_stops[0]},
 		)
 	}
 
@@ -260,7 +259,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = engine.coord_on_line(
 				s.origins[i],
 				e.chars.input_coord[id],
-				engine.easing_apply(s.config.movement_easing, progress),
+				ease.ease(s.config.movement_easing, progress),
 			)
 		}
 		gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)

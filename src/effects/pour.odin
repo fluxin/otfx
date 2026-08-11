@@ -1,6 +1,7 @@
 package effects
 
 import engine "../engine"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 import "core:fmt"
@@ -25,7 +26,7 @@ Pour_Config :: struct {
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_frames:    int,
 	final_gradient_direction: engine.Gradient_Direction,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 }
 
 pour_config_default :: proc() -> Pour_Config {
@@ -37,7 +38,7 @@ pour_config_default :: proc() -> Pour_Config {
 		starting_color           = engine.Color{0xff, 0xff, 0xff},
 		final_gradient_frames    = 6,
 		final_gradient_direction = .Vertical,
-		movement_easing          = engine.ease_of(.Quadratic_In),
+		movement_easing          = .Quadratic_In,
 	}
 	append(
 		&cfg.final_gradient_stops,
@@ -233,7 +234,7 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = engine.coord_on_line(
 				s.origins[slot],
 				e.chars.input_coord[id],
-				engine.easing_apply(s.config.movement_easing, progress),
+				ease.ease(s.config.movement_easing, progress),
 			)
 		} else {
 			e.chars.current_coord[id] = e.chars.input_coord[id]

@@ -271,7 +271,7 @@ matrix_trim :: proc(
 		tail := rain_colors[max(len(rain_colors) - 3, 0):]
 		darker := engine.adjust_color_brightness(tail[rand.int_max(len(tail))], 0.65)
 		target := visible_characters[c.characters.start + c.visible_head]
-		engine.set_appearance(chars, target, visual_symbols[target], darker, nil)
+		engine.character_set_visual(chars, target, {symbol = visual_symbols[target], fg = darker})
 	}
 }
 
@@ -320,12 +320,12 @@ matrix_tick_column :: proc(
 			next := characters[c.pending_head]
 			c.pending_head += 1
 			sym := rain_symbols[rand.int_max(len(rain_symbols))]
-			engine.set_appearance(chars, next, sym, highlight_color, nil)
+			engine.character_set_visual(chars, next, {symbol = sym, fg = highlight_color})
 			if c.visible_count > 0 {
 				prev :=
 					visible_characters[c.characters.start + c.visible_head + c.visible_count - 1]
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				engine.set_appearance(chars, prev, visual_symbols[prev], col, nil)
+				engine.character_set_visual(chars, prev, {symbol = visual_symbols[prev], fg = col})
 			}
 			is_visible[next] = true
 			visible_characters[c.characters.start + c.visible_head + c.visible_count] = next
@@ -335,7 +335,7 @@ matrix_tick_column :: proc(
 			last_fg := visual_fg[last]
 			if last_fg != nil && last_fg.? == highlight_color {
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				engine.set_appearance(chars, last, visual_symbols[last], col, nil)
+				engine.character_set_visual(chars, last, {symbol = visual_symbols[last], fg = col})
 			}
 			if c.hold_time != 0 {
 				c.hold_time -= 1
@@ -377,12 +377,12 @@ matrix_tick_column :: proc(
 		}
 		col := swap_color ? next_color : (current_fg != nil ? current_fg.? : highlight_color)
 		sym := swap_symbol ? next_symbol : current_symbol
-		engine.set_appearance(chars, id, sym, col, nil)
+		engine.character_set_visual(chars, id, {symbol = sym, fg = col})
 	}
 }
 
 matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
-	s.rain_colors = engine.gradient_with_steps(s.config.rain_color_gradient[:], 6, false)
+	s.rain_colors = engine.gradient_make(s.config.rain_color_gradient[:], []int{6}, false)
 
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
@@ -412,8 +412,8 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	for id in chars {
 		c := input_coords[id]
 		final := engine.gradient_sample(final_sampler, final_spectrum[:], c)
-		resolve_scn := engine.new_scene(e, false, .None, {})
-		g := engine.gradient_with_steps([]engine.Color{s.config.highlight_color, final}, 8, false)
+		resolve_scn := engine.new_scene(e, false, {})
+		g := engine.gradient_make([]engine.Color{s.config.highlight_color, final}, []int{8}, false)
 		resolve_scene := &e.scenes[resolve_scn]
 		for color in g {
 			engine.scene_add_frame(

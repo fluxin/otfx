@@ -3,13 +3,14 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Unstable_Config :: struct {
 	unstable_color:           engine.Color,
-	explosion_ease:           engine.Easing,
+	explosion_ease:           ease.Ease,
 	explosion_speed:          f64,
-	reassembly_ease:          engine.Easing,
+	reassembly_ease:          ease.Ease,
 	reassembly_speed:         f64,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
@@ -19,9 +20,9 @@ Unstable_Config :: struct {
 unstable_config_default :: proc() -> Unstable_Config {
 	cfg := Unstable_Config {
 		unstable_color           = engine.Color{0xff, 0x92, 0x00},
-		explosion_ease           = engine.ease_of(.Exponential_Out),
+		explosion_ease           = .Exponential_Out,
 		explosion_speed          = 1,
-		reassembly_ease          = engine.ease_of(.Exponential_Out),
+		reassembly_ease          = .Exponential_Out,
 		reassembly_speed         = 1,
 		final_gradient_direction = .Vertical,
 	}
@@ -220,7 +221,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 				current_coords[id] = engine.coord_on_line(
 					s.jumbled_coords[i],
 					s.explosion_targets[i],
-					engine.easing_apply(s.config.explosion_ease, progress),
+					ease.ease(s.config.explosion_ease, progress),
 				)
 			}
 			engine.frame(e, s.characters[:])
@@ -249,7 +250,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 				current_coords[id] = engine.coord_on_line(
 					s.explosion_targets[i],
 					input_coords[id],
-					engine.easing_apply(s.config.reassembly_ease, progress),
+					ease.ease(s.config.reassembly_ease, progress),
 				)
 				visual_fg[id] = engine.gradient_between_step(
 					s.config.unstable_color,

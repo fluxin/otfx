@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // waves — one shared eased wave timeline, staggered by group start ticks, then
 // a direct per-character transition into the final gradient.
@@ -14,7 +15,7 @@ Waves_Config :: struct {
 	wave_count:               int,
 	wave_length:              int,
 	wave_direction:           engine.Character_Group,
-	wave_easing:              engine.Easing,
+	wave_easing:              ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -25,7 +26,7 @@ waves_config_default :: proc() -> Waves_Config {
 		wave_count               = 7,
 		wave_length              = 2,
 		wave_direction           = .Column_L2R,
-		wave_easing              = engine.ease_of(.Sine_In_Out),
+		wave_easing              = .Sine_In_Out,
 		final_gradient_direction = .Diagonal,
 	}
 	append(

@@ -4,6 +4,7 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Fireworks_Config :: struct {
@@ -284,10 +285,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 			current_coords[id] = engine.coord_on_line(
 				launch,
 				origin,
-				engine.easing_apply(
-					engine.ease_of(.Exponential_Out),
-					f64(age + 1) / f64(s.apex_steps[i]),
-				),
+				ease.ease(.Exponential_Out, f64(age + 1) / f64(s.apex_steps[i])),
 			)
 			visual_symbols[id] = s.config.firework_symbol
 			visual_fg[id] = launch_phases[shell] == 2 ? engine.Color{0xFF, 0xFF, 0xFF} : color
@@ -296,10 +294,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 			current_coords[id] = engine.coord_on_line(
 				origin,
 				s.explode_targets[i],
-				engine.easing_apply(
-					engine.ease_of(.Circular_Out),
-					f64(move_age + 1) / f64(explode_steps),
-				),
+				ease.ease(.Circular_Out, f64(move_age + 1) / f64(explode_steps)),
 			)
 			// Rust activates the step-synced bloom scene as soon as the apex
 			// finishes. Its 11 colors are each held for two scene frames.
@@ -336,10 +331,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 				s.explode_targets[i],
 				s.bloom_controls[i],
 				s.bloom_targets[i],
-				engine.easing_apply(
-					engine.ease_of(.Circular_Out),
-					f64(move_age + 1) / f64(bloom_steps),
-				),
+				ease.ease(.Circular_Out, f64(move_age + 1) / f64(bloom_steps)),
 			)
 			gradient_frames :: 22
 			path_steps := explode_steps + bloom_steps
@@ -375,10 +367,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 					s.bloom_targets[i],
 					engine.coord(s.bloom_targets[i].column, 1),
 					input,
-					engine.easing_apply(
-						engine.ease_of(.Quartic_In_Out),
-						f64(fall_age + 1) / f64(s.fall_steps[i]),
-					),
+					ease.ease(.Quartic_In_Out, f64(fall_age + 1) / f64(s.fall_steps[i])),
 				)
 			}
 			visual_symbols[id] = input_symbols[id]

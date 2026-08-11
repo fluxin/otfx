@@ -1,6 +1,7 @@
 package effects
 
 import engine "../engine"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 import "core:fmt"
@@ -124,7 +125,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		sym := e.chars.input_symbol[id]
 
 		// initial sweep: gray shimmer then a neutral final frame
-		sc1 := engine.new_scene(e, false, .None, {})
+		sc1 := engine.new_scene(e, false, {})
 		for symbol in s.config.sweep_symbols {
 			gray := gray_shades[rand.int_max(5)]
 			engine.scene_add_frame(&e.scenes[sc1], symbol, 5, gray, nil, false)
@@ -133,7 +134,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		s.scene_handles[id] = sc1
 
 		// second sweep: final gradient colors then the final frame
-		sc2 := engine.new_scene(e, false, .None, {})
+		sc2 := engine.new_scene(e, false, {})
 		for symbol in s.config.sweep_symbols {
 			col := spectrum[rand.int_max(len(spectrum))]
 			engine.scene_add_frame(&e.scenes[sc2], symbol, 5, col, nil, false)
@@ -148,7 +149,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		s.config.first_sweep_direction,
 	)
 	s.easer.tracker = engine.Easing_Tracker {
-		fn          = engine.ease_of(.Circular_In_Out),
+		fn          = .Circular_In_Out,
 		total_steps = 100,
 	}
 	s.second_groups = engine.get_characters_grouped(

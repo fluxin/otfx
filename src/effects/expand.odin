@@ -3,11 +3,12 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // expand — all characters start at the canvas center and fly home.
 
 Expand_Config :: struct {
-	expand_easing:            engine.Easing,
+	expand_easing:            ease.Ease,
 	movement_speed:           f64,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
@@ -16,7 +17,7 @@ Expand_Config :: struct {
 
 expand_config_default :: proc() -> Expand_Config {
 	cfg := Expand_Config {
-		expand_easing            = engine.ease_of(.Quartic_In_Out),
+		expand_easing            = .Quartic_In_Out,
 		movement_speed           = 0.35,
 		final_gradient_direction = .Vertical,
 	}
@@ -108,7 +109,7 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 	for id, i in s.characters {
 		maximum := s.max_steps[i]
 		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
-		factor := engine.easing_apply(s.config.expand_easing, progress)
+		factor := ease.ease(s.config.expand_easing, progress)
 		e.chars.current_coord[id] = engine.coord_on_line(
 			e.canvas.center,
 			e.chars.input_coord[id],

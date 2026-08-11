@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Crumble_Dust_Symbols :: [3]string{"*", ".", ","}
@@ -226,7 +227,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				current_coords[id] = engine.coord_on_line(
 					input,
 					engine.coord(input.column, e.canvas.bottom),
-					engine.easing_apply(engine.ease_of(.Bounce_Out), progress),
+					ease.ease(.Bounce_Out, progress),
 				)
 				dust_index := min((fall_age * 5) / s.fall_steps[i], 4)
 				visual_symbols[id] = s.dust_symbols[i * 5 + dust_index]
@@ -265,7 +266,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 					engine.coord(input.column, e.canvas.bottom),
 					engine.coord(e.canvas.center_column, e.canvas.center_row),
 					engine.coord(input.column, e.canvas.top),
-					engine.easing_apply(engine.ease_of(.Quintic_Out), progress),
+					ease.ease(.Quintic_Out, progress),
 				)
 				s.vacuum_active[vacuum_write] = i
 				vacuum_write += 1

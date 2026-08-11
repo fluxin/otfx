@@ -58,10 +58,15 @@ randomsequence_parse :: proc(cfg: ^Randomsequence_Config, args: []string) -> boo
 
 Randomsequence_State :: struct {
 	config:         Randomsequence_Config,
-	final_colors:   [dynamic]engine.Color_Pair,
-	scene_handles:  [dynamic]int,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	palette:        [dynamic]engine.Color,
+	start_ticks:    [dynamic]int,
+	active_slots:   [dynamic]int,
+	palette_len:    int,
 	pending:        [dynamic]engine.Char_Id,
 	chars_per_tick: int,
+	tick:           int,
 }
 
 randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
@@ -86,35 +91,20 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 		engine.filter_input(),
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
-	max_slot := 0
-	for id in chars do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color_Pair, max_slot + 1)
-	s.scene_handles = make([dynamic]int, max_slot + 1)
-	for i in 0 ..= max_slot do s.scene_handles[i] = -1
+	s.characters = chars
+	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.start_ticks = make([dynamic]int, len(chars))
+	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 
 	bg := e.cfg.terminal_background_color
-	for id in chars {
+	for id, slot in chars {
 		c := e.chars.input_coord[id]
-		final := engine.Color_Pair {
-			fg = engine.gradient_sample(sampler, spectrum[:], c),
-			bg = nil,
-		}
-		s.final_colors[id] = final
-
-		sc := engine.new_scene(e, false, .None, {})
-		g := engine.gradient_with_steps([]engine.Color{bg, final.fg.?}, 7, false)
-		defer delete(g[:])
-		engine.scene_add_gradient(
-			&e.scenes[sc],
-			[]string{e.chars.input_symbol[id]},
-			s.config.final_gradient_frames,
-			g[:],
-			nil,
-		)
-		s.scene_handles[id] = sc
-
-		engine.activate_scene(e, id, sc)
+		final := engine.gradient_sample(sampler, spectrum[:], c)
+		g := engine.gradient_make([]engine.Color{bg, final}, []int{7}, false)
+		if slot == 0 do s.palette_len = len(g)
+		append(&s.palette, ..g[:])
+		delete(g[:])
+		s.index_by_id[id] = slot
 		e.chars.is_visible[id] = false
 		append(&s.pending, id)
 	}
@@ -122,16 +112,31 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 }
 
 randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool {
-	if len(s.pending) == 0 && len(e.active) == 0 {
+	if len(s.pending) == 0 && len(s.active_slots) == 0 {
 		return false
 	}
 	for _ in 0 ..< s.chars_per_tick {
 		if len(s.pending) == 0 do break
 		next := pop(&s.pending)
 		e.chars.is_visible[next] = true
-		engine.active_insert(e, next)
+		slot := s.index_by_id[next]
+		s.start_ticks[slot] = s.tick
+		append(&s.active_slots, slot)
+		e.chars.visual_symbol[next] = e.chars.input_symbol[next]
 	}
-	engine.update(e)
+	write := 0
+	for slot in s.active_slots {
+		age := s.tick - s.start_ticks[slot]
+		id := s.characters[slot]
+		e.chars.visual_fg[id] =
+			s.palette[slot * s.palette_len + age / s.config.final_gradient_frames]
+		if age + 1 < s.palette_len * s.config.final_gradient_frames {
+			s.active_slots[write] = slot
+			write += 1
+		}
+	}
+	resize(&s.active_slots, write)
+	s.tick += 1
 	engine.frame(e)
 	return true
 }

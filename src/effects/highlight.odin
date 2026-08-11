@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // highlight — a specular highlight sweeps across the text.
 
@@ -78,7 +79,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 	)
 	s.easer.groups = groups
 	s.easer.tracker = engine.Easing_Tracker {
-		fn          = engine.ease_of(.Circular_In_Out),
+		fn          = .Circular_In_Out,
 		total_steps = 100,
 	}
 
@@ -118,7 +119,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		if i == 0 do s.palette_len = len(hl)
 		append(&s.palette, ..hl[:])
 		delete(hl[:])
-		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], base, nil)
+		engine.character_set_visual(&e.chars, id, {symbol = e.chars.input_symbol[id], fg = base})
 		e.chars.is_visible[id] = true
 	}
 }

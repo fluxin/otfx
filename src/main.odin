@@ -520,7 +520,7 @@ read_stdin_all :: proc() -> []byte {
 // A resize rebuild owns one arena for the complete engine/effect lifetime.
 // All default dynamic allocations made during construction belong to it, so a
 // resize releases the entire old world at once rather than retaining stale
-// paths, scene pools, virtual characters, or formatted strings.
+// scene pools, virtual characters, or formatted strings.
 run_effect_once :: proc(
 	input: string,
 	opts: Terminal_Opts,

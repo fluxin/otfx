@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // middleout — characters condense onto the middle row/column, then expand to
 // their home coordinates.
@@ -17,8 +18,8 @@ Middleout_Config :: struct {
 	expand_direction:         Expand_Direction,
 	center_movement_speed:    f64,
 	full_movement_speed:      f64,
-	center_easing:            engine.Easing,
-	full_easing:              engine.Easing,
+	center_easing:            ease.Ease,
+	full_easing:              ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -30,8 +31,8 @@ middleout_config_default :: proc() -> Middleout_Config {
 		expand_direction         = .Vertical,
 		center_movement_speed    = 0.6,
 		full_movement_speed      = 0.6,
-		center_easing            = engine.ease_of(.Sine_In_Out),
-		full_easing              = engine.ease_of(.Sine_In_Out),
+		center_easing            = .Sine_In_Out,
+		full_easing              = .Sine_In_Out,
 		final_gradient_direction = .Vertical,
 	}
 	append(
@@ -145,7 +146,11 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		)
 		s.center_limit = max(s.center_limit, s.center_max_steps[i])
 		s.full_limit = max(s.full_limit, s.full_max_steps[i])
-		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], s.config.starting_color, nil)
+		engine.character_set_visual(
+			&e.chars,
+			id,
+			{symbol = e.chars.input_symbol[id], fg = s.config.starting_color},
+		)
 		e.chars.is_visible[id] = true
 	}
 	s.full_limit = max(s.full_limit, 60)
@@ -164,7 +169,7 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
 				e.chars.current_coord[id] = engine.coord_on_line(
 					s.center_targets[i],
 					e.chars.input_coord[id],
-					engine.easing_apply(s.config.full_easing, progress),
+					ease.ease(s.config.full_easing, progress),
 				)
 			}
 			gradient_step := min(s.phase_tick / 6, 10)
@@ -179,7 +184,7 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = engine.coord_on_line(
 				e.canvas.center,
 				s.center_targets[i],
-				engine.easing_apply(s.config.center_easing, progress),
+				ease.ease(s.config.center_easing, progress),
 			)
 		}
 	}

@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 Orbittingvolley_Config :: struct {
 	top_launcher_symbol:      string,
@@ -13,7 +14,7 @@ Orbittingvolley_Config :: struct {
 	character_movement_speed: f64,
 	volley_size:              f64,
 	launch_delay:             int,
-	character_easing:         engine.Easing,
+	character_easing:         ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -29,7 +30,7 @@ orbittingvolley_config_default :: proc() -> Orbittingvolley_Config {
 		character_movement_speed = 1.5,
 		volley_size              = 0.03,
 		launch_delay             = 30,
-		character_easing         = engine.ease_of(.Sine_Out),
+		character_easing         = .Sine_Out,
 		final_gradient_direction = .Radial,
 	}
 	append(
@@ -291,7 +292,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 			current_coords[id] = engine.coord_on_line(
 				s.launch_origins[i],
 				input_coords[id],
-				engine.easing_apply(s.config.character_easing, f64(age + 1) / f64(steps)),
+				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			)
 		}
 		visual_fg[id] = s.final_colors[i]

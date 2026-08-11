@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 Slice_Direction :: enum {
 	Vertical,
@@ -13,7 +14,7 @@ Slice_Direction :: enum {
 Slice_Config :: struct {
 	slice_direction:          Slice_Direction,
 	movement_speed:           f64,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -23,7 +24,7 @@ slice_config_default :: proc() -> Slice_Config {
 	cfg := Slice_Config {
 		slice_direction          = .Vertical,
 		movement_speed           = 0.25,
-		movement_easing          = engine.ease_of(.Exponential_In_Out),
+		movement_easing          = .Exponential_In_Out,
 		final_gradient_direction = .Diagonal,
 	}
 	append(
@@ -120,7 +121,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	defer delete(characters[:])
 	for id in characters {
 		color := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		engine.set_appearance(&e.chars, id, e.chars.input_symbol[id], color, nil)
+		engine.character_set_visual(&e.chars, id, {symbol = e.chars.input_symbol[id], fg = color})
 	}
 
 	// Horizontal Slice includes inner fill cells inside the text rectangle;
@@ -274,7 +275,7 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
 		id := ids[read]
 		step := steps[read] + 1
 		maximum := max_steps[read]
-		factor := engine.easing_apply(s.config.movement_easing, f64(step) / f64(maximum))
+		factor := ease.ease(s.config.movement_easing, f64(step) / f64(maximum))
 		current_coords[id] = engine.coord_on_line(origins[read], input_coords[id], factor)
 		if step == maximum do continue
 		if write != read {

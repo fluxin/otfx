@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Rings_Config :: struct {
@@ -334,11 +335,11 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		factor := f64(step) / f64(maximum)
 		switch mode {
 		case .Approach_Disperse:
-			factor = engine.easing_apply(engine.ease_of(.Cubic_Out), factor)
+			factor = ease.ease(.Cubic_Out, factor)
 		case .External:
-			factor = engine.easing_apply(engine.ease_of(.Sine_Out), factor)
+			factor = ease.ease(.Sine_Out, factor)
 		case .Home:
-			factor = engine.easing_apply(engine.ease_of(.Quadratic_Out), factor)
+			factor = ease.ease(.Quadratic_Out, factor)
 		case .Disperse_Loop, .Condense, .Rotate, .Idle, .Complete:
 		}
 		coords[id] = engine.coord_on_line(s.origins[slot], s.targets[slot], factor)

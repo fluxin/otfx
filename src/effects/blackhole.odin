@@ -4,6 +4,7 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Blackhole_Config :: struct {
@@ -272,10 +273,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				current_coords[id] = engine.coord_on_line(
 					s.star_coords[source],
 					s.ring_positions[slot],
-					engine.easing_apply(
-						engine.ease_of(.Sine_In_Out),
-						f64(min(age + 1, steps)) / f64(steps),
-					),
+					ease.ease(.Sine_In_Out, f64(min(age + 1, steps)) / f64(steps)),
 				)
 				visual_symbols[id] = "*"
 				visual_fg[id] = s.config.blackhole_color
@@ -306,7 +304,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				current_coords[id] = engine.coord_on_line(
 					s.star_coords[i],
 					e.canvas.center,
-					engine.easing_apply(engine.ease_of(.Exponential_In), progress),
+					ease.ease(.Exponential_In, progress),
 				)
 				visual_fg[id] = engine.gradient_between_step(
 					s.star_colors[i],
@@ -348,19 +346,13 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					current_coords[id] = engine.coord_on_line(
 						blackhole_ring_position(s, slot),
 						s.expanded_positions[slot],
-						engine.easing_apply(
-							engine.ease_of(.Exponential_Out),
-							f64(s.phase_tick + 1) / 18,
-						),
+						ease.ease(.Exponential_Out, f64(s.phase_tick + 1) / 18),
 					)
 				} else {
 					current_coords[id] = engine.coord_on_line(
 						s.expanded_positions[slot],
 						e.canvas.center,
-						engine.easing_apply(
-							engine.ease_of(.Exponential_In),
-							f64(s.phase_tick - 17) / 42,
-						),
+						ease.ease(.Exponential_In, f64(s.phase_tick - 17) / 42),
 					)
 				}
 				visual_symbols[id] = s.phase_tick < 45 ? "◉" : "●"
@@ -379,10 +371,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					current_coords[id] = engine.coord_on_line(
 						e.canvas.center,
 						s.explode_targets[i],
-						engine.easing_apply(
-							engine.ease_of(.Exponential_Out),
-							f64(age + 1) / f64(s.explode_steps[i]),
-						),
+						ease.ease(.Exponential_Out, f64(age + 1) / f64(s.explode_steps[i])),
 					)
 					visual_fg[id] = s.explode_colors[i]
 				} else {
@@ -391,10 +380,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						current_coords[id] = engine.coord_on_line(
 							s.explode_targets[i],
 							input_coords[id],
-							engine.easing_apply(
-								engine.ease_of(.Cubic_In),
-								f64(return_age + 1) / f64(s.return_steps[i]),
-							),
+							ease.ease(.Cubic_In, f64(return_age + 1) / f64(s.return_steps[i])),
 						)
 					}
 					visual_fg[id] = engine.gradient_between_step(

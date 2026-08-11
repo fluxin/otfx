@@ -4,6 +4,7 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math"
+import ease "core:math/ease"
 import rand "core:math/rand"
 import "core:sort"
 
@@ -268,8 +269,8 @@ swarm_lane_position :: proc(s: ^Swarm_State, character, stage, tick: int) -> eng
 	return engine.coord_on_line(
 		s.lane_origins[row],
 		swarm_waypoint(s, character, stage),
-		engine.easing_apply(
-			stage + 1 == stage_count ? engine.ease_of(.Quadratic_In_Out) : engine.ease_of(.Sine_In_Out),
+		ease.ease(
+			stage + 1 == stage_count ? ease.Ease.Quadratic_In_Out : ease.Ease.Sine_In_Out,
 			progress,
 		),
 	)
@@ -429,8 +430,8 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 			current_coords[id] = engine.coord_on_line(
 				s.lane_origins[row],
 				swarm_waypoint(s, i, stage),
-				engine.easing_apply(
-					stage + 1 == stage_count ? engine.ease_of(.Quadratic_In_Out) : engine.ease_of(.Sine_In_Out),
+				ease.ease(
+					stage + 1 == stage_count ? ease.Ease.Quadratic_In_Out : ease.Ease.Sine_In_Out,
 					progress,
 				),
 			)

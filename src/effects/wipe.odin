@@ -3,13 +3,14 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 // wipe — reveal characters along a grouped direction, eased.
 
 Wipe_Config :: struct {
 	wipe_direction:           engine.Character_Group,
 	wipe_delay:               int,
-	wipe_ease:                engine.Easing,
+	wipe_ease:                ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_frames:    int,
@@ -19,7 +20,7 @@ Wipe_Config :: struct {
 wipe_config_default :: proc() -> Wipe_Config {
 	cfg := Wipe_Config {
 		wipe_direction           = .Diagonal_TL2BR,
-		wipe_ease                = engine.ease_of(.Circular_In_Out),
+		wipe_ease                = .Circular_In_Out,
 		final_gradient_frames    = 3,
 		final_gradient_direction = .Vertical,
 	}
@@ -114,7 +115,7 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 			bg = nil,
 		}
 		s.final_colors[id] = final
-		sc := engine.new_scene(e, false, .None, {})
+		sc := engine.new_scene(e, false, {})
 		// wipe gradient from spectrum[0] to the final fg color
 		wg := engine.gradient_make(
 			[]engine.Color{spectrum[0], final.fg.?},

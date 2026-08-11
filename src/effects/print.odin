@@ -3,11 +3,12 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 
 Print_Config :: struct {
 	print_head_return_speed:  f64,
 	print_speed:              int,
-	print_head_easing:        engine.Easing,
+	print_head_easing:        ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -17,7 +18,7 @@ print_config_default :: proc() -> Print_Config {
 	cfg := Print_Config {
 		print_head_return_speed  = 1.5,
 		print_speed              = 2,
-		print_head_easing        = engine.ease_of(.Quadratic_In_Out),
+		print_head_easing        = .Quadratic_In_Out,
 		final_gradient_direction = .Diagonal,
 	}
 	append(
@@ -235,7 +236,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 		e.chars.current_coord[s.typing_head] = engine.coord_on_line(
 			s.head_origin,
 			s.head_target,
-			engine.easing_apply(s.config.print_head_easing, progress),
+			ease.ease(s.config.print_head_easing, progress),
 		)
 		if age + 1 >= s.head_max_steps {
 			e.chars.current_coord[s.typing_head] = s.head_target

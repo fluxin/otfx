@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Bouncyballs_Config :: struct {
@@ -10,7 +11,7 @@ Bouncyballs_Config :: struct {
 	ball_symbols:             [dynamic]string,
 	ball_delay:               int,
 	movement_speed:           f64,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -20,7 +21,7 @@ bouncyballs_config_default :: proc() -> Bouncyballs_Config {
 	cfg := Bouncyballs_Config {
 		ball_delay               = 4,
 		movement_speed           = 0.45,
-		movement_easing          = engine.ease_of(.Bounce_Out),
+		movement_easing          = .Bounce_Out,
 		final_gradient_direction = .Diagonal,
 	}
 	append(
@@ -168,7 +169,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = engine.coord_on_line(
 				s.origins[slot],
 				e.chars.input_coord[id],
-				engine.easing_apply(s.config.movement_easing, progress),
+				ease.ease(s.config.movement_easing, progress),
 			)
 			e.chars.visual_symbol[id] = s.ball_symbols[slot]
 			e.chars.visual_fg[id] = s.ball_colors[slot]

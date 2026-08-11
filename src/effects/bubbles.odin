@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Bubbles_Pop_Condition :: enum {
@@ -37,7 +38,7 @@ Bubbles_Config :: struct {
 	bubble_speed:             f64,
 	bubble_delay:             int,
 	pop_condition:            Bubbles_Pop_Condition,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -48,7 +49,7 @@ bubbles_config_default :: proc() -> Bubbles_Config {
 		pop_color                = engine.Color{0xFF, 0xFF, 0xFF},
 		bubble_speed             = 0.5,
 		bubble_delay             = 20,
-		movement_easing          = engine.ease_of(.Sine_In_Out),
+		movement_easing          = .Sine_In_Out,
 		final_gradient_direction = .Diagonal,
 	}
 	append(
@@ -222,7 +223,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 		delete(circle_points[:])
 	}
 	if s.config.rainbow {
-		s.rainbow_palette = engine.gradient_with_steps(
+		s.rainbow_palette = engine.gradient_make(
 			[]engine.Color {
 				engine.Color{0xE8, 0x14, 0x16},
 				engine.Color{0xFF, 0xA5, 0x00},
@@ -232,7 +233,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 				engine.Color{0x4B, 0x36, 0x9D},
 				engine.Color{0x70, 0x36, 0x9D},
 			},
-			5,
+			[]int{5},
 			false,
 		)
 		for id in s.characters {
@@ -325,10 +326,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 						current_coords[id] = engine.coord_on_line(
 							s.pop_targets[id],
 							input_coords[id],
-							engine.easing_apply(
-								s.config.movement_easing,
-								f64(move_age + 1) / f64(steps),
-							),
+							ease.ease(s.config.movement_easing, f64(move_age + 1) / f64(steps)),
 						)
 					}
 					visual_symbols[id] = input_symbols[id]

@@ -2,6 +2,7 @@ package effects
 
 import engine "../engine"
 
+import ease "core:math/ease"
 import "core:strconv"
 import "core:strings"
 import "core:unicode/utf8"
@@ -670,7 +671,7 @@ parse_ints_flag :: proc(
 }
 
 parse_ease_flag :: proc(
-	ptr: ^engine.Easing,
+	ptr: ^ease.Ease,
 	args: []string,
 	i: ^int,
 	value: string,

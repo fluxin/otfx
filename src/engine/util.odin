@@ -158,12 +158,14 @@ find_normalized_distance_from_center :: proc(
 	col := c.column - x_offset
 	row := c.row - y_offset
 	if col < 1 || col > w || row < 1 || row > h do return 0, false
-	center_x := f64(w) / 2
-	center_y := f64(h) / 2
-	max_distance := math.sqrt(f64(w) * f64(w) + f64(h * 2) * f64(h * 2))
-	distance := math.sqrt(
-		math.pow(f64(col) - center_x, 2) + math.pow((f64(row) - center_y) * 2, 2),
-	)
+	// Measure in the terminal's aspect-scaled coordinate space: one row is two
+	// columns high. The full span's half-diagonal normalizes center to 0 and
+	// the corners to 1.
+	span := linalg.Vector2f64{f64(w), 2 * f64(h)}
+	center := span * 0.5
+	point := linalg.Vector2f64{f64(col), 2 * f64(row)}
+	max_distance := linalg.length(span)
+	distance := linalg.distance(center, point)
 	return distance / (max_distance / 2), true
 }
 
@@ -289,24 +291,20 @@ gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]C
 	return spectrum
 }
 
-gradient_with_steps :: proc(stops: []Color, steps: int, do_loop: bool) -> [dynamic]Color {
-	return gradient_make(stops, []int{steps}, do_loop)
-}
-
 // Sample the same integer-delta interpolation used by gradient_make without
 // materializing the two-stop gradient. Index == steps is the exact end color.
 gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color {
 	assert(steps >= 1 && index >= 0 && index <= steps)
 	if index == steps do return end
-	start_rgb := [3]int{int(start.r), int(start.g), int(start.b)}
-	end_rgb := [3]int{int(end.r), int(end.g), int(end.b)}
-	delta := [3]int {
-		math.floor_div(end_rgb[0] - start_rgb[0], steps),
-		math.floor_div(end_rgb[1] - start_rgb[1], steps),
-		math.floor_div(end_rgb[2] - start_rgb[2], steps),
+	start_rgb := linalg.Vector3f64{f64(start.r), f64(start.g), f64(start.b)}
+	end_rgb := linalg.Vector3f64{f64(end.r), f64(end.g), f64(end.b)}
+	delta := linalg.floor((end_rgb - start_rgb) / f64(steps))
+	rgb := start_rgb + delta * f64(index)
+	return {
+		u8(clamp(int(rgb.x), 0, 255)),
+		u8(clamp(int(rgb.y), 0, 255)),
+		u8(clamp(int(rgb.z), 0, 255)),
 	}
-	rgb := start_rgb + delta * index
-	return {u8(clamp(rgb[0], 0, 255)), u8(clamp(rgb[1], 0, 255)), u8(clamp(rgb[2], 0, 255))}
 }
 
 gradient_color_at_fraction :: proc(spectrum: []Color, fraction: f64) -> Color {
@@ -379,50 +377,15 @@ gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Col
 
 // RGB -> HSL -> RGB brightness adjustment (beams/highlight/matrix).
 adjust_color_brightness :: proc(color: Color, brightness: f64) -> Color {
-	hue_to_rgb :: proc(p, q, t: f64) -> f64 {
-		h := t
-		if h < 0 do h += 1
-		if h > 1 do h -= 1
-		if h < 1.0 / 6.0 do return p + (q - p) * 6.0 * h
-		if h < 1.0 / 2.0 do return q
-		if h < 2.0 / 3.0 do return p + (q - p) * (2.0 / 3.0 - h) * 6.0
-		return p
-	}
-	r := f64(color.r) / 255
-	g := f64(color.g) / 255
-	b := f64(color.b) / 255
-	max_val := max(r, max(g, b))
-	min_val := min(r, min(g, b))
-	lightness := (max_val + min_val) / 2
-	hue_value, saturation := 0.0, 0.0
-	if max_val != min_val {
-		diff := max_val - min_val
-		saturation =
-			lightness > 0.5 ? diff / (2.0 - max_val - min_val) : diff / (max_val + min_val)
-		switch {
-		case max_val == r:
-			hue_value = (g - b) / diff + (g < b ? 6.0 : 0.0)
-		case max_val == g:
-			hue_value = (b - r) / diff + 2.0
-		case:
-			hue_value = (r - g) / diff + 4.0
-		}
-		hue_value /= 6.0
-	}
-	lightness = clamp(lightness * brightness, 0.0, 1.0)
-	red, green, blue := lightness, lightness, lightness
-	if saturation != 0 {
-		q :=
-			lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - lightness * saturation
-		p := 2 * lightness - q
-		red = hue_to_rgb(p, q, hue_value + 1.0 / 3.0)
-		green = hue_to_rgb(p, q, hue_value)
-		blue = hue_to_rgb(p, q, hue_value - 1.0 / 3.0)
-	}
+	rgba := linalg.Vector4f64{f64(color.r) / 255, f64(color.g) / 255, f64(color.b) / 255, 1}
+	hsla := linalg.vector4_rgb_to_hsl(rgba)
+	hsla *= linalg.Vector4f64{1, 1, brightness, 1}
+	hsla.z = clamp(hsla.z, 0.0, 1.0)
+	rgba = linalg.vector4_hsl_to_rgb(hsla.x, hsla.y, hsla.z, hsla.w)
 	return {
-		u8(round_half_even(red * 255)),
-		u8(round_half_even(green * 255)),
-		u8(round_half_even(blue * 255)),
+		u8(round_half_even(rgba.x * 255)),
+		u8(round_half_even(rgba.y * 255)),
+		u8(round_half_even(rgba.z * 255)),
 	}
 }
 
@@ -430,26 +393,7 @@ adjust_color_brightness :: proc(color: Color, brightness: f64) -> Color {
 // easing — named functions come from core:math/ease.
 // ---------------------------------------------------------------------------
 
-Easing_Mode :: enum {
-	Native,
-	Cubic_Bezier,
-}
-
-Easing :: struct {
-	kind:   ease.Ease,
-	mode:   Easing_Mode,
-	bezier: [4]f64,
-}
-
-ease_of :: proc(kind: ease.Ease) -> Easing {
-	return {kind = kind}
-}
-
-cubic_bezier_easing :: proc(x1, y1, x2, y2: f64) -> Easing {
-	return {mode = .Cubic_Bezier, bezier = {x1, y1, x2, y2}}
-}
-
-easing_parse :: proc(s: string) -> (Easing, bool) {
+easing_parse :: proc(s: string) -> (ease.Ease, bool) {
 	k: ease.Ease
 	switch strings.to_lower(s) {
 	case "linear":
@@ -517,42 +461,20 @@ easing_parse :: proc(s: string) -> (Easing, bool) {
 	case:
 		return {}, false
 	}
-	return {kind = k}, true
-}
-
-easing_apply :: #force_inline proc(e: Easing, p: f64) -> f64 {
-	if e.mode == .Native do return ease.ease(e.kind, p)
-	if p <= 0 do return 0
-	if p >= 1 do return 1
-	x1, y1, x2, y2 := e.bezier[0], e.bezier[1], e.bezier[2], e.bezier[3]
-	t := p
-	for _ in 0 ..< 20 {
-		one_minus_t := 1 - t
-		x := 3 * x1 * one_minus_t * one_minus_t * t + 3 * x2 * one_minus_t * t * t + t * t * t
-		delta := x - p
-		if math.abs(delta) < 1e-5 do break
-		derivative :=
-			3 * one_minus_t * one_minus_t * x1 +
-			6 * one_minus_t * t * (x2 - x1) +
-			3 * t * t * (1 - x2)
-		if math.abs(derivative) < 1e-6 do break
-		t -= delta / derivative
-	}
-	one_minus_t := 1 - t
-	return 3 * y1 * one_minus_t * one_minus_t * t + 3 * y2 * one_minus_t * t * t + t * t * t
+	return k, true
 }
 
 // Shared dense-timeline sampler used by scene playback and effects that keep
 // start ticks instead of materializing one Scene per character.
-eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: Easing) -> int {
+eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease) -> int {
 	assert(total_steps >= 1)
 	ratio := f64(step) / f64(total_steps)
-	factor := easing_apply(fn, ratio)
+	factor := ease.ease(fn, ratio)
 	return clamp(round_half_even(factor * f64(total_steps - 1)), 0, total_steps - 1)
 }
 
 Easing_Tracker :: struct {
-	fn:               Easing,
+	fn:               ease.Ease,
 	total_steps:      int,
 	current_step:     int,
 	eased_value:      f64,
@@ -563,7 +485,7 @@ Easing_Tracker :: struct {
 tracker_step :: proc(t: ^Easing_Tracker) -> f64 {
 	if t.current_step < t.total_steps {
 		t.current_step += 1
-		t.eased_value = easing_apply(t.fn, f64(t.current_step) / f64(t.total_steps))
+		t.eased_value = ease.ease(t.fn, f64(t.current_step) / f64(t.total_steps))
 		t.step_delta = t.eased_value - t.last_eased_value
 		t.last_eased_value = t.eased_value
 	}

@@ -4,6 +4,7 @@ import "base:intrinsics"
 import "core:c/libc"
 import "core:fmt"
 import "core:math"
+import ease "core:math/ease"
 import rand "core:math/rand"
 import "core:mem"
 import "core:os"
@@ -176,20 +177,10 @@ Visual :: struct {
 	bold:   bool,
 }
 
-visual_make :: proc(symbol: string, fg, bg: Maybe(Color), bold: bool) -> Visual {
-	return {symbol, fg, bg, bold}
-}
-
 Frame :: struct {
 	visual:   Visual,
 	duration: int,
 	ticks:    int,
-}
-
-Sync :: enum {
-	None,
-	Distance,
-	Step,
 }
 
 Scene :: struct {
@@ -199,8 +190,7 @@ Scene :: struct {
 	frame_index_map:     [dynamic]int, // tick -> frame index for eased scenes
 	played:              int, // frames retired since reset
 	looping:             bool,
-	sync:                Sync,
-	ease:                Maybe(Easing),
+	ease:                Maybe(ease.Ease),
 	easing_total_steps:  int,
 	easing_current_step: int,
 }
@@ -218,7 +208,7 @@ scene_add_frame :: proc(
 ) {
 	assert(duration >= 1)
 	idx := len(s.frames)
-	append(&s.frames, Frame{visual_make(symbol, fg, bg, bold), duration, 0})
+	append(&s.frames, Frame{Visual{symbol, fg, bg, bold}, duration, 0})
 	if s.ease != nil {
 		for _ in 0 ..< duration {
 			append(&s.frame_index_map, idx)
@@ -377,53 +367,6 @@ scene_next_visual :: proc(s: ^Scene) -> Visual {
 	return v
 }
 
-Path_Waypoint :: struct {
-	coord:   Coord,
-	control: Maybe(Coord),
-}
-
-Path :: struct {
-	waypoints:      [dynamic]Path_Waypoint,
-	cum:            [dynamic]f64, // cumulative distance at each waypoint (cum[0] == 0)
-	speed:          f64,
-	ease:           Maybe(Easing),
-	layer:          Maybe(int),
-	hold_time:      int,
-	looping:        bool,
-	// activation state
-	origin:         Coord,
-	origin_dist:    f64,
-	total:          f64,
-	step:           int,
-	max_steps:      int,
-	hold_remaining: int,
-	last_dist:      f64,
-}
-
-path_make :: proc(
-	speed: f64,
-	ease: Maybe(Easing),
-	layer: Maybe(int),
-	hold_time: int,
-	looping: bool,
-) -> Path {
-	assert(speed > 0)
-	return {speed = speed, ease = ease, layer = layer, hold_time = hold_time, looping = looping}
-}
-
-path_add_waypoint :: proc(p: ^Path, c: Coord, control: Maybe(Coord) = nil) {
-	append(&p.waypoints, Path_Waypoint{c, control})
-	n := len(p.waypoints)
-	if n == 1 {
-		append(&p.cum, 0)
-	} else {
-		start := p.waypoints[n - 2].coord
-		length :=
-			control != nil ? quadratic_bezier_length(start, control.?, c) : line_length(start, c, true)
-		append(&p.cum, p.cum[n - 2] + length)
-	}
-}
-
 Character :: struct {
 	character_id:         int,
 	input_symbol:         string,
@@ -432,9 +375,6 @@ Character :: struct {
 	is_fill:              bool,
 	layer:                int,
 	current_coord:        Coord,
-	previous_coord:       Coord,
-	active_path:          int,
-	completed_path:       int,
 	active_scene:         int,
 	// Current appearance is split into the columns its consumers actually read.
 	// Scene-owned Visual rows remain AoS because animation consumes whole rows.
@@ -461,11 +401,8 @@ character_set_visual :: proc(chars: ^Character_Storage, id: Char_Id, visual: Vis
 	chars.visual_bold[id] = visual.bold
 }
 
-char_is_active :: proc(active_path, active_scene: int, scenes: []Scene) -> bool {
-	if active_path >= 0 do return true
-	scene := active_scene
-	if scene < 0 do return false
-	return !scene_complete(scenes[scene])
+char_is_active :: proc(active_scene: int, scenes: []Scene) -> bool {
+	return active_scene >= 0 && !scene_complete(scenes[active_scene])
 }
 
 // ---------------------------------------------------------------------------
@@ -549,13 +486,11 @@ Engine :: struct {
 	input_line_widths: [dynamic]int,
 	resize_seen_at:    Maybe(time.Tick),
 	chars:             Character_Storage, // struct-of-arrays arena
-	paths:             [dynamic]Path, // per-handle pools (variable-length per path)
 	scenes:            [dynamic]Scene,
 	wall_start:        f64,
 	mono_start:        time.Tick,
 	active:            [dynamic]Char_Id,
 	in_active:         [dynamic]u8,
-	active_scratch:    [dynamic]Char_Id,
 	character_sets:    Character_Sets,
 	next_character_id: int,
 	visible_top:       int,
@@ -1005,8 +940,7 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			c.input_symbol = sym
 			c.input_coord = coord(col0 + 1, input_height - row_index)
 			c.current_coord = c.input_coord
-			c.previous_coord = coord(-1, -1)
-			c.active_path, c.completed_path, c.active_scene = -1, -1, -1
+			c.active_scene = -1
 			c.visual_symbol = sym
 			append(&e.chars, c)
 			append(&e.character_sets.input, Char_Id(len(e.chars) - 1))
@@ -1094,8 +1028,7 @@ make_fill_characters :: proc(e: ^Engine) {
 			c.input_symbol = " "
 			c.input_coord = coord(column, row)
 			c.current_coord = c.input_coord
-			c.previous_coord = coord(-1, -1)
-			c.active_path, c.completed_path, c.active_scene = -1, -1, -1
+			c.active_scene = -1
 			c.is_fill = true
 			c.visual_symbol = " "
 			append(&e.chars, c)
@@ -1115,8 +1048,7 @@ add_character :: proc(e: ^Engine, symbol: string, position: Coord) -> Char_Id {
 	c.input_symbol = symbol
 	c.input_coord = position
 	c.current_coord = position
-	c.previous_coord = coord(-1, -1)
-	c.active_path, c.completed_path, c.active_scene = -1, -1, -1
+	c.active_scene = -1
 	c.visual_symbol = symbol
 	append(&e.chars, c)
 	id := Char_Id(len(e.chars) - 1)

@@ -99,7 +99,7 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	s.fire_palette = engine.gradient_with_steps(s.config.burn_colors[:], 10, false)
+	s.fire_palette = engine.gradient_make(s.config.burn_colors[:], []int{10}, false)
 	s.fire_symbols = make([dynamic]string, len(s.fire_palette))
 	cycle_symbols := Burn_Char_Order
 	symbol_index := 0

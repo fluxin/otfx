@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 import "core:time"
 
@@ -493,10 +494,7 @@ thunderstorm_update_sparks :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 				s.spark_origins[slot],
 				s.spark_controls[slot],
 				s.spark_targets[slot],
-				engine.easing_apply(
-					engine.ease_of(.Circular_Out),
-					f64(age + 1) / f64(s.spark_steps[slot]),
-				),
+				ease.ease(.Circular_Out, f64(age + 1) / f64(s.spark_steps[slot])),
 			)
 		} else {
 			cool_step := (age - s.spark_steps[slot]) / s.config.spark_glow_time

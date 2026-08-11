@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Spotlights_Config :: struct {
@@ -167,13 +168,12 @@ spotlights_update_positions :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> 
 		if tick < steps {
 			all_arrived = false
 			progress := f64(tick + 1) / f64(steps)
-			ease :=
-				s.phase == .Converge ? engine.ease_of(.Sine_In_Out) : engine.ease_of(.Quadratic_In_Out)
+			ease_type := s.phase == .Converge ? ease.Ease.Sine_In_Out : ease.Ease.Quadratic_In_Out
 			s.spot_positions[i] = engine.coord_on_quadratic_bezier(
 				s.spot_origins[i],
 				s.spot_controls[i],
 				s.spot_targets[i],
-				engine.easing_apply(ease, progress),
+				ease.ease(ease_type, progress),
 			)
 			s.spot_ticks[i] += 1
 		}

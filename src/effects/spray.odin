@@ -4,6 +4,7 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math"
+import ease "core:math/ease"
 import rand "core:math/rand"
 
 Spray_Position :: enum {
@@ -22,7 +23,7 @@ Spray_Config :: struct {
 	spray_position:           Spray_Position,
 	spray_volume:             f64,
 	movement_speed_range:     Float_Range_Value,
-	movement_easing:          engine.Easing,
+	movement_easing:          ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -33,7 +34,7 @@ spray_config_default :: proc() -> Spray_Config {
 		spray_position           = .E,
 		spray_volume             = 0.005,
 		movement_speed_range     = {0.6, 1.4},
-		movement_easing          = engine.ease_of(.Exponential_Out),
+		movement_easing          = .Exponential_Out,
 		final_gradient_direction = .Vertical,
 	}
 	append(
@@ -213,7 +214,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 			e.chars.current_coord[id] = engine.coord_on_line(
 				s.origin,
 				e.chars.input_coord[id],
-				engine.easing_apply(s.config.movement_easing, progress),
+				ease.ease(s.config.movement_easing, progress),
 			)
 			e.chars.layer[id] = 1
 		} else {
