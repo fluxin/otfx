@@ -94,25 +94,64 @@ Vhstape_Phase :: enum {
 	Glitching,
 	Noise,
 	Redraw,
+	Complete,
 }
 
-// The row state is parallel to `rows.spans`; a kind value of one identifies
-// a moving three-row wave, zero an isolated line glitch.
+Vhstape_Motion :: enum u8 {
+	Idle,
+	Glitch,
+	Restore,
+	Wave,
+}
+Vhstape_Scene :: enum u8 {
+	Idle,
+	Forward,
+	Backward,
+	Base,
+	Snow,
+	Final_Snow,
+	Final_Redraw,
+}
+
+Vhstape_Noise_Frame :: struct {
+	symbol: u8,
+	color:  u16,
+}
+
+VHSTAPE_SNOW_FRAMES :: 25
+VHSTAPE_FINAL_SNOW_FRAMES :: 30
+// An activated path can only span from one 25-column glitch endpoint to the
+// opposite endpoint. At its slowest, that is exactly 50 one-cell frames.
+VHSTAPE_LANE_COORD_CAPACITY :: 50
+
 Vhstape_State :: struct {
-	config:        Vhstape_Config,
-	characters:    [dynamic]engine.Char_Id,
-	final_colors:  [dynamic]engine.Color,
-	rows:          engine.Char_Groups,
-	row_starts:    [dynamic]int,
-	row_durations: [dynamic]int,
-	row_offsets:   [dynamic]int,
-	row_kinds:     [dynamic]u8,
-	phase:         Vhstape_Phase,
-	tick:          int,
-	phase_tick:    int,
-	wave_cooldown: int,
-	noise_index:   int,
-	redraw_row:    int,
+	config:                Vhstape_Config,
+	characters:            [dynamic]engine.Char_Id,
+	index_by_id:           []int,
+	final_colors:          []engine.Color,
+	rows:                  engine.Char_Groups,
+	row_offsets:           []int,
+	row_is_wave:           []u8,
+	row_is_glitch:         []u8,
+	active_wave_rows:      [dynamic]int,
+	active_glitch_rows:    [dynamic]int,
+	active_wave_top:       int,
+	snow_frames:           []Vhstape_Noise_Frame,
+	final_snow_frames:     []Vhstape_Noise_Frame,
+	motions:               []Vhstape_Motion,
+	motion_coords:         []engine.Coord,
+	motion_frame:          []int,
+	motion_frame_count:    []int,
+	motion_holds:          []int,
+	return_steps:          []int,
+	scenes:                []Vhstape_Scene,
+	scene_ticks:           []int,
+	active_characters:     [dynamic]engine.Char_Id,
+	active_character_bits: []u8,
+	phase:                 Vhstape_Phase,
+	tick:                  int,
+	redraw_row:            int,
+	redrawing:             bool,
 }
 
 vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
@@ -131,163 +170,513 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
-	// Char_Id is the Character_Storage index, so this is a direct color column.
-	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	n := len(s.characters)
+	storage_len := len(e.chars)
+	s.index_by_id = make([]int, storage_len)
+	for i in 0 ..< storage_len do s.index_by_id[i] = -1
+	s.final_colors = make([]engine.Color, storage_len)
 	input_coords := e.chars.input_coord
 	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
-	for id in s.characters {
+	for id, i in s.characters {
+		s.index_by_id[id] = i
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], input_coords[id])
 		visual_fg[id].fg = s.final_colors[id]
 		visible[id] = true
 	}
 	s.rows = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
 	row_count := len(s.rows.spans)
-	s.row_starts = make([dynamic]int, row_count)
-	s.row_durations = make([dynamic]int, row_count)
-	s.row_offsets = make([dynamic]int, row_count)
-	s.row_kinds = make([dynamic]u8, row_count)
-	for i in 0 ..< row_count do s.row_starts[i] = -1
-}
+	s.row_offsets = make([]int, row_count)
+	s.row_is_wave = make([]u8, row_count)
+	s.row_is_glitch = make([]u8, row_count)
+	reserve(&s.active_wave_rows, 3)
+	reserve(&s.active_glitch_rows, 3)
+	s.active_wave_top = -1
 
-vhstape_start_row :: proc(s: ^Vhstape_State, row: int, wave: bool) {
-	if s.row_starts[row] >= 0 do return
-	s.row_starts[row] = s.tick
-	s.row_offsets[row] = rand.int_range(4, 26)
-	if rand.int_max(2) == 0 do s.row_offsets[row] = -s.row_offsets[row]
-	s.row_durations[row] = 2 * max(abs(s.row_offsets[row]) / 2, 1) + rand.int_range(20, 76)
-	s.row_kinds[row] = wave ? 1 : 0
-}
-
-// The reference wave is not a random three-line glitch: its leading and
-// trailing rows move eight columns and the centre row moves fourteen. Keep
-// that fixed 8/14/8 profile as row columns, so the characteristic VHS bounce
-// survives without per-character paths.
-vhstape_start_wave_row :: proc(s: ^Vhstape_State, row, offset: int) {
-	if s.row_starts[row] >= 0 do return
-	s.row_starts[row] = s.tick
-	s.row_offsets[row] = offset
-	move_steps := max(engine.round_half_even(f64(offset) / 2), 1)
-	// The reference has no hold on the wave paths; a short return gives the
-	// next wave position a crisp, discrete handoff instead of a long glide.
-	s.row_durations[row] = move_steps * 2
-	s.row_kinds[row] = 1
-}
-
-vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
-	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
-	visual_symbols := e.chars.visual
-	input_symbols := e.chars.input_symbol
-	visual_fg := e.chars.visual
-	for id in engine.group_members(s.rows, row) {
-		current_coords[id] = input_coords[id]
-		visual_symbols[id].symbol = input_symbols[id]
-		visual_fg[id].fg = s.final_colors[id]
+	// Python/Rust draw all snow choices while constructing each line. Keep the
+	// fixed sequences compact and indexed by dense character slot.
+	s.snow_frames = make([]Vhstape_Noise_Frame, n * VHSTAPE_SNOW_FRAMES)
+	s.final_snow_frames = make([]Vhstape_Noise_Frame, n * VHSTAPE_FINAL_SNOW_FRAMES)
+	for row in 0 ..< row_count {
+		offset := rand.int_range(4, 26)
+		if rand.int_max(2) == 0 do offset = -offset
+		s.row_offsets[row] = offset
+		_ = rand.int_range(1, 51) // initial path hold; runtime activation replaces it
+		for id in engine.group_members(s.rows, row) {
+			i := s.index_by_id[id]
+			for frame in 0 ..< VHSTAPE_SNOW_FRAMES {
+				s.snow_frames[i * VHSTAPE_SNOW_FRAMES + frame] = {
+					u8(rand.int_max(len(Vhs_Noise_Symbols))),
+					u16(rand.int_max(len(s.config.noise_colors))),
+				}
+			}
+			for frame in 0 ..< VHSTAPE_FINAL_SNOW_FRAMES {
+				s.final_snow_frames[i * VHSTAPE_FINAL_SNOW_FRAMES + frame] = {
+					u8(rand.int_max(len(Vhs_Noise_Symbols))),
+					u16(rand.int_max(len(s.config.noise_colors))),
+				}
+			}
+		}
 	}
-	s.row_starts[row] = -1
+
+	s.motions = make([]Vhstape_Motion, storage_len)
+	s.motion_coords = make([]engine.Coord, storage_len * VHSTAPE_LANE_COORD_CAPACITY)
+	s.motion_frame = make([]int, storage_len)
+	s.motion_frame_count = make([]int, storage_len)
+	s.motion_holds = make([]int, storage_len)
+	s.return_steps = make([]int, storage_len)
+	s.scenes = make([]Vhstape_Scene, storage_len)
+	s.scene_ticks = make([]int, storage_len)
+	s.active_character_bits = make([]u8, storage_len)
+	reserve(&s.active_characters, n)
+	s.redraw_row = row_count - 1
+}
+
+
+vhstape_activate_character :: proc(s: ^Vhstape_State, id: engine.Char_Id) {
+	if s.active_character_bits[id] != 0 do return
+	s.active_character_bits[id] = 1
+	append(&s.active_characters, id)
+}
+
+vhstape_noise_visual :: proc(
+	s: ^Vhstape_State,
+	frames: []Vhstape_Noise_Frame,
+	frame_count: int,
+	id: engine.Char_Id,
+	frame: int,
+) -> engine.Visual {
+	i := s.index_by_id[id]
+	choice := frames[i * frame_count + frame]
+	symbols := Vhs_Noise_Symbols
+	return {symbol = symbols[choice.symbol], fg = s.config.noise_colors[choice.color]}
+}
+
+vhstape_start_scene :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+	scene: Vhstape_Scene,
+) {
+	s.scenes[id] = scene
+	symbol := chars.input_symbol[id]
+	switch scene {
+	case .Forward:
+		chars.visual[id] = {
+			symbol = symbol,
+			fg     = s.config.glitch_line_colors[0],
+		}
+	case .Backward:
+		chars.visual[id] = {
+			symbol = symbol,
+			fg     = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+		}
+	case .Base:
+		s.scene_ticks[id] = 0
+		chars.visual[id] = {
+			symbol = symbol,
+			fg     = s.final_colors[id],
+		}
+	case .Snow:
+		step := s.scene_ticks[id]
+		if step < VHSTAPE_SNOW_FRAMES * 2 {
+			chars.visual[id] = vhstape_noise_visual(
+				s,
+				s.snow_frames[:],
+				VHSTAPE_SNOW_FRAMES,
+				id,
+				step / 2,
+			)
+		} else {
+			chars.visual[id] = {
+				symbol = symbol,
+				fg     = s.final_colors[id],
+			}
+		}
+	case .Final_Snow:
+		s.scene_ticks[id] = 0
+		chars.visual[id] = vhstape_noise_visual(
+			s,
+			s.final_snow_frames[:],
+			VHSTAPE_FINAL_SNOW_FRAMES,
+			id,
+			0,
+		)
+	case .Final_Redraw:
+		s.scene_ticks[id] = 0
+		chars.visual[id] = {
+			symbol = "█",
+			fg     = engine.Color{0xFF, 0xFF, 0xFF},
+		}
+	case .Idle:
+	}
+}
+
+vhstape_start_motion :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+	kind: Vhstape_Motion,
+	target: engine.Coord,
+	max_steps, hold: int,
+) {
+	s.motions[id] = kind
+	s.motion_frame[id] = 0
+	s.motion_frame_count[id] = max_steps
+	s.motion_holds[id] = hold
+	assert(max_steps <= VHSTAPE_LANE_COORD_CAPACITY)
+	base := int(id) * VHSTAPE_LANE_COORD_CAPACITY
+	for frame in 1 ..= max_steps {
+		s.motion_coords[base + frame - 1] = engine.coord_on_line(
+			chars.current_coord[id],
+			target,
+			f64(frame) / f64(max_steps),
+		)
+	}
+	vhstape_start_scene(s, chars, id, kind == .Restore ? .Backward : .Forward)
+	vhstape_activate_character(s, id)
+}
+
+vhstape_steps :: proc(origin, target: engine.Coord, denominator: int) -> int {
+	return engine.round_half_even(
+		engine.line_length(origin, target, true) * f64(denominator) / 40.0,
+	)
+}
+
+vhstape_start_restore :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+	steps: int,
+) {
+	vhstape_start_motion(s, chars, id, .Restore, chars.input_coord[id], steps, 0)
+}
+
+vhstape_restore_row :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage, row: int) {
+	for id in engine.group_members(s.rows, row) {
+		steps := vhstape_steps(
+			chars.current_coord[id],
+			chars.input_coord[id],
+			rand.int_range(20, 41),
+		)
+		vhstape_start_restore(s, chars, id, steps)
+	}
+}
+
+vhstape_start_glitch_row :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	row, hold: int,
+) {
+	for id in engine.group_members(s.rows, row) {
+		p := chars.input_coord[id]
+		target := engine.coord(p.column + s.row_offsets[row], p.row)
+		out_steps := vhstape_steps(chars.current_coord[id], target, rand.int_range(20, 41))
+		s.return_steps[id] = vhstape_steps(target, p, rand.int_range(20, 41))
+		vhstape_start_motion(s, chars, id, .Glitch, target, out_steps, hold)
+	}
+}
+
+vhstape_start_wave_row :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	row, offset: int,
+) {
+	for id in engine.group_members(s.rows, row) {
+		p := chars.input_coord[id]
+		target := engine.coord(p.column + offset, p.row)
+		vhstape_start_motion(
+			s,
+			chars,
+			id,
+			.Wave,
+			target,
+			vhstape_steps(chars.current_coord[id], target, 20),
+			0,
+		)
+	}
+}
+
+vhstape_row_motion_complete :: proc(s: ^Vhstape_State, row: int) -> bool {
+	for id in engine.group_members(s.rows, row) {
+		if s.motions[id] != .Idle do return false
+	}
+	return true
+}
+
+vhstape_rows_complete :: proc(s: ^Vhstape_State, rows: []int) -> bool {
+	for row in rows {
+		if !vhstape_row_motion_complete(s, row) do return false
+	}
+	return true
+}
+
+vhstape_contains_row :: proc(rows: []int, row: int) -> bool {
+	for candidate in rows {
+		if candidate == row do return true
+	}
+	return false
+}
+
+vhstape_glitch_wave :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	canvas: engine.Canvas,
+) {
+	if s.active_wave_top < 0 {
+		if canvas.text_height < 3 do return
+		lower := max(3, engine.round_half_even(f64(canvas.text_height) * 0.5))
+		s.active_wave_top = canvas.text_bottom + rand.int_range(lower, canvas.text_height + 1)
+	} else if len(s.active_wave_rows) > 0 {
+		if rand.float64() < 0.3 do s.active_wave_top += rand.float64() < 0.3 ? 1 : -1
+		s.active_wave_top = clamp(s.active_wave_top, 2, canvas.text_top)
+	}
+
+	new_rows: [3]int
+	new_count := 0
+	for line := s.active_wave_top - 2; line <= s.active_wave_top; line += 1 {
+		row := line - (canvas.text_bottom - 1)
+		if row >= 0 && row < len(s.rows.spans) {
+			new_rows[new_count] = row
+			new_count += 1
+		}
+	}
+	for row in s.active_wave_rows {
+		if !vhstape_contains_row(new_rows[:new_count], row) {
+			vhstape_restore_row(s, chars, row)
+			s.row_is_wave[row] = 0
+		}
+	}
+	clear(&s.active_wave_rows)
+	for row in new_rows[:new_count] {
+		append(&s.active_wave_rows, row)
+		s.row_is_wave[row] = 1
+	}
+	if s.active_wave_top < canvas.text_bottom + 2 {
+		for row in s.active_wave_rows {
+			vhstape_restore_row(s, chars, row)
+			s.row_is_wave[row] = 0
+		}
+		clear(&s.active_wave_rows)
+		s.active_wave_top = -1
+		return
+	}
+	offsets := [3]int{8, 14, 8}
+	for row, i in s.active_wave_rows do vhstape_start_wave_row(s, chars, row, offsets[i])
+}
+
+vhstape_motion_step :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+) {
+	kind := s.motions[id]
+	if kind == .Idle do return
+	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
+	if frame < frame_count {
+		chars.current_coord[id] = s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame]
+		frame += 1
+		s.motion_frame[id] = frame
+	}
+	if frame != frame_count do return
+	if s.motion_holds[id] > 0 {
+		s.motion_holds[id] -= 1
+		return
+	}
+	s.motions[id] = .Idle
+	if kind == .Glitch do vhstape_start_restore(s, chars, id, s.return_steps[id])
+}
+
+vhstape_synced_color :: proc(
+	palette: []engine.Color,
+	step, max_steps: int,
+	reverse: bool,
+) -> engine.Color {
+	i := clamp(
+		engine.round_half_even(f64(len(palette) - 1) * f64(max(step, 1)) / f64(max(max_steps, 1))),
+		0,
+		len(palette) - 1,
+	)
+	if reverse do i = len(palette) - 1 - i
+	return palette[i]
+}
+
+vhstape_scene_step :: proc(
+	s: ^Vhstape_State,
+	chars: ^engine.Character_Storage,
+	id: engine.Char_Id,
+) {
+	scene := s.scenes[id]
+	if scene == .Idle do return
+	symbol := chars.input_symbol[id]
+	switch scene {
+	case .Forward:
+		if s.motions[id] == .Idle {
+			chars.visual[id] = {
+				symbol = symbol,
+				fg     = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+			}
+			s.scenes[id] = .Idle
+		} else {
+			chars.visual[id] = {
+				symbol = symbol,
+				fg     = vhstape_synced_color(
+					s.config.glitch_line_colors[:],
+					s.motion_frame[id],
+					s.motion_frame_count[id],
+					false,
+				),
+			}
+		}
+	case .Backward:
+		if s.motions[id] == .Idle {
+			vhstape_start_scene(s, chars, id, .Base)
+		} else {
+			chars.visual[id] = {
+				symbol = symbol,
+				fg     = vhstape_synced_color(
+					s.config.glitch_line_colors[:],
+					s.motion_frame[id],
+					s.motion_frame_count[id],
+					true,
+				),
+			}
+		}
+	case .Base:
+		chars.visual[id] = {
+			symbol = symbol,
+			fg     = s.final_colors[id],
+		}
+		s.scenes[id] = .Idle
+	case .Snow:
+		step := s.scene_ticks[id]
+		if step < VHSTAPE_SNOW_FRAMES * 2 {
+			chars.visual[id] = vhstape_noise_visual(
+				s,
+				s.snow_frames[:],
+				VHSTAPE_SNOW_FRAMES,
+				id,
+				step / 2,
+			)
+		} else {
+			chars.visual[id] = {
+				symbol = symbol,
+				fg     = s.final_colors[id],
+			}
+		}
+		s.scene_ticks[id] += 1
+		if s.scene_ticks[id] == VHSTAPE_SNOW_FRAMES * 2 + 1 {
+			s.scene_ticks[id] = 0
+			s.scenes[id] = .Idle
+		}
+	case .Final_Snow:
+		step := s.scene_ticks[id]
+		chars.visual[id] = vhstape_noise_visual(
+			s,
+			s.final_snow_frames[:],
+			VHSTAPE_FINAL_SNOW_FRAMES,
+			id,
+			step / 2,
+		)
+		s.scene_ticks[id] += 1
+		if s.scene_ticks[id] == VHSTAPE_FINAL_SNOW_FRAMES * 2 do s.scenes[id] = .Idle
+	case .Final_Redraw:
+		if s.scene_ticks[id] < 6 {
+			chars.visual[id] = {
+				symbol = "█",
+				fg     = engine.Color{0xFF, 0xFF, 0xFF},
+			}
+		} else {
+			chars.visual[id] = {
+				symbol = symbol,
+				fg     = s.final_colors[id],
+			}
+		}
+		s.scene_ticks[id] += 1
+		if s.scene_ticks[id] == 7 do s.scenes[id] = .Idle
+	case .Idle:
+	}
+}
+
+vhstape_update_active :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage) {
+	write := 0
+	for id in s.active_characters {
+		vhstape_motion_step(s, chars, id)
+		vhstape_scene_step(s, chars, id)
+		if s.motions[id] != .Idle || s.scenes[id] != .Idle {
+			s.active_characters[write] = id
+			write += 1
+		} else {
+			s.active_character_bits[id] = 0
+		}
+	}
+	resize(&s.active_characters, write)
+}
+
+vhstape_start_snow :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage, final: bool) {
+	for id in s.characters {
+		vhstape_start_scene(s, chars, id, final ? .Final_Snow : .Snow)
+		vhstape_activate_character(s, id)
+	}
+}
+
+vhstape_start_redraw_row :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage, row: int) {
+	for id in engine.group_members(s.rows, row) {
+		vhstape_start_scene(s, chars, id, .Final_Redraw)
+		vhstape_activate_character(s, id)
+	}
 }
 
 vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
-	if s.phase == .Glitching {
-		row_count := len(s.rows.spans)
-		if s.wave_cooldown == 0 && row_count >= 3 {
-			start := rand.int_range(max(row_count / 2 - 2, 0), row_count - 2)
-			vhstape_start_wave_row(s, start, 8)
-			vhstape_start_wave_row(s, start + 1, 14)
-			vhstape_start_wave_row(s, start + 2, 8)
-			// The path itself lasts 14 ticks. Re-arm soon after it returns so the
-			// screen keeps shaking like tape tracking, rather than once per 40.
-			s.wave_cooldown = 16
-		} else {
-			s.wave_cooldown -= 1
+	chars := &e.chars
+	if s.phase == .Complete && len(s.active_characters) == 0 do return nil, false
+	switch s.phase {
+	case .Glitching:
+		if len(s.active_wave_rows) == 0 || vhstape_rows_complete(s, s.active_wave_rows[:]) {
+			vhstape_glitch_wave(s, chars, e.canvas)
 		}
-		if rand.float64() < s.config.glitch_line_chance {
-			vhstape_start_row(s, rand.int_max(row_count), false)
-		}
-
-		current_coords := e.chars.current_coord
-		input_coords := e.chars.input_coord
-		input_symbols := e.chars.input_symbol
-		visual_symbols := e.chars.visual
-		visual_fg := e.chars.visual
-		for row in 0 ..< row_count {
-			start := s.row_starts[row]
-			if start < 0 do continue
-			age := s.tick - start
-			if age >= s.row_durations[row] {
-				vhstape_restore_row(s, e, row)
-				continue
-			}
-			move_steps := max(abs(s.row_offsets[row]) / 2, 1)
-			delta: int
-			if age < move_steps {
-				delta = s.row_offsets[row] * (age + 1) / move_steps
-			} else if age < s.row_durations[row] - move_steps {
-				delta = s.row_offsets[row]
+		write := 0
+		for row in s.active_glitch_rows {
+			if vhstape_row_motion_complete(s, row) {
+				s.row_is_glitch[row] = 0
 			} else {
-				remaining := s.row_durations[row] - age
-				delta = s.row_offsets[row] * remaining / move_steps
-			}
-			palette :=
-				s.row_kinds[row] == 0 ? s.config.glitch_line_colors[:] : s.config.glitch_wave_colors[:]
-			color := palette[min(age / 4, len(palette) - 1)]
-			for id in engine.group_members(s.rows, row) {
-				p := input_coords[id]
-				current_coords[id] = engine.coord(p.column + delta, p.row)
-				visual_symbols[id].symbol = input_symbols[id]
-				visual_fg[id].fg = color
+				s.active_glitch_rows[write] = row
+				write += 1
 			}
 		}
-
-		if rand.float64() < s.config.noise_chance {
-			noise_symbols := Vhs_Noise_Symbols
-			for id in s.characters {
-				visual_symbols[id].symbol = noise_symbols[rand.int_max(len(noise_symbols))]
-				visual_fg[id].fg = s.config.noise_colors[rand.int_max(len(s.config.noise_colors))]
+		resize(&s.active_glitch_rows, write)
+		if rand.float64() < s.config.glitch_line_chance && len(s.active_glitch_rows) < 3 {
+			row := rand.int_max(len(s.rows.spans))
+			if s.row_is_wave[row] == 0 && s.row_is_glitch[row] == 0 {
+				s.row_is_glitch[row] = 1
+				append(&s.active_glitch_rows, row)
+				vhstape_start_glitch_row(s, chars, row, rand.int_range(20, 76))
 			}
 		}
+		if rand.float64() < s.config.noise_chance do vhstape_start_snow(s, chars, false)
 		s.tick += 1
-		if s.tick == s.config.total_glitch_time {
-			for row in 0 ..< row_count {
-				if s.row_starts[row] >= 0 do vhstape_restore_row(s, e, row)
-			}
+		if s.tick >= s.config.total_glitch_time {
+			for row in s.active_wave_rows do vhstape_restore_row(s, chars, row)
+			for row in s.active_glitch_rows do vhstape_restore_row(s, chars, row)
 			s.phase = .Noise
-			s.phase_tick = 0
 		}
-		return s.characters[:], true
-	}
-
-	if s.phase == .Noise {
-		if s.phase_tick == 30 {
+	case .Noise:
+		if len(s.active_characters) == 0 {
+			vhstape_start_snow(s, chars, true)
 			s.phase = .Redraw
-			s.redraw_row = 0
-			return vhstape_next(s, e)
 		}
-		noise_symbols := Vhs_Noise_Symbols
-		visual_symbols := e.chars.visual
-		visual_fg := e.chars.visual
-		for id in s.characters {
-			visual_symbols[id].symbol = noise_symbols[s.noise_index]
-			visual_fg[id].fg = s.config.noise_colors[s.noise_index]
-			s.noise_index += 1
-			if s.noise_index == min(len(noise_symbols), len(s.config.noise_colors)) do s.noise_index = 0
+	case .Redraw:
+		if s.redrawing || len(s.active_characters) == 0 {
+			s.redrawing = true
+			if s.redraw_row >= 0 {
+				vhstape_start_redraw_row(s, chars, s.redraw_row)
+				s.redraw_row -= 1
+			} else {
+				s.phase = .Complete
+			}
 		}
-		s.phase_tick += 1
-		return s.characters[:], true
+	case .Complete:
 	}
-
-	if s.redraw_row == len(s.rows.spans) do return nil, false
-	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
-	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
-	for id in engine.group_members(s.rows, s.redraw_row) {
-		current_coords[id] = input_coords[id]
-		visual_symbols[id].symbol = input_symbols[id]
-		visual_fg[id].fg = s.final_colors[id]
-	}
-	s.redraw_row += 1
+	vhstape_update_active(s, chars)
 	return s.characters[:], true
 }
