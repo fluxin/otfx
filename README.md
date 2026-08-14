@@ -425,8 +425,8 @@ done
 ```
 
 This validates construction and early-frame execution for every exposed effect.
-It does not replace a future parity harness with virtual time and captured
-logical frames.
+It does not replace a parity harness that captures logical frames; `otfx` now
+has the virtual clock such a harness needs, but not the capture side.
 
 ## Remaining parity work
 

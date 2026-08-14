@@ -87,6 +87,13 @@ thunderstorm_parse :: proc(cfg: ^Thunderstorm_Config, args: []string) -> bool {
 	return true
 }
 
+// The pre- and post-storm fades hold each colour of an eight-entry gradient for
+// twelve frames. Ending the phase at 85 truncated the last step to a single
+// frame, cutting 11 frames off both fades and making the effect finish early.
+Thunderstorm_Fade_Steps :: 7 // gradient steps, so eight colours including both ends
+Thunderstorm_Fade_Hold :: 12 // frames each colour is held
+Thunderstorm_Fade_Frames :: (Thunderstorm_Fade_Steps + 1) * Thunderstorm_Fade_Hold
+
 Thunderstorm_Phase :: enum {
 	Prestorm,
 	Storm,
@@ -582,7 +589,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 	chars := &e.chars
 	switch s.phase {
 	case .Prestorm:
-		step := min(s.phase_tick / 12, 7)
+		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
 		for id, i in s.characters {
 			chars.visual[id].fg = engine.gradient_between_step(
 				s.final_colors[i],
@@ -604,7 +611,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 			}
 		}
 		s.phase_tick += 1
-		if s.phase_tick > 84 {
+		if s.phase_tick >= Thunderstorm_Fade_Frames {
 			s.phase = .Storm
 			s.phase_tick = 0
 			s.storm_started = engine.now_wall(e)
@@ -626,7 +633,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 			s.phase_tick = 0
 		}
 	case .Poststorm:
-		step := min(s.phase_tick / 12, 7)
+		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
 		for id, i in s.characters {
 			chars.visual[id].fg = engine.gradient_between_step(
 				s.storm_colors[i],
@@ -648,7 +655,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 			}
 		}
 		s.phase_tick += 1
-		if s.phase_tick > 84 {
+		if s.phase_tick >= Thunderstorm_Fade_Frames {
 			if s.color_handling == .Dynamic {
 				for id in s.characters do engine.dynamic_apply_input_colors(&chars.visual[id], chars.input_style[id])
 			}

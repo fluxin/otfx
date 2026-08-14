@@ -1,14 +1,14 @@
 package main
 
+import common "../common"
+
 import "../../src/effects"
 import "../../src/engine"
 
 import "core:fmt"
 import "core:image"
-import "core:math/rand"
 import "core:mem/virtual"
 import "core:os"
-import "core:reflect"
 import "core:strings"
 import "core:unicode/utf8"
 
@@ -245,11 +245,6 @@ raster_render_cells :: proc(
 	}
 }
 
-Preview_Run :: struct {
-	engine_state: engine.Engine,
-	effect:       effects.Effect,
-}
-
 // Both passes rebuild from the same seed, so the second walk reproduces the
 // first frame for frame. That is what lets pass one measure colours without
 // holding every frame in memory.
@@ -257,7 +252,7 @@ preview_start :: proc(
 	kind: effects.Effect_Kind,
 	text: string,
 ) -> (
-	run: Preview_Run,
+	run: common.Run,
 	ok: bool,
 ) {
 	cfg := engine.config_default()
@@ -272,42 +267,16 @@ preview_start :: proc(
 	cfg.virtual_clock = true
 	cfg.terminal_background_color = {Background[0], Background[1], Background[2]}
 
-	rand.reset_u64(Preview_Seed)
-	message: string
-	engine_ok: bool
-	run.engine_state, message, engine_ok = engine.engine_make(text, cfg, context.allocator)
-	if !engine_ok {
-		fmt.eprintfln("failed to build preview engine: %s", message)
-		return {}, false
-	}
-	effect_ok: bool
-	run.effect, effect_ok = effects.make_effect(kind, demo_args(kind))
-	if !effect_ok {
-		fmt.eprintfln("failed to build preview effect")
-		return {}, false
-	}
-	effects.build_effect(&run.effect, &run.engine_state)
-	free_all(context.temp_allocator)
-	return run, true
+	run, ok = common.run_make(kind, demo_args(kind), cfg, text, Preview_Seed)
+	if !ok do fmt.eprintfln("failed to build the %s preview", effect_name(kind, context.temp_allocator))
+	return run, ok
 }
 
-preview_step :: proc(run: ^Preview_Run) -> (width, height: int, ok: bool) {
-	render_candidates, produced := effects.next_frame(&run.effect, &run.engine_state)
-	if !produced do return 0, 0, false
-	if render_candidates == nil {
-		width, height = engine.update_render_cells_all(&run.engine_state)
-	} else {
-		width, height = engine.update_render_cells_selected(&run.engine_state, render_candidates)
-	}
-	return width, height, true
+preview_step :: proc(run: ^common.Run) -> (width, height: int, ok: bool) {
+	return common.run_step(run)
 }
 
-// Caller owns the result. It has to outlive the preview run, which resets the
-// temp allocator between frames.
-effect_name :: proc(kind: effects.Effect_Kind, allocator := context.allocator) -> string {
-	name, _ := reflect.enum_name_from_value(kind)
-	return strings.to_lower(name, allocator)
-}
+effect_name :: common.effect_name
 
 // Effects run to completion rather than to a hand-tuned frame window: a fixed
 // last_frame per effect has to be retuned whenever effect timing shifts, and it

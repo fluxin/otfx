@@ -6,6 +6,7 @@ otfx
 bench/bench
 bench/bench.bin
 tools/docs/render_previews
+tools/parity/parity
 bench/__pycache__/
 *.pyc
 
