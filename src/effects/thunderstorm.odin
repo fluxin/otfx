@@ -140,7 +140,7 @@ Thunderstorm_State :: struct {
 	spark_free:          [dynamic]int,
 	phase:               Thunderstorm_Phase,
 	phase_tick:          int,
-	storm_started:       time.Tick,
+	storm_started:       f64,
 	tick:                int,
 	color_handling:      engine.Existing_Color_Handling,
 }
@@ -607,7 +607,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		if s.phase_tick > 84 {
 			s.phase = .Storm
 			s.phase_tick = 0
-			s.storm_started = time.tick_now()
+			s.storm_started = engine.now_wall(e)
 		}
 	case .Storm:
 		thunderstorm_spawn_rain(s, chars, e.canvas)
@@ -616,7 +616,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		thunderstorm_update_rain(s, chars)
 		thunderstorm_update_sparks(s, chars, e.cfg.terminal_background_color)
 		thunderstorm_update_text(s, chars)
-		if time.duration_seconds(time.tick_since(s.storm_started)) >= f64(s.config.storm_time) &&
+		if engine.now_wall(e) - s.storm_started >= f64(s.config.storm_time) &&
 		   !s.strike_live {
 			for id in s.rain_ids do chars.is_visible[id] = false
 			for id in s.spark_ids do chars.is_visible[id] = false

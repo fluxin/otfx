@@ -6,55 +6,50 @@ import "../../src/engine"
 import "core:fmt"
 import "core:image"
 import "core:math/rand"
+import "core:mem/virtual"
 import "core:os"
+import "core:reflect"
+import "core:strings"
 import "core:unicode/utf8"
 
-// The generated GIFs are terminal-cell captures, not ANSI parses. They use
-// the active Omarchy Tokyo Night colors and the current 9-point JetBrains Mono
-// cell geometry (8x18 with Ghostty's 14-pixel padding).
-Preview :: struct {
-	name:         string,
-	kind:         effects.Effect_Kind,
-	last_frame:   int,
-	frame_stride: int,
-}
+// Terminal-cell captures, not ANSI parses: the tool steps the real effect and
+// renderer pipeline and rasterizes the resulting cell grid.
+//
+// Geometry, seed and framing match the upstream ttfx gallery so the two sets of
+// previews are comparable side by side -- same 81x10 Omarchy logo on an 84x13
+// canvas, same centred anchors, same 7x13 cells.
+Preview_Width :: 84
+Preview_Height :: 13
+Preview_Seed :: u64(3)
 
-Preview_Input :: "otfx\nOdin terminal effects"
-Preview_Width :: 64
-Preview_Height :: 16
-Preview_Seed :: u64(1)
+Cell_Width :: 7
+Cell_Height :: 13
+Gif_Hold_Centiseconds :: 150 // the finished logo rests before the loop restarts
 
-Omarchy_Background :: engine.Color{0x1a, 0x1b, 0x26}
-Omarchy_Foreground :: engine.Color{0xa9, 0xb1, 0xd6}
-Omarchy_Ansi :: [16]engine.Color {
-	{0x32, 0x34, 0x4a},
-	{0xf7, 0x76, 0x8e},
-	{0x9e, 0xce, 0x6a},
-	{0xe0, 0xaf, 0x68},
-	{0x7a, 0xa2, 0xf7},
-	{0xad, 0x8e, 0xe6},
-	{0x44, 0x9d, 0xab},
-	{0x78, 0x7c, 0x99},
-	{0x44, 0x4b, 0x6a},
-	{0xff, 0x7a, 0x93},
-	{0xb9, 0xf2, 0x7c},
-	{0xff, 0x9e, 0x64},
-	{0x7d, 0xa6, 0xff},
-	{0xbb, 0x9a, 0xf7},
-	{0x0d, 0xb9, 0xd7},
-	{0xac, 0xb0, 0xd0},
-}
+// Playback has to run at the rate the effect actually animates at, so the frame
+// delay is derived from the sampling stride rather than fixed: a fixed delay
+// makes a densely sampled effect crawl and a sparsely sampled one race.
+//
+// GIF delays are whole centiseconds, and 100/60 is not one, so the stride is
+// kept a multiple of three. Three source frames are then exactly 5 cs, and the
+// preview plays back at 20 fps in real time no matter how long the effect runs.
+Source_Frames_Per_Sample :: 3
+Gif_Delay_Per_Sample :: Source_Frames_Per_Sample * 100 / engine.Virtual_Frame_Rate
 
-Cell_Width :: 8
-Cell_Height :: 18
-Cell_Padding :: 14
-Gif_Delay_Centiseconds :: 8
+// Above this the previews stop being cheap to load in a README, so frames are
+// sampled evenly instead. The final frame is always kept.
+Max_Frames :: 360
 
-Previews :: [3]Preview {
-	{name = "decrypt", kind = .Decrypt, last_frame = 170, frame_stride = 2},
-	{name = "fireworks", kind = .Fireworks, last_frame = 360, frame_stride = 4},
-	{name = "blackhole", kind = .Blackhole, last_frame = 360, frame_stride = 4},
-}
+// Backstop only. matrix and thunderstorm budget a phase in seconds, and the
+// previews run unpaced; the virtual clock is what keeps those bounded, so
+// reaching this cap means an effect stopped converging.
+Max_Simulation_Frames :: 20_000
+
+Background :: image.RGB_Pixel{0x12, 0x12, 0x1a}
+Foreground :: image.RGB_Pixel{0xc8, 0xc8, 0xd0}
+
+Logo_Env :: "OTFX_DOCS_TEXT_FILE"
+Logo_Path :: "/.local/share/omarchy/logo.txt"
 
 Raster :: struct {
 	width, height: int,
@@ -71,7 +66,11 @@ raster_fill :: proc(r: ^Raster, color: image.RGB_Pixel) {
 
 raster_fill_rect :: proc(r: ^Raster, x, y, width, height: int, color: image.RGB_Pixel) {
 	for row in y ..< y + height {
-		for column in x ..< x + width do r.pixels[row * r.width + column] = color
+		if row < 0 || row >= r.height do continue
+		for column in x ..< x + width {
+			if column < 0 || column >= r.width do continue
+			r.pixels[row * r.width + column] = color
+		}
 	}
 }
 
@@ -79,148 +78,117 @@ color_pixel :: #force_inline proc(color: engine.Color) -> image.RGB_Pixel {
 	return {color.r, color.g, color.b}
 }
 
-glyph_unknown :: proc(ch: rune) -> [7]u8 {
-	rows: [7]u8
-	bits := u32(ch) * 0x45d9f3b
-	for row in 0 ..< len(rows) {
-		value := u8((bits >> u32((row * 5) % 24)) & 0x1f)
-		rows[row] = value if value != 0 else 0x04
+blend :: #force_inline proc(
+	fg, bg: image.RGB_Pixel,
+	alpha: u8,
+) -> image.RGB_Pixel {
+	if alpha == 255 do return fg
+	if alpha == 0 do return bg
+	a := u32(alpha)
+	inverse := 255 - a
+	return {
+		u8((u32(fg[0]) * a + u32(bg[0]) * inverse) / 255),
+		u8((u32(fg[1]) * a + u32(bg[1]) * inverse) / 255),
+		u8((u32(fg[2]) * a + u32(bg[2]) * inverse) / 255),
 	}
-	return rows
 }
 
-// A compact, fixed terminal glyph set keeps the documentation renderer native
-// and reproducible. Unknown printable runes retain a stable five-bit glyph so
-// decryption and glitch phases remain visibly distinct.
-glyph_rows :: proc(ch: rune) -> [7]u8 {
-	switch ch {
-	case ' ', '\u0000':
-		return {}
-	case 'a', 'A':
-		return {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11}
-	case 'b', 'B':
-		return {0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e}
-	case 'c', 'C':
-		return {0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e}
-	case 'd', 'D':
-		return {0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e}
-	case 'e', 'E':
-		return {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f}
-	case 'f', 'F':
-		return {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10}
-	case 'g', 'G':
-		return {0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f}
-	case 'h', 'H':
-		return {0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11}
-	case 'i', 'I':
-		return {0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e}
-	case 'j', 'J':
-		return {0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0c}
-	case 'k', 'K':
-		return {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}
-	case 'l', 'L':
-		return {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f}
-	case 'm', 'M':
-		return {0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11}
-	case 'n', 'N':
-		return {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}
-	case 'o', 'O':
-		return {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e}
-	case 'p', 'P':
-		return {0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10}
-	case 'q', 'Q':
-		return {0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d}
-	case 'r', 'R':
-		return {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11}
-	case 's', 'S':
-		return {0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e}
-	case 't', 'T':
-		return {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}
-	case 'u', 'U':
-		return {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e}
-	case 'v', 'V':
-		return {0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04}
-	case 'w', 'W':
-		return {0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a}
-	case 'x', 'X':
-		return {0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11}
-	case 'y', 'Y':
-		return {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04}
-	case 'z', 'Z':
-		return {0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f}
-	case '0':
-		return {0x0e, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0e}
-	case '1':
-		return {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e}
-	case '2':
-		return {0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f}
-	case '3':
-		return {0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e}
-	case '4':
-		return {0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02}
-	case '5':
-		return {0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e}
-	case '6':
-		return {0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e}
-	case '7':
-		return {0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08}
-	case '8':
-		return {0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e}
-	case '9':
-		return {0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e}
-	case '*':
-		return {0x00, 0x15, 0x0e, 0x1f, 0x0e, 0x15, 0x00}
-	case '▉', '█':
-		return {0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f}
-	case '▓':
-		return {0x15, 0x1f, 0x15, 0x1f, 0x15, 0x1f, 0x15}
-	case '▒':
-		return {0x15, 0x0a, 0x15, 0x0a, 0x15, 0x0a, 0x15}
-	case '░':
-		return {0x11, 0x00, 0x04, 0x00, 0x11, 0x00, 0x04}
-	case '◉':
-		return {0x0e, 0x11, 0x15, 0x1b, 0x15, 0x11, 0x0e}
-	case '●':
-		return {0x0e, 0x1f, 0x1f, 0x1f, 0x1f, 0x1f, 0x0e}
-	case '•', '·':
-		return {0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00}
-	case '°':
-		return {0x06, 0x09, 0x09, 0x06, 0x00, 0x00, 0x00}
-	case '¤':
-		return {0x00, 0x0a, 0x15, 0x11, 0x15, 0x0a, 0x00}
-	}
-	return glyph_unknown(ch)
-}
-
-raster_glyph :: proc(
+// Shapes carry cell-local pixels, so they reach the cell edge exactly and
+// neighbouring cells join with no seam or overlap.
+raster_shape :: proc(
 	r: ^Raster,
 	column, screen_row: int,
-	symbol: string,
-	color: image.RGB_Pixel,
-	bold: bool,
+	shape: Cell_Shape,
+	fg, bg: image.RGB_Pixel,
 ) {
-	ch, _ := utf8.decode_rune(symbol)
-	rows := glyph_rows(ch)
-	x0 := Cell_Padding + column * Cell_Width + 1
-	y0 := Cell_Padding + screen_row * Cell_Height + 2
-	for bits, row in rows {
-		for bit in 0 ..< 5 {
-			mask := u8(1) << u8(4 - bit)
-			if bits & mask == 0 do continue
-			for dy in 0 ..< 2 {
-				x := x0 + bit
-				y := y0 + row * 2 + dy
-				r.pixels[y * r.width + x] = color
-				if bold && x + 1 < Cell_Padding + (column + 1) * Cell_Width {
-					r.pixels[y * r.width + x + 1] = color
-				}
+	color := blend(fg, bg, shape.density)
+	origin_x := column * Cell_Width
+	origin_y := screen_row * Cell_Height
+
+	if shape.diagonal != 0 {
+		for step in 0 ..< Cell_Height {
+			x := step * Cell_Width / Cell_Height
+			if shape.diagonal & 1 != 0 {
+				raster_fill_rect(r, origin_x + Cell_Width - 1 - x, origin_y + step, 1, 1, color)
+			}
+			if shape.diagonal & 2 != 0 {
+				raster_fill_rect(r, origin_x + x, origin_y + step, 1, 1, color)
+			}
+		}
+		return
+	}
+
+	rects := shape.rects
+	for rect in rects[:shape.count] {
+		width, height := rect.x1 - rect.x0, rect.y1 - rect.y0
+		if shape.dash < 2 {
+			raster_fill_rect(r, origin_x + rect.x0, origin_y + rect.y0, width, height, color)
+			continue
+		}
+		// Dashed rules keep the run's thickness and break along its long axis.
+		runs := int(shape.dash)
+		if width >= height {
+			for run in 0 ..< runs {
+				start := run * width / runs
+				stop := max(start + 1, (run * 2 + 1) * width / (runs * 2))
+				raster_fill_rect(
+					r,
+					origin_x + rect.x0 + start,
+					origin_y + rect.y0,
+					stop - start,
+					height,
+					color,
+				)
+			}
+		} else {
+			for run in 0 ..< runs {
+				start := run * height / runs
+				stop := max(start + 1, (run * 2 + 1) * height / (runs * 2))
+				raster_fill_rect(
+					r,
+					origin_x + rect.x0,
+					origin_y + rect.y0 + start,
+					width,
+					stop - start,
+					color,
+				)
 			}
 		}
 	}
 }
 
-raster_render_cells :: proc(r: ^Raster, e: ^engine.Engine, width, height: int) {
-	raster_fill(r, color_pixel(Omarchy_Background))
+raster_glyph :: proc(
+	r: ^Raster,
+	chain: ^Font_Chain,
+	column, screen_row: int,
+	ch: rune,
+	fg, bg: image.RGB_Pixel,
+) {
+	glyph, ok := font_glyph(chain, ch)
+	if !ok do return
+	origin_x := column * Cell_Width + glyph.left
+	origin_y := screen_row * Cell_Height + glyph.top
+	for row in 0 ..< glyph.height {
+		y := origin_y + row
+		if y < 0 || y >= r.height do continue
+		for pixel in 0 ..< glyph.width {
+			x := origin_x + pixel
+			if x < 0 || x >= r.width do continue
+			alpha := glyph.coverage[row * glyph.width + pixel]
+			if alpha == 0 do continue
+			target := &r.pixels[y * r.width + x]
+			target^ = blend(fg, target^, alpha)
+		}
+	}
+}
+
+raster_render_cells :: proc(
+	r: ^Raster,
+	chain: ^Font_Chain,
+	e: ^engine.Engine,
+	width, height: int,
+) {
+	raster_fill(r, Background)
 	cells := e.render_cells[:width * height]
 	visuals := e.chars.visual[:]
 	input_styles := e.chars.input_style[:]
@@ -237,261 +205,256 @@ raster_render_cells :: proc(r: ^Raster, e: ^engine.Engine, width, height: int) {
 				uses_input_preexisting_colors[id],
 				e.cfg.existing_color_handling,
 			)
+			cell_background := Background
 			if bg, ok := visual.bg.?; ok {
+				cell_background = color_pixel(bg)
 				raster_fill_rect(
 					r,
-					Cell_Padding + column * Cell_Width,
-					Cell_Padding + screen_row * Cell_Height,
+					column * Cell_Width,
+					screen_row * Cell_Height,
 					Cell_Width,
 					Cell_Height,
-					color_pixel(bg),
+					cell_background,
 				)
 			}
 			if visual.symbol == "" do continue
-			fg := Omarchy_Foreground
-			if color, ok := visual.fg.?; ok do fg = color
-			raster_glyph(r, column, screen_row, visual.symbol, color_pixel(fg), visual.bold)
-		}
-	}
-}
-
-Palette :: [256]image.RGB_Pixel
-
-palette_make :: proc() -> Palette {
-	palette: Palette
-	palette[0] = color_pixel(Omarchy_Background)
-	palette[1] = color_pixel(Omarchy_Foreground)
-	for color, i in Omarchy_Ansi do palette[i + 2] = color_pixel(color)
-	index := 18
-	for red in 0 ..< 6 {
-		for green in 0 ..< 6 {
-			for blue in 0 ..< 6 {
-				palette[index] = {u8(red * 51), u8(green * 51), u8(blue * 51)}
-				index += 1
+			fg := Foreground
+			if color, ok := visual.fg.?; ok do fg = color_pixel(color)
+			ch, _ := utf8.decode_rune(visual.symbol)
+			if shape, is_shape := block_for(ch); is_shape {
+				raster_shape(r, column, screen_row, shape, fg, cell_background)
+			} else if shape, is_shape := box_for(ch); is_shape {
+				raster_shape(r, column, screen_row, shape, fg, cell_background)
+			} else {
+				raster_glyph(r, chain, column, screen_row, ch, fg, cell_background)
 			}
 		}
 	}
-	for index < len(palette) {
-		value := u8((index - 234) * 255 / 21)
-		palette[index] = {value, value, value}
-		index += 1
-	}
-	return palette
 }
 
-palette_index :: #force_inline proc(palette: Palette, color: image.RGB_Pixel) -> u8 {
-	for index in 0 ..< 18 {
-		if palette[index] == color do return u8(index)
-	}
-	red := int(color[0]) * 5 / 255
-	green := int(color[1]) * 5 / 255
-	blue := int(color[2]) * 5 / 255
-	return u8(18 + red * 36 + green * 6 + blue)
+Preview_Run :: struct {
+	engine_state: engine.Engine,
+	effect:       effects.Effect,
 }
 
-Gif_Hash_Capacity :: 8192
-Gif_Hash_Mask :: Gif_Hash_Capacity - 1
-
-Gif_Lzw :: struct {
-	keys:       [Gif_Hash_Capacity]u32,
-	codes:      [Gif_Hash_Capacity]u16,
-	bytes:      [dynamic]u8,
-	bit_buffer: u32,
-	bit_count:  int,
-}
-
-gif_lzw_reset :: proc(lzw: ^Gif_Lzw) {
-	for &code in lzw.codes do code = 0
-	clear(&lzw.bytes)
-	lzw.bit_buffer = 0
-	lzw.bit_count = 0
-}
-
-gif_lzw_emit :: proc(lzw: ^Gif_Lzw, code, width: int) {
-	lzw.bit_buffer |= u32(code) << u32(lzw.bit_count)
-	lzw.bit_count += width
-	for lzw.bit_count >= 8 {
-		append(&lzw.bytes, u8(lzw.bit_buffer & 0xff))
-		lzw.bit_buffer >>= 8
-		lzw.bit_count -= 8
-	}
-}
-
-gif_lzw_finish :: proc(lzw: ^Gif_Lzw) {
-	if lzw.bit_count > 0 do append(&lzw.bytes, u8(lzw.bit_buffer & 0xff))
-	lzw.bit_buffer = 0
-	lzw.bit_count = 0
-}
-
-gif_lzw_slot :: #force_inline proc(key: u32) -> int {
-	return int((key * 0x9e3779b1) & u32(Gif_Hash_Mask))
-}
-
-gif_lzw_find :: proc(lzw: ^Gif_Lzw, key: u32) -> int {
-	slot := gif_lzw_slot(key)
-	for {
-		code := lzw.codes[slot]
-		if code == 0 do return -1
-		if lzw.keys[slot] == key do return int(code) - 1
-		slot = (slot + 1) & Gif_Hash_Mask
-	}
-}
-
-gif_lzw_insert :: proc(lzw: ^Gif_Lzw, key: u32, code: int) {
-	slot := gif_lzw_slot(key)
-	for {
-		if lzw.codes[slot] == 0 {
-			lzw.keys[slot] = key
-			lzw.codes[slot] = u16(code + 1)
-			return
-		}
-		slot = (slot + 1) & Gif_Hash_Mask
-	}
-}
-
-gif_lzw_encode :: proc(lzw: ^Gif_Lzw, pixels: []u8) -> []u8 {
-	assert(len(pixels) > 0)
-	gif_lzw_reset(lzw)
-	clear_code, end_code := 256, 257
-	next_code, code_width := 258, 9
-	gif_lzw_emit(lzw, clear_code, code_width)
-	prefix := int(pixels[0])
-	for suffix in pixels[1:] {
-		key := u32(prefix) << 8 | u32(suffix)
-		if code := gif_lzw_find(lzw, key); code >= 0 {
-			prefix = code
-			continue
-		}
-		gif_lzw_emit(lzw, prefix, code_width)
-		if next_code < 4096 {
-			gif_lzw_insert(lzw, key, next_code)
-			next_code += 1
-			// The decoder adds the entry after it reads `prefix`; its next code
-			// therefore grows one emission later than this encoder's next slot.
-			if next_code == int(u32(1) << u32(code_width)) + 1 && code_width < 12 do code_width += 1
-		} else {
-			gif_lzw_emit(lzw, clear_code, code_width)
-			for &code in lzw.codes do code = 0
-			next_code, code_width = 258, 9
-		}
-		prefix = int(suffix)
-	}
-	gif_lzw_emit(lzw, prefix, code_width)
-	// Reading the final data code still grows the decoder dictionary before it
-	// consumes the end code, so keep its code width in lockstep here too.
-	if next_code < 4096 {
-		next_code += 1
-		if next_code == int(u32(1) << u32(code_width)) + 1 && code_width < 12 do code_width += 1
-	}
-	gif_lzw_emit(lzw, end_code, code_width)
-	gif_lzw_finish(lzw)
-	return lzw.bytes[:]
-}
-
-gif_append_u16 :: #force_inline proc(out: ^[dynamic]u8, value: int) {
-	append(out, u8(value), u8(value >> 8))
-}
-
-gif_append_data :: proc(out: ^[dynamic]u8, data: []u8) {
-	for offset := 0; offset < len(data); {
-		count := min(255, len(data) - offset)
-		append(out, u8(count))
-		append(out, ..data[offset:offset + count])
-		offset += count
-	}
-	append(out, 0)
-}
-
-gif_begin :: proc(out: ^[dynamic]u8, width, height: int, palette: Palette) {
-	append(out, 'G', 'I', 'F', '8', '9', 'a')
-	gif_append_u16(out, width)
-	gif_append_u16(out, height)
-	append(out, 0xf7, 0, 0) // 256-entry global palette, background index, aspect ratio
-	for color in palette do append(out, color[0], color[1], color[2])
-	append(out, 0x21, 0xff, 0x0b)
-	append(out, 'N', 'E', 'T', 'S', 'C', 'A', 'P', 'E', '2', '.', '0')
-	append(out, 0x03, 0x01, 0, 0, 0) // repeat forever
-}
-
-gif_append_frame :: proc(out: ^[dynamic]u8, lzw: ^Gif_Lzw, pixels: []u8, width, height: int) {
-	append(out, 0x21, 0xf9, 0x04, 0x04) // graphic control extension; do not dispose
-	gif_append_u16(out, Gif_Delay_Centiseconds)
-	append(out, 0, 0)
-	append(out, 0x2c)
-	gif_append_u16(out, 0)
-	gif_append_u16(out, 0)
-	gif_append_u16(out, width)
-	gif_append_u16(out, height)
-	append(out, 0, 8) // image descriptor, then LZW minimum code size
-	encoded := gif_lzw_encode(lzw, pixels)
-	gif_append_data(out, encoded)
-}
-
-gif_write_preview :: proc(preview: Preview) -> bool {
+// Both passes rebuild from the same seed, so the second walk reproduces the
+// first frame for frame. That is what lets pass one measure colours without
+// holding every frame in memory.
+preview_start :: proc(
+	kind: effects.Effect_Kind,
+	text: string,
+) -> (
+	run: Preview_Run,
+	ok: bool,
+) {
 	cfg := engine.config_default()
 	cfg.frame_rate = 0
 	cfg.canvas_width = Preview_Width
 	cfg.canvas_height = Preview_Height
+	cfg.anchor_canvas = .C
+	cfg.anchor_text = .C
 	cfg.ignore_terminal_dimensions = true
-	cfg.terminal_background_color = Omarchy_Background
+	// Unpaced capture, so the seconds-budgeted effects have to advance on
+	// logical frames or their length would depend on how fast this host runs.
+	cfg.virtual_clock = true
+	cfg.terminal_background_color = {Background[0], Background[1], Background[2]}
 
 	rand.reset_u64(Preview_Seed)
-	e, message, engine_ok := engine.engine_make(Preview_Input, cfg, context.allocator)
+	message: string
+	engine_ok: bool
+	run.engine_state, message, engine_ok = engine.engine_make(text, cfg, context.allocator)
 	if !engine_ok {
-		fmt.eprintfln("failed to build %s preview engine: %s", preview.name, message)
-		return false
+		fmt.eprintfln("failed to build preview engine: %s", message)
+		return {}, false
 	}
-	effect, effect_ok := effects.make_effect(preview.kind, nil)
+	effect_ok: bool
+	run.effect, effect_ok = effects.make_effect(kind, nil)
 	if !effect_ok {
-		fmt.eprintfln("failed to build %s preview effect", preview.name)
-		return false
+		fmt.eprintfln("failed to build preview effect")
+		return {}, false
 	}
-	effects.build_effect(&effect, &e)
+	effects.build_effect(&run.effect, &run.engine_state)
 	free_all(context.temp_allocator)
+	return run, true
+}
 
-	image_width := 2 * Cell_Padding + Preview_Width * Cell_Width
-	image_height := 2 * Cell_Padding + Preview_Height * Cell_Height
-	raster := raster_make(image_width, image_height)
-	defer delete(raster.pixels)
-	indices := make([dynamic]u8, image_width * image_height)
-	defer delete(indices)
-	palette := palette_make()
-	gif: [dynamic]u8
-	defer delete(gif)
-	reserve(&gif, image_width * image_height * 3)
-	gif_begin(&gif, image_width, image_height, palette)
-	lzw: Gif_Lzw
-	defer delete(lzw.bytes)
+preview_step :: proc(run: ^Preview_Run) -> (width, height: int, ok: bool) {
+	render_candidates, produced := effects.next_frame(&run.effect, &run.engine_state)
+	if !produced do return 0, 0, false
+	if render_candidates == nil {
+		width, height = engine.update_render_cells_all(&run.engine_state)
+	} else {
+		width, height = engine.update_render_cells_selected(&run.engine_state, render_candidates)
+	}
+	return width, height, true
+}
 
+// Caller owns the result. It has to outlive the preview run, which resets the
+// temp allocator between frames.
+effect_name :: proc(kind: effects.Effect_Kind, allocator := context.allocator) -> string {
+	name, _ := reflect.enum_name_from_value(kind)
+	return strings.to_lower(name, allocator)
+}
+
+// Effects run to completion rather than to a hand-tuned frame window: a fixed
+// last_frame per effect has to be retuned whenever effect timing shifts, and it
+// cannot know where an effect naturally settles.
+preview_frame_count :: proc(kind: effects.Effect_Kind, text: string) -> (int, bool) {
+	run, ok := preview_start(kind, text)
+	if !ok do return 0, false
 	frames := 0
-	for frame in 0 ..= preview.last_frame {
-		render_candidates, produced := effects.next_frame(&effect, &e)
-		if !produced {
-			fmt.eprintfln("%s ended before source frame %d", preview.name, preview.last_frame)
-			return false
-		}
-		width, height: int
-		if render_candidates == nil {
-			width, height = engine.update_render_cells_all(&e)
-		} else {
-			width, height = engine.update_render_cells_selected(&e, render_candidates)
-		}
-		if frame % preview.frame_stride == 0 {
-			raster_render_cells(&raster, &e, width, height)
-			for pixel, i in raster.pixels do indices[i] = palette_index(palette, pixel)
-			gif_append_frame(&gif, &lzw, indices[:], image_width, image_height)
-			frames += 1
-		}
+	for frames < Max_Simulation_Frames {
+		_, _, produced := preview_step(&run)
+		if !produced do break
+		frames += 1
 		free_all(context.temp_allocator)
 	}
+	return frames, frames > 0
+}
+
+gif_write_preview :: proc(
+	kind: effects.Effect_Kind,
+	name: string,
+	text: string,
+	chain: ^Font_Chain,
+	quantizer: ^Quantizer,
+) -> bool {
+	// The engine exposes no teardown, and a preview builds three of them, so the
+	// whole run is bump-allocated and released in one go.
+	arena: virtual.Arena
+	if err := virtual.arena_init_growing(&arena); err != nil {
+		fmt.eprintfln("failed to create arena for %s: %v", name, err)
+		return false
+	}
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+
+	total, ok := preview_frame_count(kind, text)
+	if !ok {
+		fmt.eprintfln("%s produced no frames", name)
+		return false
+	}
+	// Stride stays a multiple of the sample size so the per-frame delay below
+	// remains a whole number of centiseconds.
+	stride := Source_Frames_Per_Sample
+	for (total + stride - 1) / stride > Max_Frames do stride += Source_Frames_Per_Sample
+	delay := stride / Source_Frames_Per_Sample * Gif_Delay_Per_Sample
+
+	image_width := Preview_Width * Cell_Width
+	image_height := Preview_Height * Cell_Height
+	raster := raster_make(image_width, image_height)
+	quantizer_reset(quantizer)
+
+	// Pass one: observe every colour the sampled frames actually contain.
+	{
+		run, run_ok := preview_start(kind, text)
+		if !run_ok do return false
+		for frame in 0 ..< total {
+			width, height, produced := preview_step(&run)
+			if !produced do break
+			if frame % stride == 0 || frame == total - 1 {
+				raster_render_cells(&raster, chain, &run.engine_state, width, height)
+				quantizer_observe(quantizer, raster.pixels[:])
+			}
+			free_all(context.temp_allocator)
+		}
+	}
+	quantizer_build(quantizer, Background)
+
+	// Pass two: replay and encode against the palette pass one produced.
+	current := make([]u8, image_width * image_height)
+	previous := make([]u8, image_width * image_height)
+
+	gif: [dynamic]u8
+	reserve(&gif, image_width * image_height)
+	gif_begin(&gif, image_width, image_height, quantizer.palette)
+	lzw: Gif_Lzw
+	scratch: [dynamic]u8
+
+	emitted := 0
+	{
+		run, run_ok := preview_start(kind, text)
+		if !run_ok do return false
+		for frame in 0 ..< total {
+			width, height, produced := preview_step(&run)
+			if !produced do break
+			if frame % stride != 0 && frame != total - 1 {
+				free_all(context.temp_allocator)
+				continue
+			}
+			raster_render_cells(&raster, chain, &run.engine_state, width, height)
+			for pixel, i in raster.pixels do current[i] = quantizer_index(quantizer, pixel)
+
+			last := frame == total - 1
+			frame_delay := Gif_Hold_Centiseconds if last else delay
+			if emitted == 0 {
+				gif_append_frame(
+					&gif,
+					&lzw,
+					&scratch,
+					current,
+					nil,
+					image_width,
+					{0, 0, image_width, image_height},
+					frame_delay,
+					false,
+				)
+			} else {
+				rect := gif_dirty_rect(current, previous, image_width, image_height)
+				gif_append_frame(
+					&gif,
+					&lzw,
+					&scratch,
+					current,
+					previous,
+					image_width,
+					rect,
+					frame_delay,
+					true,
+				)
+			}
+			copy(previous, current)
+			emitted += 1
+			free_all(context.temp_allocator)
+		}
+	}
 	append(&gif, 0x3b)
-	path := fmt.tprintf("docs/images/%s.gif", preview.name)
+
+	path := fmt.tprintf("docs/images/%s.gif", name)
 	if err := os.write_entire_file(path, gif[:]); err != nil {
 		fmt.eprintfln("failed to write %s: %v", path, err)
 		return false
 	}
-	fmt.printfln("wrote %s (%d frames)", path, frames)
+	note := "" if stride == 1 else fmt.tprintf(", sampled 1 in %d", stride)
+	fmt.printfln(
+		"%-16s %3d frames of %3d%s, %d colors, %d KB",
+		name,
+		emitted,
+		total,
+		note,
+		len(quantizer.observed),
+		len(gif) / 1024,
+	)
 	return true
+}
+
+// Upstream reads the same file through TTFX_DEMO_TEXT_FILE. Reading it rather
+// than committing a copy keeps someone else's logo out of the repository.
+load_text :: proc() -> (string, bool) {
+	path := os.get_env(Logo_Env, context.allocator)
+	if path == "" {
+		home := os.get_env("HOME", context.allocator)
+		defer delete(home)
+		path = strings.concatenate({home, Logo_Path}, context.allocator)
+	}
+	defer delete(path)
+	data, err := os.read_entire_file(path, context.allocator)
+	if err != nil {
+		fmt.eprintfln("could not read preview text: %s (%v)", path, err)
+		fmt.eprintfln("set %s to override the path", Logo_Env)
+		return "", false
+	}
+	return strings.trim_right(string(data), "\n"), true
 }
 
 main :: proc() {
@@ -499,7 +462,29 @@ main :: proc() {
 		fmt.eprintfln("failed to create docs/images: %v", err)
 		os.exit(1)
 	}
-	for preview in Previews {
-		if !gif_write_preview(preview) do os.exit(1)
+	text, text_ok := load_text()
+	if !text_ok do os.exit(1)
+
+	chain: Font_Chain
+	if !font_chain_load(&chain) do os.exit(1)
+	defer font_chain_destroy(&chain)
+
+	quantizer := quantizer_make()
+	defer quantizer_destroy(&quantizer)
+
+	// Optional effect names restrict the run, so a single preview can be
+	// re-rendered while iterating instead of rebuilding the whole gallery.
+	selected := os.args[1:]
+	for kind in effects.Effect_Kind {
+		name := effect_name(kind)
+		wanted := len(selected) == 0
+		for argument in selected do wanted |= argument == name
+		if !wanted {
+			delete(name)
+			continue
+		}
+		if !gif_write_preview(kind, name, text, &chain, &quantizer) do os.exit(1)
+		delete(name)
+		free_all(context.temp_allocator)
 	}
 }

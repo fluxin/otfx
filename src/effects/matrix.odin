@@ -476,7 +476,7 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	reserve(&s.full_columns, len(s.columns))
 	reserve(&s.resolve_active, len(chars))
 	rand.shuffle(s.pending_columns.items[:])
-	s.rain_start = engine.now_wall(e.wall_start, e.mono_start)
+	s.rain_start = engine.now_wall(e)
 	s.resolve_delay = s.config.resolve_delay
 }
 
@@ -610,7 +610,7 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 
 		if s.phase == .Rain &&
 		   s.config.rain_time > 0 &&
-		   engine.now_wall(e.wall_start, e.mono_start) - s.rain_start > f64(s.config.rain_time) {
+		   engine.now_wall(e) - s.rain_start > f64(s.config.rain_time) {
 			s.rain_complete = true
 			s.phase = .Fill
 			for ci in s.active_columns {

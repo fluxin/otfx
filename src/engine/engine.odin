@@ -71,6 +71,7 @@ Terminal_Config :: struct {
 	reuse_canvas:               bool,
 	no_eol:                     bool,
 	no_restore_cursor:          bool,
+	virtual_clock:              bool,
 	terminal_background_color:  Color,
 }
 
@@ -427,10 +428,29 @@ Engine :: struct {
 	out_buf:           [dynamic]byte,
 	last_print:        time.Tick,
 	frame_rate:        int,
+	logical_frame:     int,
 }
 
-now_wall :: proc(wall_start: f64, mono_start: time.Tick) -> f64 {
-	return wall_start + time.duration_seconds(time.tick_since(mono_start))
+// Frames per second that logical time advances at when the clock is virtual and
+// output is unpaced. It only has to be the rate a viewer would have watched at.
+Virtual_Frame_Rate :: 60
+
+// One logical frame per effect step. Effects never call this themselves; the
+// step entry point owns it so every consumer advances the same way.
+clock_advance :: #force_inline proc(e: ^Engine) {
+	e.logical_frame += 1
+}
+
+// Effects that budget a phase in seconds read time through here. Under a
+// virtual clock the elapsed time is a function of the frames produced, so an
+// effect's duration stops depending on how fast the host can render it -- which
+// is what makes an unpaced capture (docs previews, parity dumps) reproducible.
+now_wall :: proc(e: ^Engine) -> f64 {
+	if e.cfg.virtual_clock {
+		rate := e.cfg.frame_rate if e.cfg.frame_rate > 0 else Virtual_Frame_Rate
+		return e.wall_start + f64(e.logical_frame) / f64(rate)
+	}
+	return e.wall_start + time.duration_seconds(time.tick_since(e.mono_start))
 }
 
 get_env_str :: proc(key: string) -> string {

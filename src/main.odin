@@ -544,6 +544,8 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 			opts.cfg.ignore_terminal_dimensions = true
 		case "--reuse-canvas":
 			opts.cfg.reuse_canvas = true
+		case "--virtual-clock":
+			opts.cfg.virtual_clock = true
 		case "--tab-width":
 			v, ok := value_of(args, &i, value, has_value)
 			if !ok do return opts, false
@@ -616,6 +618,9 @@ print_usage :: proc() {
 	fmt.println("  --frame-rate N   --canvas-width N   --canvas-height N")
 	fmt.println("  --anchor-canvas X   --anchor-text X   --wrap-text")
 	fmt.println(
+		"  --virtual-clock  (advance --rain-time/--storm-time by frames, not wall clock)",
+	)
+	fmt.println(
 		"  --xterm-colors --no-color --existing-color-handling M --no-eol --no-restore-cursor",
 	)
 	fmt.println("  --tab-width N --terminal-background-color C --seed N -i FILE -R")
@@ -633,7 +638,7 @@ print_usage :: proc() {
 
 completion_global_words :: proc() -> string {
 	return(
-		"--frame-rate --canvas-width --canvas-height --anchor-canvas --anchor-text --wrap-text --xterm-colors --no-color --existing-color-handling --no-eol --no-restore-cursor --ignore-terminal-dimensions --reuse-canvas --tab-width --terminal-background-color --seed --input-file --random-effect --include-effects --exclude-effects --print-completion --help --version" \
+		"--frame-rate --canvas-width --canvas-height --anchor-canvas --anchor-text --wrap-text --xterm-colors --no-color --existing-color-handling --no-eol --no-restore-cursor --ignore-terminal-dimensions --reuse-canvas --virtual-clock --tab-width --terminal-background-color --seed --input-file --random-effect --include-effects --exclude-effects --print-completion --help --version" \
 	)
 }
 

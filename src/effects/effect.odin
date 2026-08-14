@@ -331,6 +331,7 @@ build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 }
 
 next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	engine.clock_advance(ctx)
 	switch &s in effect.state {
 	case Slide_State:
 		return slide_next(&s, ctx)
