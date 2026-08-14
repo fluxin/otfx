@@ -146,6 +146,11 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 			),
 			1,
 		)
+		// A swapped pair has to read as an error from the first frame, not only
+		// once its own correction starts. The reference activates an
+		// error-coloured scene for both characters during setup.
+		e.chars.visual[first].fg = s.config.error_color
+		e.chars.visual[second].fg = s.config.error_color
 		append(&s.swapped, Errorcorrect_Pair{first, second})
 	}
 }

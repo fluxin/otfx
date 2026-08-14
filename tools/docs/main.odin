@@ -45,6 +45,19 @@ Max_Frames :: 360
 // reaching this cap means an effect stopped converging.
 Max_Simulation_Frames :: 20_000
 
+// Demo-only arguments, matching what the upstream gallery overrides. At the
+// default 0.1 only a tenth of the logo is ever misplaced, which reads as noise
+// rather than as the effect; a pair consumes two characters, so 0.5 swaps all
+// of them. This changes the preview, not the effect's defaults.
+demo_args :: proc(kind: effects.Effect_Kind) -> []string {
+	@(static) error_pairs := []string{"--error-pairs", "0.5"}
+	#partial switch kind {
+	case .Errorcorrect:
+		return error_pairs
+	}
+	return nil
+}
+
 Background :: image.RGB_Pixel{0x12, 0x12, 0x1a}
 Foreground :: image.RGB_Pixel{0xc8, 0xc8, 0xd0}
 
@@ -268,7 +281,7 @@ preview_start :: proc(
 		return {}, false
 	}
 	effect_ok: bool
-	run.effect, effect_ok = effects.make_effect(kind, nil)
+	run.effect, effect_ok = effects.make_effect(kind, demo_args(kind))
 	if !effect_ok {
 		fmt.eprintfln("failed to build preview effect")
 		return {}, false

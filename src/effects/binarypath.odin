@@ -277,7 +277,10 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 			}
 			any_collapse = true
 		} else {
-			visible[id] = false
+			// Only the colour animation ends here; the character stays on
+			// screen. Hiding it again would leave nothing accumulating, so the
+			// whole logo would appear at once during the final wipe instead of
+			// filling in as each representation lands.
 			s.states[i] = .Ready
 		}
 	}
