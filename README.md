@@ -71,16 +71,17 @@ mean wall time, mean child CPU time, a single exact Linux `wait4` peak-RSS
 observation, and observed terminal frame markers. This is an end-to-end
 production benchmark, not terminal-stream or intermediate-frame parity.
 
-Latest full-suite results: five repeats with `BENCH_MIN_SECONDS=1`, a dense
-200×50 input, seed 1, and disabled frame pacing. The aggregation is an
-unweighted mean across the 35 fixed-duration effects; Matrix and Thunderstorm
-are excluded because their wall-clock duration is configured independently.
+Latest full-suite results against `ttfx v0.3.3` (`54d21f0`): five repeats with
+`BENCH_MIN_SECONDS=1`, a dense 200×50 input, seed 1, and disabled frame pacing.
+The aggregation is an unweighted mean across the 35 fixed-duration effects;
+Matrix and Thunderstorm are excluded because their wall-clock duration is
+configured independently.
 
 | Metric | Rust | Odin | Odin / Rust |
 |---|---:|---:|---:|
-| Best wall, mean per effect | 238.5 ms | 113.1 ms | 0.47× (2.35× faster) |
-| Mean child CPU, mean per effect | 230.3 ms | 105.7 ms | 0.46× |
-| Peak RSS, mean per effect | 132.1 MiB | 13.3 MiB | 0.10× |
+| Best wall, mean per effect | 212.2 ms | 116.7 ms | 0.55× (1.82× faster) |
+| Mean child CPU, mean per effect | 203.7 ms | 109.1 ms | 0.54× |
+| Peak RSS, mean per effect | 131.5 MiB | 13.2 MiB | 0.10× |
 
 The harness prints best and mean wall time, child CPU time, peak RSS, and
 observed frame markers for every effect. Frame counts are diagnostics rather
@@ -101,8 +102,8 @@ observations only.
 
 | Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Observed frames, Rust / Odin |
 |---|---:|---:|---:|---:|
-| Matrix (`--rain-time 5`) | 5,133.5 / 5,110.0 ms | 5,120.0 / 5,096.0 ms | 45.3 / 11.0 MiB | 93,297 / 106,148 |
-| Thunderstorm (`--storm-time 1`) | 1,160.6 / 1,146.0 ms | 1,014.2 / 1,004.0 ms | 143.4 / 10.8 MiB | 4,708 / 30,986 |
+| Matrix (`--rain-time 5`) | 5,105.1 / 5,088.0 ms | 5,118.3 / 5,096.0 ms | 44.4 / 11.1 MiB | 100,401 / 104,421 |
+| Thunderstorm (`--storm-time 1`) | 1,099.5 / 1,100.0 ms | 1,015.6 / 1,004.0 ms | 142.7 / 11.0 MiB | 4,173 / 30,909 |
 
 Different frame counts in the same time window are expected with the two
 renderer designs. A speed or parity claim for these effects needs a fixed
@@ -119,8 +120,8 @@ terminal-emulator costs. CPU is user plus system CPU seconds per run.
 
 | Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Interpretation |
 |---|---:|---:|---:|---|
-| Matrix | 22.29 s / 0.21 s | 21.68 s / 0.14 s | 44.5 / 10.9 MiB | Odin uses about 32% less application CPU at a comparable duration. |
-| Thunderstorm | 5.79 s / 0.12 s | 3.83 s / 0.01 s | 135.5 / 10.8 MiB | Lower CPU and RSS, but Odin is 34% shorter; do not treat this as a parity-safe speed win. |
+| Matrix | 22.19 s / 0.31 s | 22.15 s / 0.17 s | 44.2 / 11.1 MiB | Odin uses about 45% less application CPU at a comparable duration. |
+| Thunderstorm | 5.79 s / 0.14 s | 4.21 s / 0.02 s | 134.3 / 11.0 MiB | Lower CPU and RSS, but Odin is 27% shorter; do not treat this as a parity-safe speed win. |
 
 The frame-rate setting is a fixed application target, selected with
 `--frame-rate N` (60 by default; `0` disables pacing). Terminal applications
@@ -186,9 +187,9 @@ build, so it measures a real cached source edit rather than a clean build.
 
 | Build | ttfx Rust debug | ttfx Rust release | otfx Odin debug | otfx Odin release |
 |---|---:|---:|---:|---:|
-| Cacheless | 4.09 s | 19.32 s | 0.78 s | 6.11 s |
-| Repeated | 0.04 s | 0.03 s | 0.77 s | 6.15 s |
-| Cached source invalidation | — | 17.54 s | — | — |
+| Cacheless | 4.34 s | 22.77 s | 0.92 s | 8.83 s |
+| Repeated | 0.01 s | 0.02 s | 0.88 s | 8.00 s |
+| Cached source invalidation | — | 18.39 s | — | — |
 
 The Rust debug cacheless measurement is included for fun as well as the
 optimized comparison. These are compile latency samples, not a compiler quality

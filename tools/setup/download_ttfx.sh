@@ -2,7 +2,7 @@
 set -eu
 
 REPOSITORY='https://github.com/omacom-io/ttfx'
-REVISION='adcdae9f17b84b795ca050ab6f6dc68cca1cc699'
+REVISION='54d21f046f22512b113056a1964077d7b7bf04cc'
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 DESTINATION="$ROOT/third_party/ttfx"
 PATCH="$ROOT/tools/patches/ttfx-build.patch"
