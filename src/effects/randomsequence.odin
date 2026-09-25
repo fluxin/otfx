@@ -39,7 +39,7 @@ randomsequence_parse :: proc(cfg: ^Randomsequence_Config, args: []string) -> boo
 		name, value, has_value := split_opt(args[i])
 		switch name {
 		case "--speed":
-			if !parse_float_flag(&cfg.speed, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.speed, args, &i, value, has_value) || cfg.speed <= 0 do return false
 		case "--final-gradient-stops":
 			if !parse_colors_flag(&cfg.final_gradient_stops, args, &i, value, has_value) do return false
 		case "--final-gradient-steps":

@@ -41,7 +41,7 @@ scattered_parse :: proc(cfg: ^Scattered_Config, args: []string) -> bool {
 		name, value, has_value := split_opt(args[i])
 		switch name {
 		case "--movement-speed":
-			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) || cfg.movement_speed <= 0 do return false
 		case "--movement-easing":
 			if !parse_ease_flag(&cfg.movement_easing, args, &i, value, has_value) do return false
 		case "--final-gradient-stops":

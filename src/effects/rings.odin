@@ -45,7 +45,7 @@ rings_parse :: proc(cfg: ^Rings_Config, args: []string) -> bool {
 		case "--ring-colors":
 			if !parse_colors_flag(&cfg.ring_colors, args, &i, value, has_value) do return false
 		case "--ring-gap":
-			if !parse_float_flag(&cfg.ring_gap, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.ring_gap, args, &i, value, has_value) || cfg.ring_gap <= 0 do return false
 		case "--spin-duration":
 			if !parse_int_flag(&cfg.spin_duration, args, &i, value, has_value) do return false
 		case "--spin-speed":
@@ -263,9 +263,16 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 		}
 		ring := &s.rings[ring_index]
 		center := initial ? rings_coords(s, slot)[s.target_slots[slot]] : e.chars.current_coord[id]
-		rect := engine.find_coords_in_rect(center, ring.ring_gap)
-		for waypoint in 0 ..< 5 do s.waypoints[slot][waypoint] = rect[rand.int_max(len(rect))]
-		delete(rect[:])
+		// Sample the rectangle's column-major index without materializing it.
+		// Keep the same five draws and coordinate ordering as the old pool.
+		side := 2 * ring.ring_gap + 1
+		for waypoint in 0 ..< 5 {
+			index := rand.int_max(side * side)
+			s.waypoints[slot][waypoint] = engine.coord(
+				center.column - ring.ring_gap + index / side,
+				center.row - ring.ring_gap + index % side,
+			)
+		}
 		s.waypoint_indices[slot] = 0
 		if initial {
 			s.modes[slot] = .Approach_Disperse

@@ -61,7 +61,7 @@ orbittingvolley_parse :: proc(cfg: ^Orbittingvolley_Config, args: []string) -> b
 		case "--volley-size":
 			if !parse_float_flag(&cfg.volley_size, args, &i, value, has_value) || cfg.volley_size < 0 || cfg.volley_size > 1 do return false
 		case "--launch-delay":
-			if !parse_int_flag(&cfg.launch_delay, args, &i, value, has_value) || cfg.launch_delay < 0 do return false
+			if !parse_int_flag(&cfg.launch_delay, args, &i, value, has_value, minimum = 0) || cfg.launch_delay < 0 do return false
 		case "--character-easing":
 			if !parse_ease_flag(&cfg.character_easing, args, &i, value, has_value) do return false
 		case "--final-gradient-stops":

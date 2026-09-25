@@ -2,6 +2,7 @@ package effects
 
 import "../engine"
 
+import "core:math"
 import "core:math/ease"
 import "core:strconv"
 import "core:strings"
@@ -481,11 +482,12 @@ parse_int_flag :: proc(
 	i: ^int,
 	value: string,
 	has_value: bool,
+	minimum := 1,
 ) -> bool {
 	v, ok := opt_value(args, i, value, has_value)
 	if !ok do return false
 	n, ok2 := strconv.parse_int(v)
-	if !ok2 do return false
+	if !ok2 || n < minimum do return false
 	ptr^ = int(n)
 	return true
 }
@@ -500,7 +502,7 @@ parse_float_flag :: proc(
 	v, ok := opt_value(args, i, value, has_value)
 	if !ok do return false
 	f, ok2 := strconv.parse_f64(v)
-	if !ok2 do return false
+	if !ok2 || math.is_nan(f) || math.is_inf(f) do return false
 	ptr^ = f
 	return true
 }
@@ -520,6 +522,21 @@ parse_color_flag :: proc(
 	return true
 }
 
+// List options accept both separate argv values and the legacy quoted form.
+// Only the temporary token list is scratch; each string still borrows argv.
+opt_list_values :: proc(args: []string, i: ^int, value: string, has_value: bool) -> []string {
+	v, ok := opt_value(args, i, value, has_value)
+	if !ok do return nil
+	fields := make([dynamic]string, 0, context.temp_allocator)
+	for {
+		append(&fields, ..strings.split(v, " ", context.temp_allocator))
+		if i^ + 1 == len(args) || strings.has_prefix(args[i^ + 1], "--") do break
+		i^ += 1
+		v = args[i^]
+	}
+	return fields[:]
+}
+
 parse_colors_flag :: proc(
 	list: ^[dynamic]engine.Color,
 	args: []string,
@@ -527,10 +544,10 @@ parse_colors_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
+	fields := opt_list_values(args, i, value, has_value)
+	if len(fields) == 0 do return false
 	clear(list)
-	for field in strings.split(v, " ") {
+	for field in fields {
 		c, ok2 := engine.parse_cli_color(field)
 		if !ok2 do return false
 		append(list, c)
@@ -545,12 +562,12 @@ parse_ints_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
+	fields := opt_list_values(args, i, value, has_value)
+	if len(fields) == 0 do return false
 	clear(list)
-	for field in strings.split(v, " ") {
+	for field in fields {
 		n, ok2 := strconv.parse_int(field)
-		if !ok2 do return false
+		if !ok2 || n <= 0 do return false
 		append(list, int(n))
 	}
 	return true
@@ -623,10 +640,10 @@ parse_symbols_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
+	fields := opt_list_values(args, i, value, has_value)
+	if len(fields) == 0 do return false
 	clear(list)
-	for field in strings.split(v, " ") {
+	for field in fields {
 		_, rune_bytes := utf8.decode_rune(field)
 		if rune_bytes == 0 || rune_bytes != len(field) do return false
 		append(list, field)
@@ -647,7 +664,7 @@ parse_float_range_flag :: proc(
 	if !ok2 do return false
 	lo, lok := strconv.parse_f64(lo_s)
 	hi, hok := strconv.parse_f64(hi_s)
-	if !lok || !hok || lo <= 0 || lo > hi do return false
+	if !lok || !hok || math.is_nan(lo) || math.is_inf(lo) || math.is_nan(hi) || math.is_inf(hi) || lo <= 0 || lo > hi do return false
 	ptr^ = {lo, hi}
 	return true
 }

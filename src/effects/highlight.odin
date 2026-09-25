@@ -40,7 +40,7 @@ highlight_parse :: proc(cfg: ^Highlight_Config, args: []string) -> bool {
 		name, value, has_value := split_opt(args[i])
 		switch name {
 		case "--highlight-brightness":
-			if !parse_float_flag(&cfg.highlight_brightness, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.highlight_brightness, args, &i, value, has_value) || cfg.highlight_brightness <= 0 do return false
 		case "--highlight-direction":
 			if !parse_group_flag(&cfg.highlight_direction, args, &i, value, has_value) do return false
 		case "--highlight-width":

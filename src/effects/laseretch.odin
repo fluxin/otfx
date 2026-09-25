@@ -72,7 +72,7 @@ laseretch_parse :: proc(cfg: ^Laseretch_Config, args: []string) -> bool {
 		case "--etch-speed":
 			if !parse_int_flag(&cfg.etch_speed, args, &i, value, has_value) || cfg.etch_speed <= 0 do return false
 		case "--etch-delay":
-			if !parse_int_flag(&cfg.etch_delay, args, &i, value, has_value) || cfg.etch_delay < 0 do return false
+			if !parse_int_flag(&cfg.etch_delay, args, &i, value, has_value, minimum = 0) || cfg.etch_delay < 0 do return false
 		case "--cool-gradient-stops":
 			if !parse_colors_flag(&cfg.cool_gradient_stops, args, &i, value, has_value) do return false
 		case "--laser-gradient-stops":

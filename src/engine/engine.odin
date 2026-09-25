@@ -476,14 +476,21 @@ terminal_dimensions :: proc() -> (int, int) {
 	return w, h
 }
 
+Input_Error :: enum {
+	None,
+	Invalid_Tab_Width,
+	Unsupported_Escape,
+	Unsupported_SGR,
+	Unsupported_Cursor,
+}
+
 engine_make :: proc(
 	input: string,
 	cfg: Terminal_Config,
 	formatted_allocator: mem.Allocator,
 ) -> (
 	Engine,
-	string,
-	bool,
+	Input_Error,
 ) {
 	e: Engine
 	e.cfg = cfg
@@ -496,8 +503,8 @@ engine_make :: proc(
 	if input_text == "" {
 		input_text = "No Input."
 	}
-	lines, input_error, input_ok := preprocess_input(input_text, cfg.tab_width)
-	if !input_ok do return {}, input_error, false
+	lines, input_error := preprocess_input(input_text, cfg.tab_width)
+	if input_error != .None do return {}, input_error
 
 	term_w, term_h := terminal_dimensions()
 	e.terminal_width, e.terminal_height = term_w, term_h
@@ -528,7 +535,7 @@ engine_make :: proc(
 	write := 0
 	for id in e.character_sets.input {
 		p := e.chars.input_coord[id]
-		if p.row <= e.canvas.top && p.column <= e.canvas.right {
+		if canvas_in(e.canvas, p) {
 			e.character_sets.input[write] = id
 			write += 1
 		}
@@ -550,7 +557,7 @@ engine_make :: proc(
 		e.render_cells[(c.row - 1) * e.canvas.right + (c.column - 1)] = i32(id)
 	}
 	make_fill_characters(&e)
-	return e, "", true
+	return e, .None
 }
 
 unix_seconds :: proc(t: time.Time) -> f64 {
@@ -726,7 +733,8 @@ input_style_has_color :: #force_inline proc(style: Input_Style) -> bool {
 	return style.fg != nil || style.bg != nil
 }
 
-preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, string, bool) {
+preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error) {
+	if tab_width <= 0 do return nil, .Invalid_Tab_Width
 	lines: [dynamic]Line
 	append(&lines, Line{})
 	row, col := 0, 0
@@ -746,9 +754,9 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, string, bool
 		r := runes[i]
 		if r == '\x1b' {
 			end, matched := match_input_escape(runes, i)
-			if !matched do return nil, "unsupported ANSI escape sequence in input", false
+			if !matched do return nil, .Unsupported_Escape
 			if runes[i + 1] != '[' {
-				return nil, "unsupported ANSI escape sequence in input", false
+				return nil, .Unsupported_Escape
 			}
 			final := runes[end - 1]
 			params_end := i + 2
@@ -761,11 +769,11 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, string, bool
 			intermediates := runes[params_end:end - 1]
 			if final == 'm' {
 				if len(intermediates) != 0 || !input_apply_sgr(params, &active, &standard_fg) {
-					return nil, "unsupported ANSI SGR sequence in input", false
+					return nil, .Unsupported_SGR
 				}
 			} else if !input_private_mode(params, intermediates, final) {
 				if !input_apply_cursor(params, intermediates, final, &row, &col) {
-					return nil, "unsupported ANSI cursor sequence in input", false
+					return nil, .Unsupported_Cursor
 				}
 			}
 			i = end
@@ -807,7 +815,7 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, string, bool
 	}
 	for len(lines) > 0 && lines[len(lines) - 1].width == 0 do pop(&lines)
 	if len(lines) == 0 do append(&lines, Line{width = 0})
-	return lines[:], "", true
+	return lines[:], .None
 }
 
 to_runes :: proc(s: string) -> []rune {
@@ -980,30 +988,19 @@ csi_default_param :: proc(params: []rune) -> int {
 // ---------------------------------------------------------------------------
 
 setup_input_characters :: proc(e: ^Engine, lines: []Line) {
-	formatted := lines
-	wrapped: [dynamic]Line
-	if e.cfg.wrap_text {
-		for line in lines {
-			current := line
-			for current.width > e.canvas.right {
-				part: Line
-				part.cells = make([dynamic]Input_Cell, e.canvas.right)
-				copy(part.cells[:], current.cells[:e.canvas.right])
-				part.width = e.canvas.right
-				append(&wrapped, part)
-				remainder := make([dynamic]Input_Cell, len(current.cells) - e.canvas.right)
-				copy(remainder[:], current.cells[e.canvas.right:])
-				current.cells = remainder
-				current.width -= e.canvas.right
-			}
-			append(&wrapped, current)
-		}
-		formatted = wrapped[:]
-	}
-
-	input_height := len(formatted)
-	for line, row_index in formatted {
+	// Wrap by walking the original cells. No copied lines or retained suffixes.
+	wrap_width := max(e.canvas.right, 1)
+	input_height := len(lines)
+	if e.cfg.wrap_text do input_height = wrapped_line_count(lines, wrap_width)
+	row_index := 0
+	for line in lines {
+		column := 0
 		for col0 in 0 ..< line.width {
+			if e.cfg.wrap_text && column == wrap_width {
+				column = 0
+				row_index += 1
+			}
+			column += 1
 			cell := line.cells[col0]
 			id := e.next_character_id
 			e.next_character_id += 1
@@ -1015,7 +1012,7 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			c: Character
 			c.character_id = id
 			c.input_symbol = sym
-			c.input_coord = coord(col0 + 1, input_height - row_index)
+			c.input_coord = coord(column, input_height - row_index)
 			c.current_coord = c.input_coord
 			c.visual.symbol = sym
 			c.input_style = cell.style
@@ -1023,6 +1020,7 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			append(&e.chars, c)
 			append(&e.character_sets.input, Char_Id(len(e.chars) - 1))
 		}
+		row_index += 1
 	}
 	anchor_text(e, e.character_sets.input[:], e.cfg.anchor_text)
 }
@@ -1389,10 +1387,12 @@ render_cell_dirty :: #force_inline proc(
 	input_styles: [^]Input_Style,
 	uses_input_preexisting_colors: [^]bool,
 	handling: Existing_Color_Handling,
+	no_color: bool,
 ) -> bool {
 	if cell != previous_cell do return true
 	if cell == EMPTY_CELL do return false
 	id := int(cell)
+	if no_color do return visuals[id].symbol != cached[id].symbol
 	return(
 		effective_visual(
 			visuals[id],
@@ -1431,6 +1431,7 @@ frame_emit :: proc(e: ^Engine, width, height: int) {
 				input_styles,
 				uses_input_preexisting_colors,
 				e.cfg.existing_color_handling,
+				e.cfg.no_color,
 			) {
 				continue
 			}
@@ -1462,6 +1463,7 @@ frame_emit :: proc(e: ^Engine, width, height: int) {
 				symbol := visual.symbol
 				if e.cfg.no_color {
 					append(buf, ..transmute([]byte)symbol)
+					cached[id] = visual
 				} else {
 					fg, bg, bold := visual.fg, visual.bg, visual.bold
 					if visual != cached[id] {

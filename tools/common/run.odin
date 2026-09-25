@@ -45,10 +45,9 @@ run_make :: proc(
 	ok: bool,
 ) {
 	rand.reset_u64(seed)
-	message: string
-	engine_ok: bool
-	run.engine_state, message, engine_ok = engine.engine_make(input, cfg, context.allocator)
-	if !engine_ok do return {}, false
+	input_error: engine.Input_Error
+	run.engine_state, input_error = engine.engine_make(input, cfg, context.allocator)
+	if input_error != .None do return {}, false
 	effect_ok: bool
 	run.effect, effect_ok = effects.make_effect(kind, args)
 	if !effect_ok do return {}, false

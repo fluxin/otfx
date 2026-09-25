@@ -53,7 +53,7 @@ slide_parse :: proc(cfg: ^Slide_Config, args: []string) -> bool {
 		name, value, has_value := split_opt(args[i])
 		switch name {
 		case "--movement-speed":
-			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) || cfg.movement_speed <= 0 do return false
 		case "--grouping":
 			v, ok := opt_value(args, &i, value, has_value)
 			if !ok do return false
@@ -68,7 +68,7 @@ slide_parse :: proc(cfg: ^Slide_Config, args: []string) -> bool {
 				return false
 			}
 		case "--gap":
-			if !parse_int_flag(&cfg.gap, args, &i, value, has_value) do return false
+			if !parse_int_flag(&cfg.gap, args, &i, value, has_value, minimum = 0) do return false
 		case "--reverse-direction":
 			cfg.reverse_direction = true
 		case "--merge":

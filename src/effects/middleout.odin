@@ -65,9 +65,9 @@ middleout_parse :: proc(cfg: ^Middleout_Config, args: []string) -> bool {
 				return false
 			}
 		case "--center-movement-speed":
-			if !parse_float_flag(&cfg.center_movement_speed, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.center_movement_speed, args, &i, value, has_value) || cfg.center_movement_speed <= 0 do return false
 		case "--full-movement-speed":
-			if !parse_float_flag(&cfg.full_movement_speed, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.full_movement_speed, args, &i, value, has_value) || cfg.full_movement_speed <= 0 do return false
 		case "--center-easing":
 			if !parse_ease_flag(&cfg.center_easing, args, &i, value, has_value) do return false
 		case "--full-easing":

@@ -62,7 +62,7 @@ fireworks_parse :: proc(cfg: ^Fireworks_Config, args: []string) -> bool {
 		case "--firework-volume":
 			if !parse_float_flag(&cfg.firework_volume, args, &i, value, has_value) || cfg.firework_volume < 0 || cfg.firework_volume > 1 do return false
 		case "--launch-delay":
-			if !parse_int_flag(&cfg.launch_delay, args, &i, value, has_value) || cfg.launch_delay < 0 do return false
+			if !parse_int_flag(&cfg.launch_delay, args, &i, value, has_value, minimum = 0) || cfg.launch_delay < 0 do return false
 		case "--explode-distance":
 			if !parse_float_flag(&cfg.explode_distance, args, &i, value, has_value) || cfg.explode_distance < 0 || cfg.explode_distance > 1 do return false
 		case "--final-gradient-stops":

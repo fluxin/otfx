@@ -40,7 +40,7 @@ expand_parse :: proc(cfg: ^Expand_Config, args: []string) -> bool {
 		case "--expand-easing":
 			if !parse_ease_flag(&cfg.expand_easing, args, &i, value, has_value) do return false
 		case "--movement-speed":
-			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) || cfg.movement_speed <= 0 do return false
 		case "--final-gradient-stops":
 			if !parse_colors_flag(&cfg.final_gradient_stops, args, &i, value, has_value) do return false
 		case "--final-gradient-steps":

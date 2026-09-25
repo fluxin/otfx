@@ -43,7 +43,7 @@ wipe_parse :: proc(cfg: ^Wipe_Config, args: []string) -> bool {
 		case "--wipe-direction":
 			if !parse_group_flag(&cfg.wipe_direction, args, &i, value, has_value) do return false
 		case "--wipe-delay":
-			if !parse_int_flag(&cfg.wipe_delay, args, &i, value, has_value) do return false
+			if !parse_int_flag(&cfg.wipe_delay, args, &i, value, has_value, minimum = 0) do return false
 		case "--wipe-ease":
 			if !parse_ease_flag(&cfg.wipe_ease, args, &i, value, has_value) do return false
 		case "--final-gradient-stops":

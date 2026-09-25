@@ -122,9 +122,9 @@ matrix_parse :: proc(cfg: ^Matrix_Config, args: []string) -> bool {
 		case "--rain-time":
 			if !parse_int_flag(&cfg.rain_time, args, &i, value, has_value) || cfg.rain_time <= 0 do return false
 		case "--symbol-swap-chance":
-			if !parse_float_flag(&cfg.symbol_swap_chance, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.symbol_swap_chance, args, &i, value, has_value) || cfg.symbol_swap_chance < 0 || cfg.symbol_swap_chance > 1 do return false
 		case "--color-swap-chance":
-			if !parse_float_flag(&cfg.color_swap_chance, args, &i, value, has_value) do return false
+			if !parse_float_flag(&cfg.color_swap_chance, args, &i, value, has_value) || cfg.color_swap_chance < 0 || cfg.color_swap_chance > 1 do return false
 		case "--resolve-delay":
 			if !parse_int_flag(&cfg.resolve_delay, args, &i, value, has_value) do return false
 		case "--final-gradient-stops":

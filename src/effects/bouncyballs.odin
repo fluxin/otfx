@@ -50,7 +50,7 @@ bouncyballs_parse :: proc(cfg: ^Bouncyballs_Config, args: []string) -> bool {
 		case "--ball-symbols":
 			if !parse_symbols_flag(&cfg.ball_symbols, args, &i, value, has_value) do return false
 		case "--ball-delay":
-			if !parse_int_flag(&cfg.ball_delay, args, &i, value, has_value) || cfg.ball_delay < 0 do return false
+			if !parse_int_flag(&cfg.ball_delay, args, &i, value, has_value, minimum = 0) || cfg.ball_delay < 0 do return false
 		case "--movement-speed":
 			if !parse_float_flag(&cfg.movement_speed, args, &i, value, has_value) || cfg.movement_speed <= 0 do return false
 		case "--movement-easing":

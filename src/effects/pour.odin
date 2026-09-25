@@ -77,7 +77,7 @@ pour_parse :: proc(cfg: ^Pour_Config, args: []string) -> bool {
 		case "--movement-speed-range":
 			if !parse_float_range_flag(&cfg.movement_speed_range, args, &i, value, has_value) do return false
 		case "--gap":
-			if !parse_int_flag(&cfg.gap, args, &i, value, has_value) do return false
+			if !parse_int_flag(&cfg.gap, args, &i, value, has_value, minimum = 0) do return false
 		case "--starting-color":
 			if !parse_color_flag(&cfg.starting_color, args, &i, value, has_value) do return false
 		case "--final-gradient-stops":

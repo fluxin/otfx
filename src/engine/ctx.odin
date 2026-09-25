@@ -19,7 +19,10 @@ group_reveal_step :: proc(r: ^Group_Reveal) -> Group_Reveal_Change {
 	change: Group_Reveal_Change
 	if r.tick >= r.duration do return change
 	r.tick += 1
-	next := int(ease.ease(r.ease, f64(r.tick) / f64(r.duration)) * f64(len(r.groups.spans)))
+	fraction := clamp(ease.ease(r.ease, f64(r.tick) / f64(r.duration)), 0, 1)
+	// Some easing functions approach 1 with rounding error at the last tick.
+	if r.tick == r.duration do fraction = 1
+	next := int(fraction * f64(len(r.groups.spans)))
 	if next > r.revealed {
 		change.added = {r.revealed, next - r.revealed}
 	} else if next < r.revealed {

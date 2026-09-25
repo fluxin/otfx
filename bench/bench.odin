@@ -8,11 +8,13 @@ import linux "core:sys/linux"
 import "core:time"
 
 // Benchmark the Odin port against the Rust ttfx reference using their real
-// user-facing CLIs. Frame pacing is disabled; timings measure render
-// throughput. Execute from the repository root:
+// user-facing CLIs. Unpaced finite effects measure throughput; --paced
+// measures CPU duty and memory for timing-gated effects. Execute from the
+// repository root:
 //
 //   odin build bench -o:speed -out:bench/bench
 //   BENCH_MIN_SECONDS=1 ./bench/bench [repeats] [effect ...]
+//   BENCH_MATRIX_RAIN_TIME=1 ./bench/bench --paced 3
 
 REPEATS_DEFAULT :: 5
 MIN_SAMPLE_SECONDS_DEFAULT :: 2.0
@@ -139,15 +141,7 @@ frame_count_append :: proc(bytes: []byte, matched: ^int) -> int {
 	return count
 }
 
-run_command :: proc(
-	command: []string,
-	input: []byte,
-	capture_frames, measure_rss: bool,
-) -> (
-	Bench_Run,
-	bool,
-) {
-	assert(!capture_frames || !measure_rss)
+run_command :: proc(command: []string, input: []byte, capture_frames: bool) -> (Bench_Run, bool) {
 	stdin_r, stdin_w, pipe_err := os.pipe()
 	if pipe_err != nil {
 		fmt.eprintfln("failed to create child stdin pipe: %v", pipe_err)
@@ -211,48 +205,37 @@ run_command :: proc(
 		}
 	}
 
-	state: os.Process_State
-	rss_kib := 0
-	if measure_rss {
-		status: u32
-		usage: linux.RUsage
-		for {
-			waited, wait_errno := linux.wait4(linux.Pid(process.pid), &status, {}, &usage)
-			if wait_errno == .EINTR do continue
-			if wait_errno != .NONE || int(waited) != process.pid || status != 0 {
-				_, _ = os.process_wait(process, 0)
-				fmt.eprintfln("%s exited unsuccessfully while measuring RSS", command[0])
-				return {}, false
-			}
-			break
-		}
-		_, _ = os.process_wait(process, 0) // closes the pidfd after wait4 reaps it
-		rss_kib = usage.maxrss_word
-	} else {
-		wait_err: os.Error
-		state, wait_err = os.process_wait(process)
-		if wait_err != nil || !state.success {
-			fmt.eprintfln(
-				"%s exited unsuccessfully: %v (code %d)",
-				command[0],
-				wait_err,
-				state.exit_code,
-			)
+	// Process_State CPU times use /proc ticks on Linux. Read wait4's full
+	// resource usage for every child, including short benchmark samples.
+	status: u32
+	usage: linux.RUsage
+	for {
+		waited, wait_errno := linux.wait4(linux.Pid(process.pid), &status, {}, &usage)
+		if wait_errno == .EINTR do continue
+		if wait_errno != .NONE || int(waited) != process.pid || status != 0 {
+			_, _ = os.process_wait(process, 0)
+			fmt.eprintfln("%s exited unsuccessfully while measuring resources", command[0])
 			return {}, false
 		}
+		break
 	}
+	_, _ = os.process_wait(process, 0) // closes the pidfd after wait4 reaps it
+	cpu_ms :=
+		f64(usage.utime.seconds + usage.stime.seconds) * 1000 +
+		f64(usage.utime.microseconds + usage.stime.microseconds) / 1000
+
 	return {
 			wall_ms = time.duration_seconds(time.tick_since(start)) * 1000,
-			cpu_ms = time.duration_seconds(state.user_time + state.system_time) * 1000,
+			cpu_ms = cpu_ms,
 			frames = frames,
-			rss_kib = rss_kib,
+			rss_kib = usage.maxrss_word,
 		},
 		true
 }
 
-command_make :: proc(binary, effect: string) -> [dynamic]string {
+command_make :: proc(binary, effect: string, frame_rate := "0") -> [dynamic]string {
 	command: [dynamic]string
-	append(&command, binary, "--seed", "1", "--frame-rate", "0", effect)
+	append(&command, binary, "--seed", "1", "--frame-rate", frame_rate, effect)
 	switch effect {
 	case "matrix":
 		rain_time := os.get_env("BENCH_MATRIX_RAIN_TIME", context.temp_allocator)
@@ -271,35 +254,38 @@ benchmark_summary :: proc(
 	input: []byte,
 	repeats: int,
 	minimum_seconds: f64,
+	paced := false,
 ) -> (
 	Bench_Summary,
 	bool,
 ) {
-	probe, probe_ok := run_command(command, input, false, false)
-	if !probe_ok do return {}, false
-	batch_count := max(1, int(math.ceil(minimum_seconds / (probe.wall_ms / 1000))))
+	batch_count := 1
+	if !paced {
+		probe, probe_ok := run_command(command, input, false)
+		if !probe_ok do return {}, false
+		batch_count = max(1, int(math.ceil(minimum_seconds / (probe.wall_ms / 1000))))
+	}
 	best_wall_ms := math.F64_MAX
 	total_wall_ms, total_cpu_ms: f64
-	run_count := 0
+	run_count, peak_rss_kib := 0, 0
 	for _ in 0 ..< repeats {
 		start := time.tick_now()
 		for _ in 0 ..< batch_count {
-			run, run_ok := run_command(command, input, false, false)
+			run, run_ok := run_command(command, input, false)
 			if !run_ok do return {}, false
 			total_cpu_ms += run.cpu_ms
+			peak_rss_kib = max(peak_rss_kib, run.rss_kib)
 			run_count += 1
 		}
 		elapsed_ms := time.duration_seconds(time.tick_since(start)) * 1000 / f64(batch_count)
 		best_wall_ms = min(best_wall_ms, elapsed_ms)
 		total_wall_ms += elapsed_ms * f64(batch_count)
 	}
-	rss_run, rss_ok := run_command(command, input, false, true)
-	if !rss_ok do return {}, false
 	return {
 			best_wall_ms = best_wall_ms,
 			mean_wall_ms = total_wall_ms / f64(run_count),
 			mean_cpu_ms = total_cpu_ms / f64(run_count),
-			peak_rss_kib = rss_run.rss_kib,
+			peak_rss_kib = peak_rss_kib,
 			batch_count = batch_count,
 		},
 		true
@@ -308,7 +294,7 @@ benchmark_summary :: proc(
 frame_count :: proc(binary, effect: string, input: []byte) -> (int, bool) {
 	command := command_make(binary, effect)
 	defer delete(command)
-	run, ok := run_command(command[:], input, true, false)
+	run, ok := run_command(command[:], input, true)
 	return run.frames, ok
 }
 
@@ -319,37 +305,43 @@ startup :: proc(binary: string, input: []byte, repeats: int, minimum_seconds: f6
 	return summary.best_wall_ms, ok
 }
 
-parse_options :: proc() -> (repeats: int, selected: [dynamic]string, ok: bool) {
+parse_options :: proc() -> (repeats: int, selected: [dynamic]string, paced, ok: bool) {
 	repeats = REPEATS_DEFAULT
 	args := os.args[1:]
+	if len(args) > 0 && args[0] == "--paced" {
+		paced = true
+		args = args[1:]
+	}
 	if len(args) > 0 {
 		parsed, parsed_ok := strconv.parse_int(args[0])
 		if !parsed_ok || parsed <= 0 {
-			fmt.eprintfln("usage: %s [repeats] [effect ...]", os.args[0])
-			return 0, nil, false
+			fmt.eprintfln("usage: %s [--paced] [repeats] [effect ...]", os.args[0])
+			return 0, nil, paced, false
 		}
 		repeats = parsed
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		for effect in Effects do append(&selected, effect)
-		return repeats, selected, true
+		for effect in Effects {
+			if !paced || effect_is_wall_clock_gated(effect) do append(&selected, effect)
+		}
+		return repeats, selected, paced, true
 	}
 	for effect in args {
 		if !effect_known(effect) {
 			fmt.eprintfln("unknown effect: %s", effect)
-			return 0, nil, false
+			return 0, nil, paced, false
 		}
 	}
 	append(&selected, ..args)
-	return repeats, selected, true
+	return repeats, selected, paced, true
 }
 
 minimum_sample_seconds :: proc() -> f64 {
 	value := os.get_env("BENCH_MIN_SECONDS", context.temp_allocator)
 	if value == "" do return MIN_SAMPLE_SECONDS_DEFAULT
 	seconds, ok := strconv.parse_f64(value)
-	if !ok || seconds <= 0 {
+	if !ok || math.is_nan(seconds) || math.is_inf(seconds) || seconds <= 0 {
 		fmt.eprintfln("ignoring invalid BENCH_MIN_SECONDS=%s", value)
 		return MIN_SAMPLE_SECONDS_DEFAULT
 	}
@@ -357,7 +349,7 @@ minimum_sample_seconds :: proc() -> f64 {
 }
 
 main :: proc() {
-	repeats, selected, options_ok := parse_options()
+	repeats, selected, paced, options_ok := parse_options()
 	if !options_ok do os.exit(2)
 	defer delete(selected)
 
@@ -370,13 +362,21 @@ main :: proc() {
 	minimum_seconds := minimum_sample_seconds()
 
 	fmt.printf(
-		"canvas %dx%d, best of %d, >=%gs per sample, frame pacing disabled\n\n",
+		"canvas %dx%d, repeats=%d, seed=1, stdout=/dev/null\n",
 		BENCH_COLUMNS,
 		BENCH_LINES,
 		repeats,
-		minimum_seconds,
 	)
-	fmt.println("effect            best wall / batch / frames / ratio")
+	if paced {
+		fmt.println("paced: one complete run per repeat")
+	} else {
+		fmt.printfln("unpaced: minimum sample=%gs", minimum_seconds)
+	}
+	frame_rate := "60" if paced else "0"
+	fmt.printfln(
+		"frame rate %s; CPU is wait4 user+system; RSS is maximum across measured children",
+		frame_rate,
+	)
 	fmt.println(
 		"-------------------------------------------------------------------------------------------",
 	)
@@ -388,39 +388,59 @@ main :: proc() {
 	log_speedup_total: f64
 
 	for effect in selected {
-		rust_command := command_make(RUST_BINARY, effect)
-		odin_command := command_make(ODIN_BINARY, effect)
+		rust_command := command_make(RUST_BINARY, effect, frame_rate)
+		odin_command := command_make(ODIN_BINARY, effect, frame_rate)
 		rust_summary, rust_ok := benchmark_summary(
 			rust_command[:],
 			input[:],
 			repeats,
 			minimum_seconds,
+			paced,
 		)
 		odin_summary, odin_ok := benchmark_summary(
 			odin_command[:],
 			input[:],
 			repeats,
 			minimum_seconds,
+			paced,
 		)
+		if effect_is_wall_clock_gated(effect) {
+			fmt.printfln(
+				"%s: %s %s",
+				effect,
+				rust_command[len(rust_command) - 2],
+				rust_command[len(rust_command) - 1],
+			)
+		}
 		delete(rust_command)
 		delete(odin_command)
 		if !rust_ok || !odin_ok do os.exit(1)
 
-		rust_frames, rust_frames_ok := frame_count(RUST_BINARY, effect, input[:])
-		odin_frames, odin_frames_ok := frame_count(ODIN_BINARY, effect, input[:])
-		if !rust_frames_ok || !odin_frames_ok do os.exit(1)
+		if paced || effect_is_wall_clock_gated(effect) {
+			fmt.printfln(
+				"%-16s duration diagnostic; CPU duty %.2f%% / %.2f%%",
+				effect,
+				100 * rust_summary.mean_cpu_ms / rust_summary.mean_wall_ms,
+				100 * odin_summary.mean_cpu_ms / odin_summary.mean_wall_ms,
+			)
+		} else {
+			fmt.printfln(
+				"%-16s rust=%.1fms odin=%.1fms batch=%d/%d ratio=%.2fx",
+				effect,
+				rust_summary.best_wall_ms,
+				odin_summary.best_wall_ms,
+				rust_summary.batch_count,
+				odin_summary.batch_count,
+				rust_summary.best_wall_ms / odin_summary.best_wall_ms,
+			)
+		}
+		if !paced {
+			rust_frames, rust_frames_ok := frame_count(RUST_BINARY, effect, input[:])
+			odin_frames, odin_frames_ok := frame_count(ODIN_BINARY, effect, input[:])
+			if !rust_frames_ok || !odin_frames_ok do os.exit(1)
+			fmt.printfln("  observed frame markers %d / %d", rust_frames, odin_frames)
+		}
 
-		fmt.printf(
-			"%-16s rust=%.1fms odin=%.1fms batch=%d/%d frames=%d/%d ratio=%.2fx\n",
-			effect,
-			rust_summary.best_wall_ms,
-			odin_summary.best_wall_ms,
-			rust_summary.batch_count,
-			odin_summary.batch_count,
-			rust_frames,
-			odin_frames,
-			rust_summary.best_wall_ms / odin_summary.best_wall_ms,
-		)
 		fmt.printf(
 			"  mean wall %.1fms / %.1fms, mean CPU %.1fms / %.1fms, peak RSS %d KiB / %d KiB\n",
 			rust_summary.mean_wall_ms,
@@ -430,10 +450,8 @@ main :: proc() {
 			rust_summary.peak_rss_kib,
 			odin_summary.peak_rss_kib,
 		)
-		if effect_is_wall_clock_gated(effect) {
-			fmt.println(
-				"  wall-clock gated: ratio and frames are diagnostics, not normalized throughput",
-			)
+		if paced || effect_is_wall_clock_gated(effect) {
+			fmt.println("  duration is diagnostic; excluded from the throughput aggregate")
 		} else {
 			throughput_effect_count += 1
 			rust_best_total += rust_summary.best_wall_ms
@@ -475,6 +493,7 @@ main :: proc() {
 		)
 	}
 
+	if paced do return
 	startup_input := [2]byte{'x', '\n'}
 	rust_startup, rust_startup_ok := startup(
 		RUST_BINARY,

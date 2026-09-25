@@ -67,11 +67,12 @@ producing the same named effect and honoring its supported option surface.
 
 [`bench/bench.odin`](bench/bench.odin) runs the real Rust and Odin CLIs with
 the same dense 200×50 input, seed, and `--frame-rate 0`. It reports best and
-mean wall time, mean child CPU time, a single exact Linux `wait4` peak-RSS
-observation, and observed terminal frame markers. This is an end-to-end
-production benchmark, not terminal-stream or intermediate-frame parity.
+mean wall time, child user-plus-system CPU from Linux `wait4` microseconds,
+maximum child peak RSS across measured samples, and observed terminal frame
+markers. This is an end-to-end production benchmark, not terminal-stream or
+intermediate-frame parity.
 
-Latest full-suite results against `ttfx v0.3.3` (`54d21f0`): five repeats with
+Historical full-suite results against `ttfx v0.3.3` (`54d21f0`): five repeats with
 `BENCH_MIN_SECONDS=1`, a dense 200×50 input, seed 1, and disabled frame pacing.
 The aggregation is an unweighted mean across the 35 fixed-duration effects;
 Matrix and Thunderstorm are excluded because their wall-clock duration is
@@ -80,8 +81,11 @@ configured independently.
 | Metric | Rust | Odin | Odin / Rust |
 |---|---:|---:|---:|
 | Best wall, mean per effect | 212.2 ms | 116.7 ms | 0.55× (1.82× faster) |
-| Mean child CPU, mean per effect | 203.7 ms | 109.1 ms | 0.54× |
 | Peak RSS, mean per effect | 131.5 MiB | 13.2 MiB | 0.10× |
+
+The historical CPU aggregate is withdrawn: the old process-wait path truncated
+each child to 10 ms CPU ticks. The harness now uses `wait4` microseconds for
+every measured process, so short effects retain their fractional CPU cost.
 
 The harness prints best and mean wall time, child CPU time, peak RSS, and
 observed frame markers for every effect. Frame counts are diagnostics rather
@@ -95,8 +99,8 @@ for a configured interval. With pacing disabled, both use a full CPU core;
 their elapsed-time ratio and emitted frames are therefore diagnostics, **not**
 normalized throughput or semantic-parity claims.
 
-The following five-repeat diagnostics use `BENCH_MATRIX_RAIN_TIME=5` and the
-default `--storm-time 1` at 200×50. CPU is mean child CPU time; peak RSS is
+The following historical five-repeat diagnostics use `BENCH_MATRIX_RAIN_TIME=5`
+and the default `--storm-time 1` at 200×50. CPU is mean child CPU time; peak RSS is
 one `wait4` observation. Frame counts are host- and renderer-dependent
 observations only.
 
@@ -113,15 +117,15 @@ of by wall time, so an unpaced capture no longer depends on host speed.
 
 ### Paced 60 fps duty cycle
 
-The default frame rate is 60 fps. The following three-run sample uses the
-same dense 200×50 input and seed, with `--rain-time 1` or `--storm-time 1`.
+The default frame rate is 60 fps. The following historical three-run sample uses
+the same dense 200×50 input and seed, with `--rain-time 1` or `--storm-time 1`.
 Output is redirected, so these are application-process costs rather than
 terminal-emulator costs. CPU is user plus system CPU seconds per run.
 
 | Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Interpretation |
 |---|---:|---:|---:|---|
 | Matrix | 22.19 s / 0.31 s | 22.15 s / 0.17 s | 44.2 / 11.1 MiB | Odin uses about 45% less application CPU at a comparable duration. |
-| Thunderstorm | 5.79 s / 0.14 s | 4.21 s / 0.02 s | 134.3 / 11.0 MiB | Lower CPU and RSS, but Odin is 27% shorter; do not treat this as a parity-safe speed win. |
+| Thunderstorm | 5.79 s / 0.14 s | 4.21 s / 0.02 s | 134.3 / 11.0 MiB | Lower CPU and RSS; the independent Odin choreography is 27% shorter. Duration is diagnostic. |
 
 The frame-rate setting is a fixed application target, selected with
 `--frame-rate N` (60 by default; `0` disables pacing). Terminal applications
@@ -134,6 +138,8 @@ Run the current production benchmark with:
 odin build src -o:speed -out:otfx
 odin build bench -o:speed -out:bench/bench
 BENCH_MIN_SECONDS=1 ./bench/bench 5
+# Resource cost at 60 fps; defaults to Matrix and Thunderstorm
+BENCH_MATRIX_RAIN_TIME=1 ./bench/bench --paced 3
 ```
 
 The benchmark is entirely Odin; build it once and reuse `bench/bench`. It sets
@@ -143,6 +149,11 @@ time, child CPU time, peak RSS, and geometric wall-speedup. Matrix and
 Thunderstorm are explicitly excluded from that normalized summary.
 `BENCH_MATRIX_RAIN_TIME` and `BENCH_STORM_TIME` can shorten their default
 5-second and 1-second diagnostic windows.
+
+`--paced` reports mean CPU per run, CPU duty (CPU/wall relative to one core),
+maximum observed peak RSS, and actual duration at 60 fps. It does not publish
+a wall-time speedup or a throughput aggregate. Output goes to `/dev/null`, so
+terminal-emulator costs are excluded. Each paced repeat is one complete run.
 
 ### Documentation previews
 
@@ -426,20 +437,28 @@ done
 ```
 
 This validates construction and early-frame execution for every exposed effect.
-It does not replace a parity harness that captures logical frames; `otfx` now
-has the virtual clock such a harness needs, but not the capture side.
+Regression tests and logical-frame diagnostics are available separately:
 
-## Remaining parity work
+```sh
+odin test tests
+odin build tools/parity -o:speed -out:tools/parity/parity
+./tools/parity/parity
+```
 
-- Build the logical-frame capture harness on top of `--virtual-clock`, then use
-  it to reconcile random draw order, phase progression, and terminal output
-  where byte parity is wanted. The renderer intentionally has a different
-  stream. The shared clock itself is done: `--virtual-clock` makes the two
-  seconds-budgeted effects advance by frames, which is what the documentation
-  previews already rely on to be reproducible.
-- Reconcile paced end-to-end durations effect by effect. Matrix is close in the
-  60 fps sample above; Thunderstorm currently ends too early and must not be
-  called a parity-safe performance win until corrected.
+The diagnostic tool checks Odin completion and final input glyphs and reports
+reference frame-count differences without failing on them. Reasonable visual,
+RNG, and duration differences are acceptable for meaningful performance gains;
+exact reference frames and terminal streams are not acceptance requirements.
+Intermediate visual comparison still needs a capture harness.
+
+## Remaining validation work
+
+- Build visual-frame capture on top of `--virtual-clock` to investigate phase
+  progression and composition. The shared clock already makes the two
+  seconds-budgeted effects advance by frames, as the documentation previews do.
+- Record paced end-to-end durations effect by effect. Matrix is close in the
+  60 fps sample above. Thunderstorm deliberately uses independent choreography;
+  its duration difference is acceptable and is not a wall-time speedup claim.
 - Add regression captures for input SGR combinations, xterm-color emission,
   and `always`/`dynamic` behavior across effects.
 

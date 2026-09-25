@@ -617,9 +617,7 @@ print_usage :: proc() {
 	fmt.println("terminal options:")
 	fmt.println("  --frame-rate N   --canvas-width N   --canvas-height N")
 	fmt.println("  --anchor-canvas X   --anchor-text X   --wrap-text")
-	fmt.println(
-		"  --virtual-clock  (advance --rain-time/--storm-time by frames, not wall clock)",
-	)
+	fmt.println("  --virtual-clock  (advance --rain-time/--storm-time by frames, not wall clock)")
 	fmt.println(
 		"  --xterm-colors --no-color --existing-color-handling M --no-eol --no-restore-cursor",
 	)
@@ -706,9 +704,20 @@ run_effect_once :: proc(
 ) -> effects.Run_Outcome {
 	context.allocator = allocator
 
-	ctx, input_error, input_ok := engine.engine_make(input, opts.cfg, context.allocator)
-	if !input_ok {
-		fmt.eprintln("Error: ", input_error)
+	ctx, input_error := engine.engine_make(input, opts.cfg, context.allocator)
+	if input_error != .None {
+		switch input_error {
+		case .Invalid_Tab_Width:
+			fmt.eprintln("Error: tab width must be positive")
+		case .Unsupported_Escape:
+			fmt.eprintln("Error: unsupported ANSI escape sequence in input")
+		case .Unsupported_SGR:
+			fmt.eprintln("Error: unsupported ANSI SGR sequence in input")
+		case .Unsupported_Cursor:
+			fmt.eprintln("Error: unsupported ANSI cursor sequence in input")
+		case .None:
+			unreachable()
+		}
 		os.exit(1)
 	}
 	effect, effect_ok := effects.make_effect(opts.kind, opts.effect_args)

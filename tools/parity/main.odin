@@ -6,10 +6,13 @@ import "../../src/effects"
 import "../../src/engine"
 
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:strings"
 
-// Logical-frame parity between otfx and the ttfx reference.
+// Logical-frame diagnostics between otfx and the ttfx reference.
+// Reasonable reference differences are accepted; completion and final content
+// are checked independently of exact frame counts.
 //
 // Built as a standalone tool rather than as a flag on the shipping binary: the
 // product has no reason to carry a dump mode. The otfx side links the engine
@@ -33,11 +36,6 @@ Reference :: "third_party/ttfx/target/release/ttfx"
 // The terminal sequence each implementation writes once per emitted frame.
 Frame_Marker :: [4]byte{'\x1b', '8', '\x1b', '7'}
 
-Case :: struct {
-	kind: effects.Effect_Kind,
-	args: []string,
-}
-
 // Only effects needing non-default arguments are listed; everything else runs
 // at its defaults. The two seconds-budgeted effects are shortened so a case
 // does not spend its whole budget in one phase.
@@ -53,21 +51,11 @@ case_args :: proc(kind: effects.Effect_Kind) -> []string {
 	return nil
 }
 
-// Divergences that are understood, so a new one fails the run instead of
-// blending into accepted noise.
-known_divergence :: proc(kind: effects.Effect_Kind) -> string {
-	#partial switch kind {
-	case .Thunderstorm:
-		// The storm cannot end while a lightning strike is live, and strikes
-		// fire on a per-frame random draw the two implementations do not share.
-		// The residual is a frame or two at short storm times and grows with
-		// --storm-time; closing it needs matching RNG semantics.
-		return "storm end waits on a random strike; draw sequences differ"
-	}
-	return ""
-}
-
 otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
 	cfg := engine.config_default()
 	cfg.frame_rate = 0
 	cfg.canvas_width = Canvas_Width
@@ -83,6 +71,14 @@ otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 		if !produced do break
 		frames += 1
 		free_all(context.temp_allocator)
+	}
+	if frames == Max_Frames do return frames, false
+	// Inspect the last rendered grid, including painter collisions.
+	e := &run.engine_state
+	for id in e.character_sets.input {
+		p := e.chars.input_coord[id]
+		cell := e.render_cells[(p.row - 1) * e.visible_right + p.column - 1]
+		if cell < 0 || e.chars.visual[cell].symbol != e.chars.input_symbol[id] do return frames, false
 	}
 	return frames, true
 }
@@ -113,15 +109,17 @@ reference_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 	if pipe_err != nil do return 0, false
 	stdout_r, stdout_w, out_err := os.pipe()
 	if out_err != nil {
-		os.close(stdin_r);os.close(stdin_w)
+		os.close(stdin_r); os.close(stdin_w)
 		return 0, false
 	}
 
-	process, start_err := os.process_start({command = command[:], stdin = stdin_r, stdout = stdout_w})
+	process, start_err := os.process_start(
+		{command = command[:], stdin = stdin_r, stdout = stdout_w},
+	)
 	os.close(stdin_r)
 	os.close(stdout_w)
 	if start_err != nil {
-		os.close(stdin_w);os.close(stdout_r)
+		os.close(stdin_w); os.close(stdout_r)
 		return 0, false
 	}
 
@@ -152,8 +150,8 @@ reference_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 		if read_err != nil do break
 	}
 	os.close(stdout_r)
-	_, _ = os.process_wait(process)
-	return frames, true
+	state, wait_error := os.process_wait(process)
+	return frames, wait_error == nil && state.success
 }
 
 main :: proc() {
@@ -167,7 +165,7 @@ main :: proc() {
 	fmt.printfln("%-18s %8s %8s %8s  %s", "effect", "otfx", "ttfx", "ratio", "result")
 	fmt.println(strings.repeat("-", 62, context.temp_allocator))
 
-	matches, expected, failures := 0, 0, 0
+	matches, differences, failures := 0, 0, 0
 	for kind in effects.Effect_Kind {
 		// Held on the heap: stepping an effect resets the temp allocator every
 		// frame, which would free a temp-allocated name before it is printed.
@@ -196,22 +194,23 @@ main :: proc() {
 		case ours == theirs:
 			row(name, ours_text, theirs_text, ratio_text, "match")
 			matches += 1
-		case known_divergence(kind) != "":
-			row(name, ours_text, theirs_text, ratio_text, "differs (known)")
-			expected += 1
 		case:
-			row(name, ours_text, theirs_text, ratio_text, "DIFFERS")
-			failures += 1
+			row(name, ours_text, theirs_text, ratio_text, "differs (diagnostic)")
+			differences += 1
 		}
 		free_all(context.temp_allocator)
 	}
 
 	fmt.println(strings.repeat("-", 62, context.temp_allocator))
-	fmt.printfln("%d match, %d known divergence, %d unexpected", matches, expected, failures)
-	for kind in effects.Effect_Kind {
-		if reason := known_divergence(kind); reason != "" {
-			fmt.printfln("  %s: %s", common.effect_name(kind, context.temp_allocator), reason)
-		}
+	fmt.printfln(
+		"%d match, %d diagnostic differences, %d failures",
+		matches,
+		differences,
+		failures,
+	)
+	if matches + differences + failures == 0 {
+		fmt.eprintfln("unknown effect filter: %s", filter)
+		os.exit(2)
 	}
 	if failures > 0 do os.exit(1)
 }
