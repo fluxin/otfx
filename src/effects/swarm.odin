@@ -403,8 +403,8 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		s.character_stages[i] = 0
-		e.chars.current_coord[id] = s.lane_origins[swarm_lane_index(s, i, 0)]
-		e.chars.is_visible[id] = true
+		engine.set_character(e, id, coord = s.lane_origins[swarm_lane_index(s, i, 0)])
+		engine.set_character(e, id, visible = true)
 		append(&s.active_indexes, i)
 	}
 }
@@ -413,10 +413,8 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	for s.next_launch_group >= 0 && s.tick >= s.group_start_ticks[s.next_launch_group] do swarm_launch_group(s, e)
 	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return nil, false
 
-	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
+
 	write := 0
 	for i in s.active_indexes {
 		group := s.group_by_index[i]
@@ -434,67 +432,79 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		if s.tick >= s.lane_ends[row] {
 			if s.tick >= s.lane_finish[i] {
 				if s.color_handling == .Dynamic {
-					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+					visual := engine.get_visual(e, id)
+					engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+					engine.set_visual(e, id, visual)
 				} else {
-					visual_fg[id].fg = s.final_colors[i]
+					engine.set_foreground(e, id, s.final_colors[i])
 				}
 				continue
 			}
-			e.chars.layer[id] = 0
+			engine.set_character(e, id, layer = 0)
 			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
 			if s.color_handling == .Dynamic {
 				style := e.chars.input_style[id]
 				if style.fg == nil && style.bg == nil && s.tick - s.lane_ends[row] >= 33 {
-					visual_fg[id].fg = nil
+					engine.set_foreground(e, id, nil)
 				} else if fg, ok := style.fg.?; ok {
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.config.flash_color,
-						fg,
-						10,
-						landing_step,
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(s.config.flash_color, fg, 10, landing_step),
 					)
 				} else if style.bg == nil {
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.config.flash_color,
-						engine.Color{0xff, 0xff, 0xff},
-						10,
-						landing_step,
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(
+							s.config.flash_color,
+							engine.Color{0xff, 0xff, 0xff},
+							10,
+							landing_step,
+						),
 					)
 				} else {
-					visual_fg[id].fg = nil
+					engine.set_foreground(e, id, nil)
 				}
 				if bg, ok := style.bg.?; ok {
-					visual_fg[id].bg = engine.gradient_between_step(
-						s.config.flash_color,
-						bg,
-						10,
-						landing_step,
+					engine.set_background(
+						e,
+						id,
+						engine.gradient_between_step(s.config.flash_color, bg, 10, landing_step),
 					)
 				} else {
-					visual_fg[id].bg = nil
+					engine.set_background(e, id, nil)
 				}
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
-					s.config.flash_color,
-					s.final_colors[i],
-					10,
-					landing_step,
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.config.flash_color,
+						s.final_colors[i],
+						10,
+						landing_step,
+					),
 				)
 			}
-			current_coords[id] = swarm_waypoint(s, i, stage)
+			engine.set_character(e, id, coord = swarm_waypoint(s, i, stage))
 			s.active_indexes[write] = i
 			write += 1
 			continue
 		}
 		if s.tick >= s.lane_starts[row] {
 			progress := f64(s.tick - s.lane_starts[row] + 1) / f64(s.lane_steps[row])
-			current_coords[id] = engine.coord_on_line(
-				s.lane_origins[row],
-				swarm_waypoint(s, i, stage),
-				ease.ease(swarm_stage_easing(stage, stage_count), progress),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_line(
+					s.lane_origins[row],
+					swarm_waypoint(s, i, stage),
+					ease.ease(swarm_stage_easing(stage, stage_count), progress),
+				),
 			)
-			visual_symbols[id].symbol = input_symbols[id]
-			e.chars.layer[id] = 1
+			engine.set_symbol(e, id, input_symbols[id])
+			engine.set_character(e, id, layer = 1)
 			entry := 0
 			if stage % 3 == 0 {
 				// Entry and landing flash through a mirrored palette as distance
@@ -506,7 +516,7 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 					SWARM_FLASH_ENTRIES - 1,
 				)
 			}
-			visual_fg[id].fg = s.flash_colors[group * SWARM_FLASH_ENTRIES + entry]
+			engine.set_foreground(e, id, s.flash_colors[group * SWARM_FLASH_ENTRIES + entry])
 		}
 		s.active_indexes[write] = i
 		write += 1

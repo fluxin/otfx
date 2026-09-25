@@ -90,27 +90,23 @@ overflow_append_row :: proc(state: ^Overflow_State, characters: []engine.Char_Id
 	append(&state.pending_rows, Overflow_Row{span, final})
 }
 
-overflow_row_move_up :: proc(chars: ^engine.Character_Storage, characters: []engine.Char_Id) {
-	coords := chars.current_coord[:]
-	for id in characters do coords[id].row += 1
-}
-
-overflow_row_setup :: proc(chars: ^engine.Character_Storage, characters: []engine.Char_Id) {
-	current := chars.current_coord[:]
-	input := chars.input_coord[:]
-	for id in characters do current[id] = engine.coord(input[id].column, 0)
-}
-
-overflow_row_color :: proc(
-	chars: ^engine.Character_Storage,
-	characters: []engine.Char_Id,
-	color: engine.Color,
-) {
+overflow_row_move_up :: proc(e: ^engine.Engine, characters: []engine.Char_Id) {
+	coords := e.chars.current_coord[:]
 	for id in characters {
-		chars.visual[id] = {
-			symbol = chars.input_symbol[id],
-			fg     = color,
-		}
+		engine.set_character(e, id, coord = engine.Coord{coords[id].column, coords[id].row + (1)})
+	}
+}
+
+overflow_row_setup :: proc(e: ^engine.Engine, characters: []engine.Char_Id) {
+	input := e.chars.input_coord[:]
+	for id in characters {
+		engine.set_character(e, id, coord = engine.coord(input[id].column, 0))
+	}
+}
+
+overflow_row_color :: proc(e: ^engine.Engine, characters: []engine.Char_Id, color: engine.Color) {
+	for id in characters {
+		engine.set_visual(e, id, engine.Visual{symbol = e.chars.input_symbol[id], fg = color})
 	}
 }
 
@@ -186,12 +182,18 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		for id in row {
 			if id < engine.Char_Id(len(final_colors)) {
 				if s.color_handling == .Dynamic {
-					engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+					visual := engine.get_visual(e, id)
+					engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+					engine.set_visual(e, id, visual)
 				} else {
-					e.chars.visual[id] = {
-						symbol = e.chars.visual[id].symbol,
-						fg     = final_colors[id],
-					}
+					engine.set_visual(
+						e,
+						id,
+						engine.Visual {
+							symbol = engine.get_visual(e, id).symbol,
+							fg = final_colors[id],
+						},
+					)
 				}
 			}
 		}
@@ -217,22 +219,24 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> ([]engine.Char_I
 			if s.pending_head >= len(s.pending_rows) do break
 			for row in s.active_rows {
 				characters := engine.span_slice(s.row_characters[:], row.span)
-				overflow_row_move_up(&e.chars, characters)
+				overflow_row_move_up(e, characters)
 				if !row.final {
 					head_row := e.chars.current_coord[characters[0]].row
 					index := min(head_row, len(s.overflow_gradient) - 1)
-					overflow_row_color(&e.chars, characters, s.overflow_gradient[index])
+					overflow_row_color(e, characters, s.overflow_gradient[index])
 				}
 			}
 			next := s.pending_rows[s.pending_head]
 			s.pending_head += 1
 			characters := engine.span_slice(s.row_characters[:], next.span)
-			overflow_row_setup(&e.chars, characters)
-			overflow_row_move_up(&e.chars, characters)
+			overflow_row_setup(e, characters)
+			overflow_row_move_up(e, characters)
 			if !next.final {
-				overflow_row_color(&e.chars, characters, s.overflow_gradient[0])
+				overflow_row_color(e, characters, s.overflow_gradient[0])
 			}
-			for id in characters do e.chars.is_visible[id] = true
+			for id in characters {
+				engine.set_character(e, id, visible = true)
+			}
 			append(&s.active_rows, next)
 		}
 		s.delay = rand.int_range(0, 4)

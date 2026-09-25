@@ -91,10 +91,7 @@ color_pixel :: #force_inline proc(color: engine.Color) -> image.RGB_Pixel {
 	return {color.r, color.g, color.b}
 }
 
-blend :: #force_inline proc(
-	fg, bg: image.RGB_Pixel,
-	alpha: u8,
-) -> image.RGB_Pixel {
+blend :: #force_inline proc(fg, bg: image.RGB_Pixel, alpha: u8) -> image.RGB_Pixel {
 	if alpha == 255 do return fg
 	if alpha == 0 do return bg
 	a := u32(alpha)
@@ -203,7 +200,6 @@ raster_render_cells :: proc(
 ) {
 	raster_fill(r, Background)
 	cells := e.render_cells[:width * height]
-	visuals := e.chars.visual[:]
 	input_styles := e.chars.input_style[:]
 	uses_input_preexisting_colors := e.chars.uses_input_preexisting_colors[:]
 	for screen_row in 0 ..< height {
@@ -213,7 +209,7 @@ raster_render_cells :: proc(
 			if cell == engine.EMPTY_CELL do continue
 			id := int(cell)
 			visual := engine.effective_visual(
-				visuals[id],
+				engine.get_visual(e, engine.Char_Id(id)),
 				input_styles[id],
 				uses_input_preexisting_colors[id],
 				e.cfg.existing_color_handling,
@@ -248,13 +244,7 @@ raster_render_cells :: proc(
 // Both passes rebuild from the same seed, so the second walk reproduces the
 // first frame for frame. That is what lets pass one measure colours without
 // holding every frame in memory.
-preview_start :: proc(
-	kind: effects.Effect_Kind,
-	text: string,
-) -> (
-	run: common.Run,
-	ok: bool,
-) {
+preview_start :: proc(kind: effects.Effect_Kind, text: string) -> (run: common.Run, ok: bool) {
 	cfg := engine.config_default()
 	cfg.frame_rate = 0
 	cfg.canvas_width = Preview_Width

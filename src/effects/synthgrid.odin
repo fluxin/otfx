@@ -148,9 +148,9 @@ synthgrid_add_grid_line :: proc(
 		for column in e.canvas.left ..= e.canvas.right {
 			position := engine.coord(column, origin.row)
 			id := engine.add_character(e, symbol, position)
-			e.chars.layer[id] = 2
-			e.chars.is_visible[id] = false
-			e.chars.visual[id].fg = engine.gradient_sample(sampler, spectrum, position)
+			engine.set_character(e, id, layer = 2)
+			engine.set_character(e, id, visible = false)
+			engine.set_foreground(e, id, engine.gradient_sample(sampler, spectrum, position))
 			append(&s.grid_ids, id)
 		}
 	} else {
@@ -159,9 +159,9 @@ synthgrid_add_grid_line :: proc(
 		for row in e.canvas.bottom ..< e.canvas.top {
 			position := engine.coord(origin.column, row)
 			id := engine.add_character(e, symbol, position)
-			e.chars.layer[id] = 2
-			e.chars.is_visible[id] = false
-			e.chars.visual[id].fg = engine.gradient_sample(sampler, spectrum, position)
+			engine.set_character(e, id, layer = 2)
+			engine.set_character(e, id, visible = false)
+			engine.set_foreground(e, id, engine.gradient_sample(sampler, spectrum, position))
 			append(&s.grid_ids, id)
 		}
 	}
@@ -342,8 +342,7 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 
 synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	visible := e.chars.is_visible
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
+
 	input_symbols := e.chars.input_symbol
 	if s.phase == .Grid_Expand {
 		all_extended := true
@@ -354,7 +353,9 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char
 			all_extended = false
 			count := s.grid_is_horizontal[line] ? 3 : 1
 			stop := min(extended + count, end - start)
-			for i in extended ..< stop do visible[s.grid_ids[start + i]] = true
+			for i in extended ..< stop {
+				engine.set_character(e, s.grid_ids[start + i], visible = true)
+			}
 			s.grid_extended[line] = stop
 		}
 		if all_extended {
@@ -370,7 +371,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char
 			s.group_remaining[group] = len(members)
 			for id in members {
 				s.start_ticks[id] = s.tick
-				visible[id] = true
+				engine.set_character(e, id, visible = true)
 			}
 			s.active_count += 1
 			s.next_group += 1
@@ -385,14 +386,16 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char
 			frame := age / 2
 			if frame < frame_count {
 				index := slot * SYNTHGRID_MAX_GENERATION_FRAMES + frame
-				visual_symbols[id].symbol = s.generation_symbols[index]
-				visual_fg[id].fg = s.generation_colors[index]
+				engine.set_symbol(e, id, s.generation_symbols[index])
+				engine.set_foreground(e, id, s.generation_colors[index])
 			} else {
-				visual_symbols[id].symbol = input_symbols[id]
+				engine.set_symbol(e, id, input_symbols[id])
 				if s.color_handling == .Dynamic {
-					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+					visual := engine.get_visual(e, id)
+					engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+					engine.set_visual(e, id, visual)
 				} else {
-					visual_fg[id].fg = is_fill[id] ? nil : s.final_colors[id]
+					engine.set_foreground(e, id, is_fill[id] ? nil : s.final_colors[id])
 				}
 				if age == frame_count * 2 {
 					s.start_ticks[id] = -2
@@ -419,7 +422,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char
 		stop := max(extended - count, 0)
 		for i := extended; i > stop; {
 			i -= 1
-			visible[s.grid_ids[start + i]] = false
+			engine.set_character(e, s.grid_ids[start + i], visible = false)
 		}
 		s.grid_extended[line] = stop
 	}

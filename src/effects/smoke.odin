@@ -213,17 +213,17 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	width := s.config.use_whole_canvas ? e.canvas.width : e.canvas.text_width
 	smoke_arrivals(s.arrivals[:], width)
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		p := input_coords[id]
 		s.last_tick = max(s.last_tick, s.arrivals[i])
 		s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
 		if s.color_handling == .Dynamic {
-			visual_fg[id].fg = engine.Color{0x00, 0x00, 0x00}
-			visual_fg[id].bg = nil
+			engine.set_foreground(e, id, engine.Color{0x00, 0x00, 0x00})
+			engine.set_background(e, id, nil)
 		} else {
-			visual_fg[id].fg = s.config.starting_color
+			engine.set_foreground(e, id, s.config.starting_color)
 		}
 		visible[id] = true
 	}
@@ -292,23 +292,31 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		id := s.characters[i]
 		if sample < smoke_count {
 			if s.color_handling == .Dynamic {
-				e.chars.visual[id].symbol = s.config.smoke_symbols[sample]
-				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+				engine.set_symbol(e, id, s.config.smoke_symbols[sample])
+				visual := engine.get_visual(e, id)
+				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.set_visual(e, id, visual)
 			} else {
-				e.chars.visual[id].symbol = s.smoke_symbols[sample]
-				e.chars.visual[id].fg = s.smoke_palette[sample]
+				engine.set_symbol(e, id, s.smoke_symbols[sample])
+				engine.set_foreground(e, id, s.smoke_palette[sample])
 			}
 		} else {
-			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			engine.set_symbol(e, id, e.chars.input_symbol[id])
 			if s.color_handling == .Dynamic {
-				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+				visual := engine.get_visual(e, id)
+				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.set_visual(e, id, visual)
 			} else {
 				paint_entry := sample - smoke_count
-				e.chars.visual[id].fg = smoke_paint_color(
-					s.config.final_gradient_stops[:],
-					s.final_colors[i],
-					s.paint_pairs[paint_entry],
-					s.paint_steps[paint_entry],
+				engine.set_foreground(
+					e,
+					id,
+					smoke_paint_color(
+						s.config.final_gradient_stops[:],
+						s.final_colors[i],
+						s.paint_pairs[paint_entry],
+						s.paint_steps[paint_entry],
+					),
 				)
 			}
 		}

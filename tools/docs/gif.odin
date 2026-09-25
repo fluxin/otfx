@@ -88,10 +88,7 @@ quantizer_build :: proc(q: ^Quantizer, background: image.RGB_Pixel) {
 	background_key := color_key(background)
 	for key in q.observed {
 		if key == background_key do continue
-		append(
-			&entries,
-			Color_Entry{{u8(key >> 16), u8(key >> 8), u8(key)}, q.counts[key]},
-		)
+		append(&entries, Color_Entry{{u8(key >> 16), u8(key >> 8), u8(key)}, q.counts[key]})
 	}
 	// Pixel order decides the observation order, and median cut is order
 	// sensitive, so entries are sorted before any splitting to keep the palette

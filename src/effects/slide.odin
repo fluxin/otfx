@@ -139,10 +139,14 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		c := e.chars.input_coord[id]
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		e.chars.visual[id] = {
-			symbol = e.chars.input_symbol[id],
-			fg     = s.config.final_gradient_stops[0],
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual {
+				symbol = e.chars.input_symbol[id],
+				fg = s.config.final_gradient_stops[0],
+			},
+		)
 	}
 
 	grouping: engine.Character_Group = .Row_T2B
@@ -176,7 +180,9 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 				slice.reverse(g)
 				start_col = e.canvas.right + 1
 			}
-			for id in g do e.chars.current_coord[id] = engine.coord(start_col, e.chars.input_coord[id].row)
+			for id in g {
+				e.chars.current_coord[id] = engine.coord(start_col, e.chars.input_coord[id].row)
+			}
 		case .Column:
 			start_row := e.canvas.top + 1
 			if s.config.merge && gi % 2 == 0 {
@@ -188,7 +194,9 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 				slice.reverse(g)
 				start_row = e.canvas.bottom - 1
 			}
-			for id in g do e.chars.current_coord[id] = engine.coord(e.chars.input_coord[id].column, start_row)
+			for id in g {
+				e.chars.current_coord[id] = engine.coord(e.chars.input_coord[id].column, start_row)
+			}
 		case .Diagonal:
 			last := e.chars.input_coord[g[len(g) - 1]]
 			d := last.row - (e.canvas.bottom - 1)
@@ -205,7 +213,9 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 				d := (e.canvas.top + 1) - first.row
 				start = engine.coord(first.column + d, first.row + d)
 			}
-			for id in g do e.chars.current_coord[id] = start
+			for id in g {
+				e.chars.current_coord[id] = start
+			}
 		}
 		for id in g {
 			i := s.index_by_id[id]
@@ -238,7 +248,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		if s.heads[gi] < len(g) {
 			next := g[s.heads[gi]]
 			s.heads[gi] += 1
-			e.chars.is_visible[next] = true
+			engine.set_character(e, next, visible = true)
 			append(&s.active_slots, s.index_by_id[next])
 		}
 	}
@@ -256,20 +266,22 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	gradient_ticks := 10 * s.config.final_gradient_frames
 	for i in s.active_slots {
 		id := s.characters[i]
+		position := e.chars.current_coord[id]
+		visual := engine.get_visual(e, id)
 		step := s.steps[i]
 		if step < s.max_steps[i] {
 			progress := f64(step + 1) / f64(s.max_steps[i])
-			e.chars.current_coord[id] = engine.coord_on_line(
+			position = engine.coord_on_line(
 				s.origins[i],
 				e.chars.input_coord[id],
 				ease.ease(s.config.movement_easing, progress),
 			)
 		}
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
 		} else {
 			gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
-			e.chars.visual[id].fg = engine.gradient_between_step(
+			visual.fg = engine.gradient_between_step(
 				base_color,
 				s.final_colors[i],
 				10,
@@ -281,14 +293,15 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			s.active_slots[write] = i
 			write += 1
 		} else {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
+			position = e.chars.input_coord[id]
 			if s.color_handling == .Dynamic {
-				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
 			} else {
-				e.chars.visual[id].fg = s.final_colors[i]
+				visual.fg = s.final_colors[i]
 			}
 		}
+		engine.set_character(e, id, coord = position, visual = visual)
 	}
 	resize(&s.active_slots, write)
-	return s.characters[:], true
+	return nil, true
 }

@@ -229,9 +229,10 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	// Create all generated rows after no storage column is borrowed. There is one
 	// spark row per source glyph, the exact upper bound for this one-strike-per-
 	// glyph effect; branch wrap remains free of hot-path division.
+	characters := engine.character_batch(e, e.canvas.top + 1 + n)
 	for row in 0 ..= e.canvas.top {
 		symbol := row == 0 ? "*" : "/"
-		id := engine.add_character(e, symbol, engine.coord(0, 0))
+		id := engine.add_character(&characters, symbol, engine.coord(0, 0))
 		e.chars.is_visible[id] = true
 		e.chars.layer[id] = 2
 		append(&s.beam_ids, id)
@@ -239,7 +240,11 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	}
 	for i in 0 ..< n {
 		symbols := [3]string{".", ",", "*"}
-		id := engine.add_character(e, symbols[rand.int_max(len(symbols))], engine.coord(0, 0))
+		id := engine.add_character(
+			&characters,
+			symbols[rand.int_max(len(symbols))],
+			engine.coord(0, 0),
+		)
 		e.chars.is_visible[id] = false
 		e.chars.layer[id] = 2
 		append(&s.spark_ids, id)
@@ -264,7 +269,7 @@ laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: en
 		1,
 	)
 	append(&s.active_sparks, i)
-	e.chars.is_visible[s.spark_ids[i]] = true
+	engine.set_character(e, s.spark_ids[i], visible = true)
 }
 
 laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
@@ -286,7 +291,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 				s.source_starts[i] = s.tick
 				append(&s.active_sources, i)
 				s.laser_position = e.chars.input_coord[id]
-				e.chars.is_visible[id] = true
+				engine.set_character(e, id, visible = true)
 				laseretch_spawn_spark(s, e, s.laser_position)
 			}
 			s.delay = s.config.etch_delay
@@ -295,9 +300,6 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 		}
 	}
 
-	current_coords := e.chars.current_coord
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
 	input_symbols := e.chars.input_symbol
 	// Only the short cooling tail needs updates. Completed source glyphs retain
 	// their final visual, so scanning the full input every frame is wasted work.
@@ -312,49 +314,61 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 			source_lifetime = 3 + len(s.cool_spectrum) * 3 + (has_style ? 9 : 10) * 3
 		}
 		if age >= source_lifetime {
-			visual_symbols[id].symbol = input_symbols[id]
+			engine.set_symbol(e, id, input_symbols[id])
 			if s.color_handling == .Dynamic {
-				engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+				visual := engine.get_visual(e, id)
+				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.set_visual(e, id, visual)
 			} else {
-				visual_fg[id].fg = s.final_colors[i]
+				engine.set_foreground(e, id, s.final_colors[i])
 			}
 			continue
 		}
-		visual_symbols[id].symbol = age < 3 ? "^" : input_symbols[id]
+		engine.set_symbol(e, id, age < 3 ? "^" : input_symbols[id])
 		if age < 3 {
-			visual_fg[id].fg = engine.Color{0xFF, 0xE6, 0x80}
+			engine.set_foreground(e, id, engine.Color{0xFF, 0xE6, 0x80})
 		} else if age < 3 + len(s.cool_spectrum) * 3 {
-			visual_fg[id].fg = s.cool_spectrum[(age - 3) / 3]
+			engine.set_foreground(e, id, s.cool_spectrum[(age - 3) / 3])
 		} else {
 			cool_age := age - 3 - len(s.cool_spectrum) * 3
 			if s.color_handling == .Dynamic {
 				style := e.chars.input_style[id]
 				if style.fg != nil || style.bg != nil {
+					visual := engine.get_visual(e, id)
 					engine.dynamic_gradient_to_input(
-						&visual_fg[id],
+						&visual,
 						s.cool_spectrum[len(s.cool_spectrum) - 1],
 						style,
 						8,
 						min(cool_age / 3, 8),
 					)
+					engine.set_visual(e, id, visual)
 				} else if cool_age < 27 {
-					visual_fg[id].fg = engine.gradient_between_step(
-						s.cool_spectrum[len(s.cool_spectrum) - 1],
-						engine.Color{0xFF, 0xFF, 0xFF},
-						8,
-						cool_age / 3,
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(
+							s.cool_spectrum[len(s.cool_spectrum) - 1],
+							engine.Color{0xFF, 0xFF, 0xFF},
+							8,
+							cool_age / 3,
+						),
 					)
-					visual_fg[id].bg = nil
+					engine.set_background(e, id, nil)
 				} else {
-					visual_fg[id].fg = nil
-					visual_fg[id].bg = nil
+					engine.set_foreground(e, id, nil)
+					engine.set_background(e, id, nil)
 				}
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
-					s.cool_spectrum[len(s.cool_spectrum) - 1],
-					s.final_colors[i],
-					8,
-					min(1 + cool_age / 3, 8),
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.cool_spectrum[len(s.cool_spectrum) - 1],
+						s.final_colors[i],
+						8,
+						min(1 + cool_age / 3, 8),
+					),
 				)
 			}
 		}
@@ -367,17 +381,20 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 	if s.pending_head < len(s.pending) {
 		color_index := (s.tick / 3) % len(s.laser_spectrum)
 		for id, beam in s.beam_ids {
-			current_coords[id] = engine.coord(
-				s.laser_position.column + beam,
-				s.laser_position.row + beam,
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord(s.laser_position.column + beam, s.laser_position.row + beam),
 			)
-			visual_fg[id].fg = s.laser_spectrum[color_index]
-			visible[id] = true
+			engine.set_foreground(e, id, s.laser_spectrum[color_index])
+			engine.set_character(e, id, visible = true)
 			color_index += 1
 			if color_index == len(s.laser_spectrum) do color_index = 0
 		}
 	} else {
-		for id in s.beam_ids do visible[id] = false
+		for id in s.beam_ids {
+			engine.set_character(e, id, visible = false)
+		}
 	}
 
 	// The backing spark arrays are fixed capacity, while this compact index
@@ -390,19 +407,23 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 		age := s.tick - start
 		color_step := age / s.config.spark_cooling_frames
 		if color_step >= len(s.spark_spectrum) {
-			visible[id] = false
+			engine.set_character(e, id, visible = false)
 			s.spark_starts[i] = -1
 			continue
 		}
 		if age < s.spark_steps[i] {
-			current_coords[id] = engine.coord_on_quadratic_bezier(
-				s.spark_origins[i],
-				s.spark_controls[i],
-				s.spark_targets[i],
-				ease.ease(.Sine_Out, f64(age + 1) / f64(s.spark_steps[i])),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_quadratic_bezier(
+					s.spark_origins[i],
+					s.spark_controls[i],
+					s.spark_targets[i],
+					ease.ease(.Sine_Out, f64(age + 1) / f64(s.spark_steps[i])),
+				),
 			)
 		}
-		visual_fg[id].fg = s.spark_spectrum[color_step]
+		engine.set_foreground(e, id, s.spark_spectrum[color_step])
 		s.active_sparks[spark_write] = i
 		spark_write += 1
 	}

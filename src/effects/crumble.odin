@@ -118,7 +118,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	s.vacuum_order = make([dynamic]int, n)
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	dust_choices := Crumble_Dust_Symbols
 	for id, i in s.characters {
@@ -184,11 +184,11 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		s.fall_order[i] = i
 		s.vacuum_order[i] = i
 		if s.has_dim_fg[i] != 0 {
-			visual_fg[id].fg = s.weak_colors[i]
+			engine.set_foreground(e, id, s.weak_colors[i])
 		} else {
-			visual_fg[id].fg = nil
+			engine.set_foreground(e, id, nil)
 		}
-		visual_fg[id].bg = s.weak_bg[i]
+		engine.set_background(e, id, s.weak_bg[i])
 		visible[id] = true
 	}
 	rand.shuffle(s.fall_order[:])
@@ -215,10 +215,8 @@ crumble_vacuum_active :: proc(s: Crumble_State) -> bool {
 
 crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
+
 
 	for {
 		switch s.phase {
@@ -255,26 +253,29 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				age := s.phase_tick - start
 				if age >= 40 + s.fall_steps[i] do continue
 				if age < 40 {
-					visual_symbols[id].symbol = input_symbols[id]
+					engine.set_symbol(e, id, input_symbols[id])
 					if s.has_dim_fg[i] != 0 {
-						visual_fg[id].fg = engine.gradient_between_step(
-							s.weak_colors[i],
-							s.dust_colors[i],
-							9,
-							age / 4,
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								s.weak_colors[i],
+								s.dust_colors[i],
+								9,
+								age / 4,
+							),
 						)
 					} else {
-						visual_fg[id].fg = nil
+						engine.set_foreground(e, id, nil)
 					}
 					if weak_bg, ok := s.weak_bg[i].?; ok {
-						visual_fg[id].bg = engine.gradient_between_step(
-							weak_bg,
-							s.dust_bg[i].?,
-							9,
-							age / 4,
+						engine.set_background(
+							e,
+							id,
+							engine.gradient_between_step(weak_bg, s.dust_bg[i].?, 9, age / 4),
 						)
 					} else {
-						visual_fg[id].bg = nil
+						engine.set_background(e, id, nil)
 					}
 					s.fall_active[fall_write] = i
 					fall_write += 1
@@ -283,21 +284,25 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				fall_age := age - 40
 				progress := f64(min(fall_age + 1, s.fall_steps[i])) / f64(s.fall_steps[i])
 				input := input_coords[id]
-				current_coords[id] = engine.coord_on_line(
-					input,
-					engine.coord(input.column, e.canvas.bottom),
-					ease.ease(.Bounce_Out, progress),
+				engine.set_character(
+					e,
+					id,
+					coord = engine.coord_on_line(
+						input,
+						engine.coord(input.column, e.canvas.bottom),
+						ease.ease(.Bounce_Out, progress),
+					),
 				)
 				dust_index := min((fall_age * 5) / s.fall_steps[i], 4)
-				visual_symbols[id].symbol = s.dust_symbols[i * 5 + dust_index]
-				visual_fg[id].fg = s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil
-				visual_fg[id].bg = s.dust_bg[i]
+				engine.set_symbol(e, id, s.dust_symbols[i * 5 + dust_index])
+				engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
+				engine.set_background(e, id, s.dust_bg[i])
 				s.fall_active[fall_write] = i
 				fall_write += 1
 			}
 			resize(&s.fall_active, fall_write)
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 
 		case .Vacuuming:
 			if !crumble_vacuum_active(s^) {
@@ -321,18 +326,22 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				if age >= steps do continue
 				progress := f64(min(age + 1, steps)) / f64(steps)
 				input := input_coords[id]
-				current_coords[id] = engine.coord_on_quadratic_bezier(
-					engine.coord(input.column, e.canvas.bottom),
-					engine.coord(e.canvas.center_column, e.canvas.center_row),
-					engine.coord(input.column, e.canvas.top),
-					ease.ease(.Quintic_Out, progress),
+				engine.set_character(
+					e,
+					id,
+					coord = engine.coord_on_quadratic_bezier(
+						engine.coord(input.column, e.canvas.bottom),
+						engine.coord(e.canvas.center_column, e.canvas.center_row),
+						engine.coord(input.column, e.canvas.top),
+						ease.ease(.Quintic_Out, progress),
+					),
 				)
 				s.vacuum_active[vacuum_write] = i
 				vacuum_write += 1
 			}
 			resize(&s.vacuum_active, vacuum_write)
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 
 		case .Resetting:
 			if s.phase_tick == s.reset_max_ticks do return nil, false
@@ -340,77 +349,99 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				input := input_coords[id]
 				steps := s.reset_steps[i]
 				if s.phase_tick < steps {
-					current_coords[id] = engine.coord_on_line(
-						engine.coord(input.column, e.canvas.top),
-						input,
-						f64(s.phase_tick + 1) / f64(steps),
+					engine.set_character(
+						e,
+						id,
+						coord = engine.coord_on_line(
+							engine.coord(input.column, e.canvas.top),
+							input,
+							f64(s.phase_tick + 1) / f64(steps),
+						),
 					)
-					visual_symbols[id].symbol = input_symbols[id]
-					visual_fg[id].fg = s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil
-					visual_fg[id].bg = s.dust_bg[i]
+					engine.set_symbol(e, id, input_symbols[id])
+					engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
+					engine.set_background(e, id, s.dust_bg[i])
 					continue
 				}
 				flash_age := s.phase_tick - steps
-				visual_symbols[id].symbol = input_symbols[id]
+				engine.set_symbol(e, id, input_symbols[id])
 				if flash_age < 28 {
 					if s.color_handling == .Dynamic {
 						style := e.chars.input_style[id]
 						if s.has_dim_fg[i] != 0 {
 							start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
-							visual_fg[id].fg = engine.gradient_between_step(
-								start,
-								engine.Color{0xFF, 0xFF, 0xFF},
-								6,
-								flash_age / 4,
+							engine.set_foreground(
+								e,
+								id,
+								engine.gradient_between_step(
+									start,
+									engine.Color{0xFF, 0xFF, 0xFF},
+									6,
+									flash_age / 4,
+								),
 							)
 						} else {
-							visual_fg[id].fg = nil
+							engine.set_foreground(e, id, nil)
 						}
 						if bg, ok := style.bg.?; ok {
-							visual_fg[id].bg = engine.gradient_between_step(
-								bg,
+							engine.set_background(
+								e,
+								id,
+								engine.gradient_between_step(
+									bg,
+									engine.Color{0xFF, 0xFF, 0xFF},
+									6,
+									flash_age / 4,
+								),
+							)
+						} else {
+							engine.set_background(e, id, nil)
+						}
+					} else {
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								s.final_colors[i],
 								engine.Color{0xFF, 0xFF, 0xFF},
 								6,
 								flash_age / 4,
-							)
-						} else {
-							visual_fg[id].bg = nil
-						}
-					} else {
-						visual_fg[id].fg = engine.gradient_between_step(
-							s.final_colors[i],
-							engine.Color{0xFF, 0xFF, 0xFF},
-							6,
-							flash_age / 4,
+							),
 						)
 					}
 				} else {
 					if s.color_handling == .Dynamic {
 						style := e.chars.input_style[id]
 						if style.fg == nil && style.bg == nil {
-							visual_fg[id].fg = nil
-							visual_fg[id].bg = nil
+							engine.set_foreground(e, id, nil)
+							engine.set_background(e, id, nil)
 						} else {
+							visual := engine.get_visual(e, id)
 							engine.dynamic_gradient_to_input(
-								&visual_fg[id],
+								&visual,
 								engine.Color{0xFF, 0xFF, 0xFF},
 								style,
 								9,
 								min((flash_age - 28) / 4, 9),
 							)
+							engine.set_visual(e, id, visual)
 						}
 					} else {
-						visual_fg[id].fg = engine.gradient_between_step(
-							engine.Color{0xFF, 0xFF, 0xFF},
-							s.final_colors[i],
-							9,
-							min((flash_age - 28) / 4, 9),
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								engine.Color{0xFF, 0xFF, 0xFF},
+								s.final_colors[i],
+								9,
+								min((flash_age - 28) / 4, 9),
+							),
 						)
 					}
 				}
 			}
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 		}
 	}
 }

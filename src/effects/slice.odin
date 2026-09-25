@@ -95,7 +95,7 @@ slice_schedule :: proc(
 	slot := slots[id]
 	assert(slot >= 0)
 	destination := e.chars.input_coord[id]
-	e.chars.current_coord[id] = origin
+	engine.set_character(e, id, coord = origin)
 	s.motion_origins[slot] = origin
 	s.motion_max_steps[slot] = max(
 		engine.round_half_even(engine.line_length(origin, destination, true) / speed),
@@ -123,11 +123,15 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	for id in characters {
 		color := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		e.chars.visual[id] = {
-			symbol = e.chars.input_symbol[id],
-			fg     = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : color,
-			bg     = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual {
+				symbol = e.chars.input_symbol[id],
+				fg = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : color,
+				bg = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
+			},
+		)
 	}
 
 	// Horizontal Slice includes inner fill cells inside the text rectangle;
@@ -265,7 +269,9 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 			}
 		}
 	}
-	for id in s.render_ids do e.chars.is_visible[id] = true
+	for id in s.render_ids {
+		e.chars.is_visible[id] = true
+	}
 }
 
 slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
@@ -275,14 +281,17 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	steps := s.motion_steps[:]
 	max_steps := s.motion_max_steps[:]
 	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
 	write := 0
 	for read in 0 ..< len(ids) {
 		id := ids[read]
 		step := steps[read] + 1
 		maximum := max_steps[read]
 		factor := ease.ease(s.config.movement_easing, f64(step) / f64(maximum))
-		current_coords[id] = engine.coord_on_line(origins[read], input_coords[id], factor)
+		engine.set_character(
+			e,
+			id,
+			coord = engine.coord_on_line(origins[read], input_coords[id], factor),
+		)
 		if step == maximum do continue
 		if write != read {
 			ids[write] = id

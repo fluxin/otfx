@@ -130,11 +130,11 @@ randomsequence_next :: proc(
 	for _ in 0 ..< s.chars_per_tick {
 		if len(s.pending) == 0 do break
 		next := pop(&s.pending)
-		e.chars.is_visible[next] = true
+		engine.set_character(e, next, visible = true)
 		slot := s.index_by_id[next]
 		s.start_ticks[slot] = s.tick
 		append(&s.active_slots, slot)
-		e.chars.visual[next].symbol = e.chars.input_symbol[next]
+		engine.set_symbol(e, next, e.chars.input_symbol[next])
 	}
 	write := 0
 	for slot in s.active_slots {
@@ -145,32 +145,41 @@ randomsequence_next :: proc(
 			style := e.chars.input_style[id]
 			if style.fg != nil || style.bg != nil {
 				step := min(age / s.config.final_gradient_frames, 7)
+				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_input(
-					&e.chars.visual[id],
+					&visual,
 					e.cfg.terminal_background_color,
 					style,
 					7,
 					step,
 				)
+				engine.set_visual(e, id, visual)
 				life = 8 * s.config.final_gradient_frames
 			} else {
 				if age < 8 * s.config.final_gradient_frames {
-					e.chars.visual[id].fg = engine.gradient_between_step(
-						e.cfg.terminal_background_color,
-						engine.Color{0x80, 0x80, 0x80},
-						7,
-						age / s.config.final_gradient_frames,
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(
+							e.cfg.terminal_background_color,
+							engine.Color{0x80, 0x80, 0x80},
+							7,
+							age / s.config.final_gradient_frames,
+						),
 					)
-					e.chars.visual[id].bg = nil
+					engine.set_background(e, id, nil)
 				} else {
-					e.chars.visual[id].fg = nil
-					e.chars.visual[id].bg = nil
+					engine.set_foreground(e, id, nil)
+					engine.set_background(e, id, nil)
 				}
 				life = 9 * s.config.final_gradient_frames
 			}
 		} else {
-			e.chars.visual[id].fg =
-				s.palette[slot * s.palette_len + age / s.config.final_gradient_frames]
+			engine.set_foreground(
+				e,
+				id,
+				s.palette[slot * s.palette_len + age / s.config.final_gradient_frames],
+			)
 		}
 		if age + 1 < life {
 			s.active_slots[write] = slot

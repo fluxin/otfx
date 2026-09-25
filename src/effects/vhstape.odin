@@ -178,17 +178,21 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	for i in 0 ..< storage_len do s.index_by_id[i] = -1
 	s.final_colors = make([]engine.Color, storage_len)
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], input_coords[id])
 		if s.color_handling == .Dynamic {
 			style := e.chars.input_style[id]
-			visual_fg[id].fg = style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80}
-			visual_fg[id].bg = style.bg
+			engine.set_foreground(
+				e,
+				id,
+				style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80},
+			)
+			engine.set_background(e, id, style.bg)
 		} else {
-			visual_fg[id].fg = s.final_colors[id]
+			engine.set_foreground(e, id, s.final_colors[id])
 		}
 		visible[id] = true
 	}
@@ -240,33 +244,27 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.redraw_row = row_count - 1
 }
 
-vhstape_set_stable_visual :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	id: engine.Char_Id,
-) {
-	chars.visual[id].symbol = chars.input_symbol[id]
+vhstape_set_stable_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
+	engine.set_symbol(e, id, e.chars.input_symbol[id])
 	if s.color_handling == .Dynamic {
-		style := chars.input_style[id]
-		chars.visual[id].fg = style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80}
-		chars.visual[id].bg = style.bg
+		style := e.chars.input_style[id]
+		engine.set_foreground(e, id, style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80})
+		engine.set_background(e, id, style.bg)
 	} else {
-		chars.visual[id].fg = s.final_colors[id]
-		chars.visual[id].bg = nil
+		engine.set_foreground(e, id, s.final_colors[id])
+		engine.set_background(e, id, nil)
 	}
 }
 
-vhstape_set_final_visual :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	id: engine.Char_Id,
-) {
-	chars.visual[id].symbol = chars.input_symbol[id]
+vhstape_set_final_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
+	engine.set_symbol(e, id, e.chars.input_symbol[id])
 	if s.color_handling == .Dynamic {
-		engine.dynamic_apply_input_colors(&chars.visual[id], chars.input_style[id])
+		visual := engine.get_visual(e, id)
+		engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+		engine.set_visual(e, id, visual)
 	} else {
-		chars.visual[id].fg = s.final_colors[id]
-		chars.visual[id].bg = nil
+		engine.set_foreground(e, id, s.final_colors[id])
+		engine.set_background(e, id, nil)
 	}
 }
 
@@ -292,61 +290,63 @@ vhstape_noise_visual :: proc(
 
 vhstape_start_scene :: proc(
 	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
+	e: ^engine.Engine,
 	id: engine.Char_Id,
 	scene: Vhstape_Scene,
 ) {
 	s.scenes[id] = scene
-	symbol := chars.input_symbol[id]
+	symbol := e.chars.input_symbol[id]
 	switch scene {
 	case .Forward:
-		chars.visual[id] = {
-			symbol = symbol,
-			fg     = s.config.glitch_line_colors[0],
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual{symbol = symbol, fg = s.config.glitch_line_colors[0]},
+		)
 	case .Backward:
-		chars.visual[id] = {
-			symbol = symbol,
-			fg     = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual {
+				symbol = symbol,
+				fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+			},
+		)
 	case .Base:
 		s.scene_ticks[id] = 0
-		vhstape_set_stable_visual(s, chars, id)
+		vhstape_set_stable_visual(s, e, id)
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
-			chars.visual[id] = vhstape_noise_visual(
-				s,
-				s.snow_frames[:],
-				VHSTAPE_SNOW_FRAMES,
+			engine.set_visual(
+				e,
 				id,
-				step / 2,
+				vhstape_noise_visual(s, s.snow_frames[:], VHSTAPE_SNOW_FRAMES, id, step / 2),
 			)
 		} else {
-			vhstape_set_stable_visual(s, chars, id)
+			vhstape_set_stable_visual(s, e, id)
 		}
 	case .Final_Snow:
 		s.scene_ticks[id] = 0
-		chars.visual[id] = vhstape_noise_visual(
-			s,
-			s.final_snow_frames[:],
-			VHSTAPE_FINAL_SNOW_FRAMES,
+		engine.set_visual(
+			e,
 			id,
-			0,
+			vhstape_noise_visual(s, s.final_snow_frames[:], VHSTAPE_FINAL_SNOW_FRAMES, id, 0),
 		)
 	case .Final_Redraw:
 		s.scene_ticks[id] = 0
-		chars.visual[id] = {
-			symbol = "█",
-			fg     = engine.Color{0xFF, 0xFF, 0xFF},
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual{symbol = "█", fg = engine.Color{0xFF, 0xFF, 0xFF}},
+		)
 	case .Idle:
 	}
 }
 
 vhstape_start_motion :: proc(
 	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
+	e: ^engine.Engine,
 	id: engine.Char_Id,
 	kind: Vhstape_Motion,
 	target: engine.Coord,
@@ -360,12 +360,12 @@ vhstape_start_motion :: proc(
 	base := int(id) * VHSTAPE_LANE_COORD_CAPACITY
 	for frame in 1 ..= max_steps {
 		s.motion_coords[base + frame - 1] = engine.coord_on_line(
-			chars.current_coord[id],
+			e.chars.current_coord[id],
 			target,
 			f64(frame) / f64(max_steps),
 		)
 	}
-	vhstape_start_scene(s, chars, id, kind == .Restore ? .Backward : .Forward)
+	vhstape_start_scene(s, e, id, kind == .Restore ? .Backward : .Forward)
 	vhstape_activate_character(s, id)
 }
 
@@ -377,53 +377,45 @@ vhstape_steps :: proc(origin, target: engine.Coord, denominator: int) -> int {
 
 vhstape_start_restore :: proc(
 	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
+	e: ^engine.Engine,
 	id: engine.Char_Id,
 	steps: int,
 ) {
-	vhstape_start_motion(s, chars, id, .Restore, chars.input_coord[id], steps, 0)
+	vhstape_start_motion(s, e, id, .Restore, e.chars.input_coord[id], steps, 0)
 }
 
-vhstape_restore_row :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage, row: int) {
+vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 	for id in engine.group_members(s.rows, row) {
 		steps := vhstape_steps(
-			chars.current_coord[id],
-			chars.input_coord[id],
+			e.chars.current_coord[id],
+			e.chars.input_coord[id],
 			rand.int_range(20, 41),
 		)
-		vhstape_start_restore(s, chars, id, steps)
+		vhstape_start_restore(s, e, id, steps)
 	}
 }
 
-vhstape_start_glitch_row :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	row, hold: int,
-) {
+vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold: int) {
 	for id in engine.group_members(s.rows, row) {
-		p := chars.input_coord[id]
+		p := e.chars.input_coord[id]
 		target := engine.coord(p.column + s.row_offsets[row], p.row)
-		out_steps := vhstape_steps(chars.current_coord[id], target, rand.int_range(20, 41))
+		out_steps := vhstape_steps(e.chars.current_coord[id], target, rand.int_range(20, 41))
 		s.return_steps[id] = vhstape_steps(target, p, rand.int_range(20, 41))
-		vhstape_start_motion(s, chars, id, .Glitch, target, out_steps, hold)
+		vhstape_start_motion(s, e, id, .Glitch, target, out_steps, hold)
 	}
 }
 
-vhstape_start_wave_row :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	row, offset: int,
-) {
+vhstape_start_wave_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, offset: int) {
 	for id in engine.group_members(s.rows, row) {
-		p := chars.input_coord[id]
+		p := e.chars.input_coord[id]
 		target := engine.coord(p.column + offset, p.row)
 		vhstape_start_motion(
 			s,
-			chars,
+			e,
 			id,
 			.Wave,
 			target,
-			vhstape_steps(chars.current_coord[id], target, 20),
+			vhstape_steps(e.chars.current_coord[id], target, 20),
 			0,
 		)
 	}
@@ -450,11 +442,7 @@ vhstape_contains_row :: proc(rows: []int, row: int) -> bool {
 	return false
 }
 
-vhstape_glitch_wave :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	canvas: engine.Canvas,
-) {
+vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine.Canvas) {
 	if s.active_wave_top < 0 {
 		if canvas.text_height < 3 do return
 		lower := max(3, engine.round_half_even(f64(canvas.text_height) * 0.5))
@@ -475,7 +463,7 @@ vhstape_glitch_wave :: proc(
 	}
 	for row in s.active_wave_rows {
 		if !vhstape_contains_row(new_rows[:new_count], row) {
-			vhstape_restore_row(s, chars, row)
+			vhstape_restore_row(s, e, row)
 			s.row_is_wave[row] = 0
 		}
 	}
@@ -486,7 +474,7 @@ vhstape_glitch_wave :: proc(
 	}
 	if s.active_wave_top < canvas.text_bottom + 2 {
 		for row in s.active_wave_rows {
-			vhstape_restore_row(s, chars, row)
+			vhstape_restore_row(s, e, row)
 			s.row_is_wave[row] = 0
 		}
 		clear(&s.active_wave_rows)
@@ -494,19 +482,19 @@ vhstape_glitch_wave :: proc(
 		return
 	}
 	offsets := [3]int{8, 14, 8}
-	for row, i in s.active_wave_rows do vhstape_start_wave_row(s, chars, row, offsets[i])
+	for row, i in s.active_wave_rows do vhstape_start_wave_row(s, e, row, offsets[i])
 }
 
-vhstape_motion_step :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	id: engine.Char_Id,
-) {
+vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
 	kind := s.motions[id]
 	if kind == .Idle do return
 	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
 	if frame < frame_count {
-		chars.current_coord[id] = s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame]
+		engine.set_character(
+			e,
+			id,
+			coord = s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame],
+		)
 		frame += 1
 		s.motion_frame[id] = frame
 	}
@@ -516,7 +504,7 @@ vhstape_motion_step :: proc(
 		return
 	}
 	s.motions[id] = .Idle
-	if kind == .Glitch do vhstape_start_restore(s, chars, id, s.return_steps[id])
+	if kind == .Glitch do vhstape_start_restore(s, e, id, s.return_steps[id])
 }
 
 vhstape_synced_color :: proc(
@@ -533,62 +521,68 @@ vhstape_synced_color :: proc(
 	return palette[i]
 }
 
-vhstape_scene_step :: proc(
-	s: ^Vhstape_State,
-	chars: ^engine.Character_Storage,
-	id: engine.Char_Id,
-) {
+vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
 	scene := s.scenes[id]
 	if scene == .Idle do return
-	symbol := chars.input_symbol[id]
+	symbol := e.chars.input_symbol[id]
 	switch scene {
 	case .Forward:
 		if s.motions[id] == .Idle {
-			chars.visual[id] = {
-				symbol = symbol,
-				fg     = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
-			}
+			engine.set_visual(
+				e,
+				id,
+				engine.Visual {
+					symbol = symbol,
+					fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+				},
+			)
 			s.scenes[id] = .Idle
 		} else {
-			chars.visual[id] = {
-				symbol = symbol,
-				fg     = vhstape_synced_color(
-					s.config.glitch_line_colors[:],
-					s.motion_frame[id],
-					s.motion_frame_count[id],
-					false,
-				),
-			}
+			engine.set_visual(
+				e,
+				id,
+				engine.Visual {
+					symbol = symbol,
+					fg = vhstape_synced_color(
+						s.config.glitch_line_colors[:],
+						s.motion_frame[id],
+						s.motion_frame_count[id],
+						false,
+					),
+				},
+			)
 		}
 	case .Backward:
 		if s.motions[id] == .Idle {
-			vhstape_start_scene(s, chars, id, .Base)
+			vhstape_start_scene(s, e, id, .Base)
 		} else {
-			chars.visual[id] = {
-				symbol = symbol,
-				fg     = vhstape_synced_color(
-					s.config.glitch_line_colors[:],
-					s.motion_frame[id],
-					s.motion_frame_count[id],
-					true,
-				),
-			}
+			engine.set_visual(
+				e,
+				id,
+				engine.Visual {
+					symbol = symbol,
+					fg = vhstape_synced_color(
+						s.config.glitch_line_colors[:],
+						s.motion_frame[id],
+						s.motion_frame_count[id],
+						true,
+					),
+				},
+			)
 		}
 	case .Base:
-		vhstape_set_stable_visual(s, chars, id)
+		vhstape_set_stable_visual(s, e, id)
 		s.scenes[id] = .Idle
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
-			chars.visual[id] = vhstape_noise_visual(
-				s,
-				s.snow_frames[:],
-				VHSTAPE_SNOW_FRAMES,
+			engine.set_visual(
+				e,
 				id,
-				step / 2,
+				vhstape_noise_visual(s, s.snow_frames[:], VHSTAPE_SNOW_FRAMES, id, step / 2),
 			)
 		} else {
-			vhstape_set_stable_visual(s, chars, id)
+			vhstape_set_stable_visual(s, e, id)
 		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == VHSTAPE_SNOW_FRAMES * 2 + 1 {
@@ -597,23 +591,28 @@ vhstape_scene_step :: proc(
 		}
 	case .Final_Snow:
 		step := s.scene_ticks[id]
-		chars.visual[id] = vhstape_noise_visual(
-			s,
-			s.final_snow_frames[:],
-			VHSTAPE_FINAL_SNOW_FRAMES,
+		engine.set_visual(
+			e,
 			id,
-			step / 2,
+			vhstape_noise_visual(
+				s,
+				s.final_snow_frames[:],
+				VHSTAPE_FINAL_SNOW_FRAMES,
+				id,
+				step / 2,
+			),
 		)
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == VHSTAPE_FINAL_SNOW_FRAMES * 2 do s.scenes[id] = .Idle
 	case .Final_Redraw:
 		if s.scene_ticks[id] < 6 {
-			chars.visual[id] = {
-				symbol = "█",
-				fg     = engine.Color{0xFF, 0xFF, 0xFF},
-			}
+			engine.set_visual(
+				e,
+				id,
+				engine.Visual{symbol = "█", fg = engine.Color{0xFF, 0xFF, 0xFF}},
+			)
 		} else {
-			vhstape_set_final_visual(s, chars, id)
+			vhstape_set_final_visual(s, e, id)
 		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == 7 do s.scenes[id] = .Idle
@@ -621,11 +620,11 @@ vhstape_scene_step :: proc(
 	}
 }
 
-vhstape_update_active :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage) {
+vhstape_update_active :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	write := 0
 	for id in s.active_characters {
-		vhstape_motion_step(s, chars, id)
-		vhstape_scene_step(s, chars, id)
+		vhstape_motion_step(s, e, id)
+		vhstape_scene_step(s, e, id)
 		if s.motions[id] != .Idle || s.scenes[id] != .Idle {
 			s.active_characters[write] = id
 			write += 1
@@ -636,27 +635,26 @@ vhstape_update_active :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storag
 	resize(&s.active_characters, write)
 }
 
-vhstape_start_snow :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage, final: bool) {
+vhstape_start_snow :: proc(s: ^Vhstape_State, e: ^engine.Engine, final: bool) {
 	for id in s.characters {
-		vhstape_start_scene(s, chars, id, final ? .Final_Snow : .Snow)
+		vhstape_start_scene(s, e, id, final ? .Final_Snow : .Snow)
 		vhstape_activate_character(s, id)
 	}
 }
 
-vhstape_start_redraw_row :: proc(s: ^Vhstape_State, chars: ^engine.Character_Storage, row: int) {
+vhstape_start_redraw_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 	for id in engine.group_members(s.rows, row) {
-		vhstape_start_scene(s, chars, id, .Final_Redraw)
+		vhstape_start_scene(s, e, id, .Final_Redraw)
 		vhstape_activate_character(s, id)
 	}
 }
 
 vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
-	chars := &e.chars
 	if s.phase == .Complete && len(s.active_characters) == 0 do return nil, false
 	switch s.phase {
 	case .Glitching:
 		if len(s.active_wave_rows) == 0 || vhstape_rows_complete(s, s.active_wave_rows[:]) {
-			vhstape_glitch_wave(s, chars, e.canvas)
+			vhstape_glitch_wave(s, e, e.canvas)
 		}
 		write := 0
 		for row in s.active_glitch_rows {
@@ -673,26 +671,26 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 			if s.row_is_wave[row] == 0 && s.row_is_glitch[row] == 0 {
 				s.row_is_glitch[row] = 1
 				append(&s.active_glitch_rows, row)
-				vhstape_start_glitch_row(s, chars, row, rand.int_range(20, 76))
+				vhstape_start_glitch_row(s, e, row, rand.int_range(20, 76))
 			}
 		}
-		if rand.float64() < s.config.noise_chance do vhstape_start_snow(s, chars, false)
+		if rand.float64() < s.config.noise_chance do vhstape_start_snow(s, e, false)
 		s.tick += 1
 		if s.tick >= s.config.total_glitch_time {
-			for row in s.active_wave_rows do vhstape_restore_row(s, chars, row)
-			for row in s.active_glitch_rows do vhstape_restore_row(s, chars, row)
+			for row in s.active_wave_rows do vhstape_restore_row(s, e, row)
+			for row in s.active_glitch_rows do vhstape_restore_row(s, e, row)
 			s.phase = .Noise
 		}
 	case .Noise:
 		if len(s.active_characters) == 0 {
-			vhstape_start_snow(s, chars, true)
+			vhstape_start_snow(s, e, true)
 			s.phase = .Redraw
 		}
 	case .Redraw:
 		if s.redrawing || len(s.active_characters) == 0 {
 			s.redrawing = true
 			if s.redraw_row >= 0 {
-				vhstape_start_redraw_row(s, chars, s.redraw_row)
+				vhstape_start_redraw_row(s, e, s.redraw_row)
 				s.redraw_row -= 1
 			} else {
 				s.phase = .Complete
@@ -700,6 +698,6 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 		}
 	case .Complete:
 	}
-	vhstape_update_active(s, chars)
+	vhstape_update_active(s, e)
 	return s.characters[:], true
 }

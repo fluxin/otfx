@@ -137,7 +137,7 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	s.dark_bg = make([dynamic]Maybe(engine.Color), n)
 	input_coords := e.chars.input_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual
+
 	for id, i in s.characters {
 		bright := engine.gradient_sample(sampler, spectrum[:], input_coords[id])
 		if s.color_handling == .Dynamic {
@@ -149,8 +149,8 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 		}
 		s.bright_colors[i] = bright
 		s.dark_colors[i] = engine.adjust_color_brightness(bright, 0.2)
-		visual_fg[id].fg = s.dark_colors[i]
-		visual_fg[id].bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
+		engine.set_foreground(e, id, s.dark_colors[i])
+		engine.set_background(e, id, s.color_handling == .Dynamic ? s.dark_bg[i] : nil)
 		visible[id] = true
 	}
 
@@ -226,21 +226,23 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 	}
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
 	for id, i in s.characters {
+		visual := engine.get_visual(e, id)
 		p := input_coords[id]
 		nearest := engine.line_length(s.spot_positions[0], p, true)
 		for j in 1 ..< len(s.spot_positions) do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
 		if s.color_handling == .Dynamic &&
 		   s.phase == .Expand &&
 		   e.chars.input_style[id].fg == nil {
-			visual_fg[id].fg = nil
-			visual_fg[id].bg = e.chars.input_style[id].bg
+			visual.fg = nil
+			visual.bg = e.chars.input_style[id].bg
+			engine.set_character(e, id, visual = visual)
 			continue
 		}
 		if nearest > f64(s.illuminate_range) {
-			visual_fg[id].fg = s.dark_colors[i]
-			visual_fg[id].bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
+			visual.fg = s.dark_colors[i]
+			visual.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
+			engine.set_character(e, id, visual = visual)
 			continue
 		}
 		bright := s.bright_colors[i]
@@ -251,15 +253,18 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 				1 - (nearest - start) / (f64(s.illuminate_range) * s.config.beam_falloff),
 				0.2,
 			)
-			visual_fg[id].fg = engine.adjust_color_brightness(bright, factor)
+			visual.fg = engine.adjust_color_brightness(bright, factor)
 			if s.color_handling == .Dynamic {
-				if bg, ok := s.bright_bg[i].?; ok do visual_fg[id].bg = engine.adjust_color_brightness(bg, factor)
+				if bg, ok := s.bright_bg[i].?; ok {
+					visual.bg = engine.adjust_color_brightness(bg, factor)
+				}
 			}
 		} else {
-			visual_fg[id].fg = bright
-			visual_fg[id].bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
+			visual.fg = bright
+			visual.bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
 		}
+		engine.set_character(e, id, visual = visual)
 	}
 	if s.phase == .Expand do s.illuminate_range += 1
-	return s.characters[:], true
+	return nil, true
 }

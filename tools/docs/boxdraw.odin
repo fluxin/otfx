@@ -29,7 +29,13 @@ Box_Count :: 0x80
 box_table: [Box_Count]Box_Spec
 
 @(private = "file")
-set :: proc "contextless" (code: rune, up, down, left, right: Stem, dash: u8 = 0, diagonal: u8 = 0, arc := false) {
+set :: proc "contextless" (
+	code: rune,
+	up, down, left, right: Stem,
+	dash: u8 = 0,
+	diagonal: u8 = 0,
+	arc := false,
+) {
 	box_table[int(code) - Box_First] = {up, down, left, right, dash, diagonal, arc}
 }
 
@@ -37,56 +43,56 @@ set :: proc "contextless" (code: rune, up, down, left, right: Stem, dash: u8 = 0
 box_table_init :: proc "contextless" () {
 	N, L, H, D :: Stem.None, Stem.Light, Stem.Heavy, Stem.Double
 
-	set('─', N, N, L, L);  set('━', N, N, H, H);  set('│', L, L, N, N);  set('┃', H, H, N, N)
-	set('┄', N, N, L, L, 3);  set('┅', N, N, H, H, 3)
-	set('┆', L, L, N, N, 3);  set('┇', H, H, N, N, 3)
-	set('┈', N, N, L, L, 4);  set('┉', N, N, H, H, 4)
-	set('┊', L, L, N, N, 4);  set('┋', H, H, N, N, 4)
+	set('─', N, N, L, L); set('━', N, N, H, H); set('│', L, L, N, N); set('┃', H, H, N, N)
+	set('┄', N, N, L, L, 3); set('┅', N, N, H, H, 3)
+	set('┆', L, L, N, N, 3); set('┇', H, H, N, N, 3)
+	set('┈', N, N, L, L, 4); set('┉', N, N, H, H, 4)
+	set('┊', L, L, N, N, 4); set('┋', H, H, N, N, 4)
 
-	set('┌', N, L, N, L);  set('┍', N, L, N, H);  set('┎', N, H, N, L);  set('┏', N, H, N, H)
-	set('┐', N, L, L, N);  set('┑', N, L, H, N);  set('┒', N, H, L, N);  set('┓', N, H, H, N)
-	set('└', L, N, N, L);  set('┕', L, N, N, H);  set('┖', H, N, N, L);  set('┗', H, N, N, H)
-	set('┘', L, N, L, N);  set('┙', L, N, H, N);  set('┚', H, N, L, N);  set('┛', H, N, H, N)
+	set('┌', N, L, N, L); set('┍', N, L, N, H); set('┎', N, H, N, L); set('┏', N, H, N, H)
+	set('┐', N, L, L, N); set('┑', N, L, H, N); set('┒', N, H, L, N); set('┓', N, H, H, N)
+	set('└', L, N, N, L); set('┕', L, N, N, H); set('┖', H, N, N, L); set('┗', H, N, N, H)
+	set('┘', L, N, L, N); set('┙', L, N, H, N); set('┚', H, N, L, N); set('┛', H, N, H, N)
 
-	set('├', L, L, N, L);  set('┝', L, L, N, H);  set('┞', H, L, N, L);  set('┟', L, H, N, L)
-	set('┠', H, H, N, L);  set('┡', H, L, N, H);  set('┢', L, H, N, H);  set('┣', H, H, N, H)
-	set('┤', L, L, L, N);  set('┥', L, L, H, N);  set('┦', H, L, L, N);  set('┧', L, H, L, N)
-	set('┨', H, H, L, N);  set('┩', H, L, H, N);  set('┪', L, H, H, N);  set('┫', H, H, H, N)
+	set('├', L, L, N, L); set('┝', L, L, N, H); set('┞', H, L, N, L); set('┟', L, H, N, L)
+	set('┠', H, H, N, L); set('┡', H, L, N, H); set('┢', L, H, N, H); set('┣', H, H, N, H)
+	set('┤', L, L, L, N); set('┥', L, L, H, N); set('┦', H, L, L, N); set('┧', L, H, L, N)
+	set('┨', H, H, L, N); set('┩', H, L, H, N); set('┪', L, H, H, N); set('┫', H, H, H, N)
 
-	set('┬', N, L, L, L);  set('┭', N, L, H, L);  set('┮', N, L, L, H);  set('┯', N, L, H, H)
-	set('┰', N, H, L, L);  set('┱', N, H, H, L);  set('┲', N, H, L, H);  set('┳', N, H, H, H)
-	set('┴', L, N, L, L);  set('┵', L, N, H, L);  set('┶', L, N, L, H);  set('┷', L, N, H, H)
-	set('┸', H, N, L, L);  set('┹', H, N, H, L);  set('┺', H, N, L, H);  set('┻', H, N, H, H)
+	set('┬', N, L, L, L); set('┭', N, L, H, L); set('┮', N, L, L, H); set('┯', N, L, H, H)
+	set('┰', N, H, L, L); set('┱', N, H, H, L); set('┲', N, H, L, H); set('┳', N, H, H, H)
+	set('┴', L, N, L, L); set('┵', L, N, H, L); set('┶', L, N, L, H); set('┷', L, N, H, H)
+	set('┸', H, N, L, L); set('┹', H, N, H, L); set('┺', H, N, L, H); set('┻', H, N, H, H)
 
-	set('┼', L, L, L, L);  set('┽', L, L, H, L);  set('┾', L, L, L, H);  set('┿', L, L, H, H)
-	set('╀', H, L, L, L);  set('╁', L, H, L, L);  set('╂', H, H, L, L);  set('╃', H, L, H, L)
-	set('╄', H, L, L, H);  set('╅', L, H, H, L);  set('╆', L, H, L, H);  set('╇', H, L, H, H)
-	set('╈', L, H, H, H);  set('╉', H, H, H, L);  set('╊', H, H, L, H);  set('╋', H, H, H, H)
+	set('┼', L, L, L, L); set('┽', L, L, H, L); set('┾', L, L, L, H); set('┿', L, L, H, H)
+	set('╀', H, L, L, L); set('╁', L, H, L, L); set('╂', H, H, L, L); set('╃', H, L, H, L)
+	set('╄', H, L, L, H); set('╅', L, H, H, L); set('╆', L, H, L, H); set('╇', H, L, H, H)
+	set('╈', L, H, H, H); set('╉', H, H, H, L); set('╊', H, H, L, H); set('╋', H, H, H, H)
 
-	set('╌', N, N, L, L, 2);  set('╍', N, N, H, H, 2)
-	set('╎', L, L, N, N, 2);  set('╏', H, H, N, N, 2)
+	set('╌', N, N, L, L, 2); set('╍', N, N, H, H, 2)
+	set('╎', L, L, N, N, 2); set('╏', H, H, N, N, 2)
 
-	set('═', N, N, D, D);  set('║', D, D, N, N)
-	set('╒', N, L, N, D);  set('╓', N, D, N, L);  set('╔', N, D, N, D)
-	set('╕', N, L, D, N);  set('╖', N, D, L, N);  set('╗', N, D, D, N)
-	set('╘', L, N, N, D);  set('╙', D, N, N, L);  set('╚', D, N, N, D)
-	set('╛', L, N, D, N);  set('╜', D, N, L, N);  set('╝', D, N, D, N)
-	set('╞', L, L, N, D);  set('╟', D, D, N, L);  set('╠', D, D, N, D)
-	set('╡', L, L, D, N);  set('╢', D, D, L, N);  set('╣', D, D, D, N)
-	set('╤', N, L, D, D);  set('╥', N, D, L, L);  set('╦', N, D, D, D)
-	set('╧', L, N, D, D);  set('╨', D, N, L, L);  set('╩', D, N, D, D)
-	set('╪', L, L, D, D);  set('╫', D, D, L, L);  set('╬', D, D, D, D)
+	set('═', N, N, D, D); set('║', D, D, N, N)
+	set('╒', N, L, N, D); set('╓', N, D, N, L); set('╔', N, D, N, D)
+	set('╕', N, L, D, N); set('╖', N, D, L, N); set('╗', N, D, D, N)
+	set('╘', L, N, N, D); set('╙', D, N, N, L); set('╚', D, N, N, D)
+	set('╛', L, N, D, N); set('╜', D, N, L, N); set('╝', D, N, D, N)
+	set('╞', L, L, N, D); set('╟', D, D, N, L); set('╠', D, D, N, D)
+	set('╡', L, L, D, N); set('╢', D, D, L, N); set('╣', D, D, D, N)
+	set('╤', N, L, D, D); set('╥', N, D, L, L); set('╦', N, D, D, D)
+	set('╧', L, N, D, D); set('╨', D, N, L, L); set('╩', D, N, D, D)
+	set('╪', L, L, D, D); set('╫', D, D, L, L); set('╬', D, D, D, D)
 
 	// Arcs are drawn as square corners: at seven pixels across, the curve is
 	// smaller than the stem is thick.
-	set('╭', N, L, N, L, 0, 0, true);  set('╮', N, L, L, N, 0, 0, true)
-	set('╯', L, N, L, N, 0, 0, true);  set('╰', L, N, N, L, 0, 0, true)
+	set('╭', N, L, N, L, 0, 0, true); set('╮', N, L, L, N, 0, 0, true)
+	set('╯', L, N, L, N, 0, 0, true); set('╰', L, N, N, L, 0, 0, true)
 
-	set('╱', N, N, N, N, 0, 1);  set('╲', N, N, N, N, 0, 2);  set('╳', N, N, N, N, 0, 3)
+	set('╱', N, N, N, N, 0, 1); set('╲', N, N, N, N, 0, 2); set('╳', N, N, N, N, 0, 3)
 
-	set('╴', N, N, L, N);  set('╵', L, N, N, N);  set('╶', N, N, N, L);  set('╷', N, L, N, N)
-	set('╸', N, N, H, N);  set('╹', H, N, N, N);  set('╺', N, N, N, H);  set('╻', N, H, N, N)
-	set('╼', N, N, L, H);  set('╽', L, H, N, N);  set('╾', N, N, H, L);  set('╿', H, L, N, N)
+	set('╴', N, N, L, N); set('╵', L, N, N, N); set('╶', N, N, N, L); set('╷', N, L, N, N)
+	set('╸', N, N, H, N); set('╹', H, N, N, N); set('╺', N, N, N, H); set('╻', N, H, N, N)
+	set('╼', N, N, L, H); set('╽', L, H, N, N); set('╾', N, N, H, L); set('╿', H, L, N, N)
 }
 
 // Rows a horizontal rule occupies, and columns a vertical one occupies. A

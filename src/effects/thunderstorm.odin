@@ -198,8 +198,8 @@ thunderstorm_take_spark :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> in
 	// Eighteen is a natural one-impact batch, not a ceiling. Additional rows
 	// are created only when separate strikes overlap before earlier sparks cool.
 	id := engine.add_character(e, "*", engine.coord(0, 0))
-	e.chars.layer[id] = 2
-	e.chars.is_visible[id] = false
+	engine.set_character(e, id, layer = 2)
+	engine.set_character(e, id, visible = false)
 	append(&s.spark_ids, id)
 	append(&s.spark_starts, -1)
 	append(&s.spark_origins, engine.coord(0, 0))
@@ -238,7 +238,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	for i in 0 ..< len(s.input_at_cell) do s.input_at_cell[i] = -1
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		p := input_coords[id]
@@ -255,8 +255,8 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		s.glow_starts[i] = -1
 		s.input_slot_by_id[id] = i
 		s.input_at_cell[thunderstorm_cell_index(e.canvas, p)] = i32(id)
-		visual_fg[id].fg = final
-		visual_fg[id].bg = s.visible_bg[i]
+		engine.set_foreground(e, id, final)
+		engine.set_background(e, id, s.visible_bg[i])
 		visible[id] = true
 	}
 	// Input glyphs are the permanent render prefix. Weather rows append only
@@ -306,11 +306,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.spark_active, 18)
 }
 
-thunderstorm_spawn_rain :: proc(
-	s: ^Thunderstorm_State,
-	chars: ^engine.Character_Storage,
-	canvas: engine.Canvas,
-) {
+thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canvas: engine.Canvas) {
 	if s.rain_delay > 0 {
 		s.rain_delay -= 1
 		return
@@ -332,11 +328,14 @@ thunderstorm_spawn_rain :: proc(
 			1,
 		)
 		id := s.rain_ids[slot]
-		chars.current_coord[id] = origin
-		chars.visual[id].symbol =
-			s.config.raindrop_symbols[rand.int_max(len(s.config.raindrop_symbols))]
-		chars.visual[id].fg = engine.Color{0xAA, 0xAA, 0xFF}
-		chars.is_visible[id] = true
+		engine.set_character(e, id, coord = origin)
+		engine.set_symbol(
+			e,
+			id,
+			s.config.raindrop_symbols[rand.int_max(len(s.config.raindrop_symbols))],
+		)
+		engine.set_foreground(e, id, engine.Color{0xAA, 0xAA, 0xFF})
+		engine.set_character(e, id, visible = true)
 		append(&s.rain_active, slot)
 	}
 	s.rain_delay = rand.int_range(1, 8)
@@ -462,12 +461,11 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.strike_ids, count)
 	reserve(&s.strike_pending, count)
 	new_count := max(0, count - len(s.strike_ids))
-	reserve(&e.chars, len(e.chars) + new_count)
-	reserve(&e.character_sets.added, len(e.character_sets.added) + new_count)
+	characters := engine.character_batch(e, new_count)
 	for len(s.strike_ids) < count {
-		id := engine.add_character(e, "|", engine.coord(0, 0))
-		e.chars.layer[id] = 2
-		e.chars.is_visible[id] = false
+		id := engine.add_character(&characters, "|", engine.coord(0, 0))
+		engine.set_character(e, id, layer = 2)
+		engine.set_character(e, id, visible = false)
 		append(&s.strike_ids, id)
 	}
 	resize(&s.strike_pending, count)
@@ -475,10 +473,10 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	for index, i in work.order {
 		segment := work.segments[index]
 		id := s.strike_ids[i]
-		e.chars.current_coord[id] = engine.coord(segment.column, segment.row)
-		e.chars.visual[id].symbol = segment.symbol == 0 ? "\\" : segment.symbol == 1 ? "/" : "|"
-		e.chars.visual[id].fg = s.config.lightning_color
-		e.chars.is_visible[id] = false
+		engine.set_character(e, id, coord = engine.coord(segment.column, segment.row))
+		engine.set_symbol(e, id, segment.symbol == 0 ? "\\" : segment.symbol == 1 ? "/" : "|")
+		engine.set_foreground(e, id, s.config.lightning_color)
+		engine.set_character(e, id, visible = false)
 		s.strike_pending[i] = id
 	}
 	s.strike_pending_head, s.strike_delay, s.strike_flash_age = 0, 0, -1
@@ -511,11 +509,10 @@ thunderstorm_spawn_sparks :: proc(
 			1,
 		)
 		id := s.spark_ids[slot]
-		e.chars.current_coord[id] = impact
-		e.chars.visual[id].symbol =
-			s.config.spark_symbols[rand.int_max(len(s.config.spark_symbols))]
-		e.chars.visual[id].fg = s.config.spark_glow_color
-		e.chars.is_visible[id] = true
+		engine.set_character(e, id, coord = impact)
+		engine.set_symbol(e, id, s.config.spark_symbols[rand.int_max(len(s.config.spark_symbols))])
+		engine.set_foreground(e, id, s.config.spark_glow_color)
+		engine.set_character(e, id, visible = true)
 		append(&s.spark_active, slot)
 	}
 }
@@ -532,7 +529,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			if s.strike_pending_head == len(s.strike_pending) do break
 			id := s.strike_pending[s.strike_pending_head]
 			s.strike_pending_head += 1
-			e.chars.is_visible[id] = true
+			engine.set_character(e, id, visible = true)
 		}
 		s.strike_delay = 1
 		if s.strike_pending_head != len(s.strike_pending) do return
@@ -552,7 +549,9 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			7,
 			step,
 		)
-		for id in s.strike_pending do e.chars.visual[id].fg = color
+		for id in s.strike_pending {
+			engine.set_foreground(e, id, color)
+		}
 	} else if age < 54 {
 		step := min((age - 42) / 2, 6)
 		color := engine.gradient_between_step(
@@ -561,10 +560,12 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			6,
 			step,
 		)
-		for id in s.strike_pending do e.chars.visual[id].fg = color
+		for id in s.strike_pending {
+			engine.set_foreground(e, id, color)
+		}
 	} else {
 		for id in s.strike_pending {
-			e.chars.is_visible[id] = false
+			engine.set_character(e, id, visible = false)
 			p := e.chars.current_coord[id]
 			if !engine.canvas_in(e.canvas, p) do continue
 			input_id := s.input_at_cell[thunderstorm_cell_index(e.canvas, p)]
@@ -584,7 +585,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	s.strike_flash_age += 1
 }
 
-thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, chars: ^engine.Character_Storage) {
+thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	active := &s.rain_active
 	write := 0
 	for read in 0 ..< len(active^) {
@@ -592,14 +593,18 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, chars: ^engine.Characte
 		age := s.tick - s.rain_starts[slot]
 		id := s.rain_ids[slot]
 		if age >= s.rain_steps[slot] {
-			chars.is_visible[id] = false
+			engine.set_character(e, id, visible = false)
 			append(&s.rain_free, slot)
 			continue
 		}
-		chars.current_coord[id] = engine.coord_on_line(
-			s.rain_origins[slot],
-			s.rain_targets[slot],
-			f64(age + 1) / f64(s.rain_steps[slot]),
+		engine.set_character(
+			e,
+			id,
+			coord = engine.coord_on_line(
+				s.rain_origins[slot],
+				s.rain_targets[slot],
+				f64(age + 1) / f64(s.rain_steps[slot]),
+			),
 		)
 		active^[write] = slot
 		write += 1
@@ -609,7 +614,7 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, chars: ^engine.Characte
 
 thunderstorm_update_sparks :: proc(
 	s: ^Thunderstorm_State,
-	chars: ^engine.Character_Storage,
+	e: ^engine.Engine,
 	background: engine.Color,
 ) {
 	active := &s.spark_active
@@ -619,25 +624,28 @@ thunderstorm_update_sparks :: proc(
 		age := s.tick - s.spark_starts[slot]
 		id := s.spark_ids[slot]
 		if age < s.spark_steps[slot] {
-			chars.current_coord[id] = engine.coord_on_quadratic_bezier(
-				s.spark_origins[slot],
-				s.spark_controls[slot],
-				s.spark_targets[slot],
-				ease.ease(.Circular_Out, f64(age + 1) / f64(s.spark_steps[slot])),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_quadratic_bezier(
+					s.spark_origins[slot],
+					s.spark_controls[slot],
+					s.spark_targets[slot],
+					ease.ease(.Circular_Out, f64(age + 1) / f64(s.spark_steps[slot])),
+				),
 			)
 		} else {
 			cool_step := (age - s.spark_steps[slot]) / s.config.spark_glow_time
 			if cool_step > 7 {
-				chars.is_visible[id] = false
+				engine.set_character(e, id, visible = false)
 				s.spark_starts[slot] = -1
 				append(&s.spark_free, slot)
 				continue
 			}
-			chars.visual[id].fg = engine.gradient_between_step(
-				s.config.spark_glow_color,
-				background,
-				7,
-				cool_step,
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(s.config.spark_glow_color, background, 7, cool_step),
 			)
 		}
 		active^[write] = slot
@@ -646,8 +654,7 @@ thunderstorm_update_sparks :: proc(
 	resize(active, write)
 }
 
-thunderstorm_update_text :: proc(s: ^Thunderstorm_State, chars: ^engine.Character_Storage) {
-	visual_fg := chars.visual
+thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	write := 0
 	for i in s.glow_active {
 		id := s.characters[i]
@@ -655,17 +662,16 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, chars: ^engine.Characte
 		step := (s.tick - start) / s.config.text_glow_time
 		if step > 7 {
 			s.glow_starts[i] = -1
-			visual_fg[id].fg = s.storm_colors[i]
-			visual_fg[id].bg = s.color_handling == .Dynamic ? s.storm_bg[i] : nil
+			engine.set_foreground(e, id, s.storm_colors[i])
+			engine.set_background(e, id, s.color_handling == .Dynamic ? s.storm_bg[i] : nil)
 			continue
 		}
-		visual_fg[id].fg = engine.gradient_between_step(
-			s.config.glowing_text_color,
-			s.storm_colors[i],
-			7,
-			step,
+		engine.set_foreground(
+			e,
+			id,
+			engine.gradient_between_step(s.config.glowing_text_color, s.storm_colors[i], 7, step),
 		)
-		visual_fg[id].bg = s.color_handling == .Dynamic ? s.storm_bg[i] : nil
+		engine.set_background(e, id, s.color_handling == .Dynamic ? s.storm_bg[i] : nil)
 		s.glow_active[write] = i
 		write += 1
 	}
@@ -681,27 +687,24 @@ thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Char_
 }
 
 thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
-	chars := &e.chars
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
 		for id, i in s.characters {
-			chars.visual[id].fg = engine.gradient_between_step(
-				s.final_colors[i],
-				s.storm_colors[i],
-				7,
-				step,
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step),
 			)
 			if s.color_handling == .Dynamic {
 				if bg, ok := s.visible_bg[i].?; ok {
-					chars.visual[id].bg = engine.gradient_between_step(
-						bg,
-						s.storm_bg[i].?,
-						7,
-						step,
+					engine.set_background(
+						e,
+						id,
+						engine.gradient_between_step(bg, s.storm_bg[i].?, 7, step),
 					)
 				} else {
-					chars.visual[id].bg = nil
+					engine.set_background(e, id, nil)
 				}
 			}
 		}
@@ -712,16 +715,20 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 			s.storm_started = engine.elapsed_seconds(e)
 		}
 	case .Storm:
-		thunderstorm_spawn_rain(s, chars, e.canvas)
+		thunderstorm_spawn_rain(s, e, e.canvas)
 		if !s.strike_live && rand.float64() < 0.008 do thunderstorm_begin_strike(s, e)
 		thunderstorm_reveal_strike(s, e)
-		thunderstorm_update_rain(s, chars)
-		thunderstorm_update_sparks(s, chars, e.cfg.terminal_background_color)
-		thunderstorm_update_text(s, chars)
+		thunderstorm_update_rain(s, e)
+		thunderstorm_update_sparks(s, e, e.cfg.terminal_background_color)
+		thunderstorm_update_text(s, e)
 		if engine.elapsed_seconds(e) - s.storm_started >= f64(s.config.storm_time) &&
 		   !s.strike_live {
-			for id in s.rain_ids do chars.is_visible[id] = false
-			for id in s.spark_ids do chars.is_visible[id] = false
+			for id in s.rain_ids {
+				engine.set_character(e, id, visible = false)
+			}
+			for id in s.spark_ids {
+				engine.set_character(e, id, visible = false)
+			}
 			clear(&s.rain_active)
 			clear(&s.spark_active)
 			s.phase = .Poststorm
@@ -730,29 +737,31 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 	case .Poststorm:
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
 		for id, i in s.characters {
-			chars.visual[id].fg = engine.gradient_between_step(
-				s.storm_colors[i],
-				s.final_colors[i],
-				7,
-				step,
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step),
 			)
 			if s.color_handling == .Dynamic {
 				if bg, ok := s.storm_bg[i].?; ok {
-					chars.visual[id].bg = engine.gradient_between_step(
-						bg,
-						s.visible_bg[i].?,
-						7,
-						step,
+					engine.set_background(
+						e,
+						id,
+						engine.gradient_between_step(bg, s.visible_bg[i].?, 7, step),
 					)
 				} else {
-					chars.visual[id].bg = nil
+					engine.set_background(e, id, nil)
 				}
 			}
 		}
 		s.phase_tick += 1
 		if s.phase_tick >= Thunderstorm_Fade_Frames {
 			if s.color_handling == .Dynamic {
-				for id in s.characters do engine.dynamic_apply_input_colors(&chars.visual[id], chars.input_style[id])
+				for id in s.characters {
+					visual := engine.get_visual(e, id)
+					engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+					engine.set_visual(e, id, visual)
+				}
 			}
 			return nil, false
 		}

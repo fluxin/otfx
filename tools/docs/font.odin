@@ -29,10 +29,10 @@ Font_Face :: struct {
 }
 
 Glyph :: struct {
-	coverage:   []u8, // 8-bit alpha, width * height
-	width:      int,
-	height:     int,
-	left, top:  int, // pixel offset from the cell origin
+	coverage:  []u8, // 8-bit alpha, width * height
+	width:     int,
+	height:    int,
+	left, top: int, // pixel offset from the cell origin
 }
 
 Font_Chain :: struct {
@@ -77,9 +77,7 @@ font_chain_load :: proc(chain: ^Font_Chain) -> bool {
 
 		if chain.count == 0 {
 			span := f32(ascent - descent) * face.scale
-			chain.baseline = int(
-				(f32(Cell_Height) - span) / 2 + f32(ascent) * face.scale + 0.5,
-			)
+			chain.baseline = int((f32(Cell_Height) - span) / 2 + f32(ascent) * face.scale + 0.5)
 		}
 		chain.count += 1
 	}
@@ -160,9 +158,7 @@ block_for :: proc(ch: rune) -> (Cell_Shape, bool) {
 
 	solid :: proc(x0, y0, x1, y1: int) -> (Cell_Shape, bool) {
 		return {
-				rects = {
-					0 = {eighth_x(x0), eighth_y(y0), eighth_x(x1), eighth_y(y1)},
-				},
+				rects = {0 = {eighth_x(x0), eighth_y(y0), eighth_x(x1), eighth_y(y1)}},
 				count = 1,
 				density = 255,
 			},
@@ -180,8 +176,7 @@ block_for :: proc(ch: rune) -> (Cell_Shape, bool) {
 			true
 	}
 	shade :: proc(density: u8) -> (Cell_Shape, bool) {
-		return {rects = {0 = {0, 0, Cell_Width, Cell_Height}}, count = 1, density = density},
-			true
+		return {rects = {0 = {0, 0, Cell_Width, Cell_Height}}, count = 1, density = density}, true
 	}
 
 	switch ch {

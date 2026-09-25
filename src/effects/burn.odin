@@ -186,7 +186,7 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 	reserve(&s.render_ids, n * 2)
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		s.final_colors[i] = engine.gradient_sample(
@@ -196,15 +196,16 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		)
 		s.start_ticks[i] = -1
 		s.smoke_start_ticks[i] = -1
-		visual_fg[id].fg = s.config.starting_color
+		engine.set_foreground(e, id, s.config.starting_color)
 		visible[id] = true
 	}
 	burn_start_ticks(s, e)
 
 	// At most one smoke trail can be born from each source character. Allocate
 	// that exact maximum up front; no hidden per-frame particle allocation.
+	characters := engine.character_batch(e, n)
 	for _ in 0 ..< n {
-		id := engine.add_character(e, ".", engine.coord(0, 0))
+		id := engine.add_character(&characters, ".", engine.coord(0, 0))
 		e.chars.layer[id] = 2
 		e.chars.is_visible[id] = false
 		append(&s.smoke_ids, id)
@@ -227,11 +228,11 @@ burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 		engine.round_half_even(engine.line_length(origin, target, true) / 0.5),
 		1,
 	)
-	e.chars.current_coord[id] = origin
+	engine.set_character(e, id, coord = origin)
 	symbols := Burn_Smoke_Symbols
-	e.chars.visual[id].symbol = symbols[rand.int_max(len(symbols))]
-	e.chars.visual[id].fg = engine.Color{0x50, 0x4F, 0x4F}
-	e.chars.is_visible[id] = true
+	engine.set_symbol(e, id, symbols[rand.int_max(len(symbols))])
+	engine.set_foreground(e, id, engine.Color{0x50, 0x4F, 0x4F})
+	engine.set_character(e, id, visible = true)
 }
 
 burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
@@ -241,8 +242,7 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	if !active do return nil, false
 
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
+
 	for id, i in s.characters {
 		start_tick := s.start_ticks[i]
 		if start_tick < 0 do continue
@@ -254,33 +254,36 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		}
 		if age < fire_ticks {
 			entry := age / 4
-			visual_symbols[id].symbol = s.fire_symbols[entry]
-			visual_fg[id].fg = s.fire_palette[entry]
+			engine.set_symbol(e, id, s.fire_symbols[entry])
+			engine.set_foreground(e, id, s.fire_palette[entry])
 		} else {
 			if age == fire_ticks do burn_emit_smoke(s, e, i)
-			visual_symbols[id].symbol = input_symbols[id]
+			engine.set_symbol(e, id, input_symbols[id])
 			if s.color_handling == .Dynamic {
+				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_input(
-					&visual_fg[id],
+					&visual,
 					s.fire_palette[len(s.fire_palette) - 1],
 					e.chars.input_style[id],
 					8,
 					min((age - fire_ticks) / 4, 8),
 				)
+				engine.set_visual(e, id, visual)
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
-					s.fire_palette[len(s.fire_palette) - 1],
-					s.final_colors[i],
-					8,
-					min((age - fire_ticks) / 4, 8),
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.fire_palette[len(s.fire_palette) - 1],
+						s.final_colors[i],
+						8,
+						min((age - fire_ticks) / 4, 8),
+					),
 				)
 			}
 		}
 	}
 
-	smoke_start := e.chars.current_coord
-	smoke_visible := e.chars.is_visible
-	smoke_fg := e.chars.visual
 	smoke_gradient_start := engine.Color{0x50, 0x4F, 0x4F}
 	smoke_gradient_end := engine.Color{0xC7, 0xC7, 0xC7}
 	write := 0
@@ -290,19 +293,27 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		life := max(s.smoke_steps[i], 100)
 		id := s.smoke_ids[i]
 		if age >= life {
-			smoke_visible[id] = false
+			engine.set_character(e, id, visible = false)
 			continue
 		}
 		s.active_smoke[write] = i
 		write += 1
 		append(&s.render_ids, id)
 		progress := f64(min(age + 1, s.smoke_steps[i])) / f64(s.smoke_steps[i])
-		smoke_start[id] = engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress)
-		smoke_fg[id].fg = engine.gradient_between_step(
-			smoke_gradient_start,
-			smoke_gradient_end,
-			9,
-			min(age / 10, 9),
+		engine.set_character(
+			e,
+			id,
+			coord = engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress),
+		)
+		engine.set_foreground(
+			e,
+			id,
+			engine.gradient_between_step(
+				smoke_gradient_start,
+				smoke_gradient_end,
+				9,
+				min(age / 10, 9),
+			),
 		)
 	}
 	resize(&s.active_smoke, write)

@@ -153,7 +153,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		change := engine.group_reveal_step(&s.reveal)
 		for gi in change.added.start ..< change.added.start + change.added.len {
 			for id in engine.group_members(s.reveal.groups, gi) {
-				e.chars.is_visible[id] = true
+				engine.set_character(e, id, visible = true)
 				s.start_ticks[id] = s.tick
 				if s.active_by_id[id] == 0 {
 					s.active_by_id[id] = 1
@@ -165,7 +165,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			for id in engine.group_members(s.reveal.groups, gi) {
 				s.active_by_id[id] = 0
 				s.start_ticks[id] = -1
-				e.chars.is_visible[id] = false
+				engine.set_character(e, id, visible = false)
 			}
 		}
 		s.wipe_delay = s.config.wipe_delay
@@ -178,7 +178,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		span := s.frame_spans[id]
 		age := s.tick - s.start_ticks[id]
 		frame := age / s.config.final_gradient_frames
-		e.chars.visual[id] = s.frames[span.start + frame].visual
+		engine.set_visual(e, id, s.frames[span.start + frame].visual)
 		if age + 1 == span.len * s.config.final_gradient_frames {
 			s.active_by_id[id] = 0
 		} else {

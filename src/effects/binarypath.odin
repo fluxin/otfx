@@ -78,7 +78,6 @@ Binarypath_State :: struct {
 	config:             Binarypath_Config,
 	characters:         [dynamic]engine.Char_Id,
 	bit_ids:            [dynamic]engine.Char_Id,
-	render_ids:         [dynamic]engine.Char_Id,
 	final_colors:       [dynamic]engine.Color,
 	final_colors_by_id: [dynamic]engine.Color,
 	bit_colors:         [dynamic]engine.Color,
@@ -131,8 +130,6 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	s.codes = make([dynamic]u32, n)
 	s.starts = make([dynamic]int, n)
 	s.states = make([dynamic]Binarypath_Rep_State, n)
-	reserve(&s.render_ids, n * 9)
-	append(&s.render_ids, ..s.characters[:])
 
 	input_coords := e.chars.input_coord
 	input_symbols := e.chars.input_symbol
@@ -159,17 +156,17 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	// No character-storage column is held across add_character: it can grow and
 	// relocate each SoA field. The prep pass above owns all source data needed
 	// to create the virtual bit rows below.
+	characters := engine.character_batch(e, 8 * n)
 	for i in 0 ..< n {
 		for bit in 0 ..< 8 {
 			symbol := ((s.codes[i] >> u32(7 - bit)) & 1) == 0 ? "0" : "1"
-			bit_id := engine.add_character(e, symbol, s.origins[i])
+			bit_id := engine.add_character(&characters, symbol, s.origins[i])
 			color := s.config.binary_colors[rand.int_max(len(s.config.binary_colors))]
 			s.bit_ids[i * 8 + bit] = bit_id
 			s.bit_colors[i * 8 + bit] = color
 			e.chars.is_visible[bit_id] = false
 			e.chars.layer[bit_id] = 1
-			e.chars.visual[bit_id].fg = color
-			append(&s.render_ids, bit_id)
+			engine.set_foreground(e, bit_id, color)
 		}
 	}
 	s.max_active = max(engine.round_half_even(s.config.active_binary_groups * f64(n)), 1)
@@ -193,23 +190,25 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 		groups := len(s.final_wipe.spans)
 		if s.wipe_group >= groups do return nil, false
 		input_symbols := e.chars.input_symbol
-		visual_symbols := e.chars.visual
-		visual_fg := e.chars.visual
+
+
 		visible := e.chars.is_visible
 		for _ in 0 ..< 2 {
 			if s.wipe_group == groups do break
 			for id in engine.group_members(s.final_wipe, s.wipe_group) {
-				visual_symbols[id].symbol = input_symbols[id]
+				engine.set_symbol(e, id, input_symbols[id])
 				if s.color_handling == .Dynamic {
-					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+					visual := engine.get_visual(e, id)
+					engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+					engine.set_visual(e, id, visual)
 				} else {
-					visual_fg[id].fg = s.final_colors_by_id[id]
+					engine.set_foreground(e, id, s.final_colors_by_id[id])
 				}
-				visible[id] = true
+				engine.set_character(e, id, visible = true)
 			}
 			s.wipe_group += 1
 		}
-		return s.render_ids[:], true
+		return nil, true
 	}
 
 	for len(s.active) < s.max_active && len(s.pending) > 0 {
@@ -223,10 +222,9 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 		append(&s.active, rep)
 	}
 
-	current_coords := e.chars.current_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual
-	visual_symbols := e.chars.visual
+
+
 	input_symbols := e.chars.input_symbol
 	any_collapse := false
 	write := 0
@@ -237,18 +235,24 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 				bit_age := age - bit
 				if bit_age < 0 do continue
 				id := s.bit_ids[rep * 8 + bit]
-				current_coords[id] = binarypath_coord_at(s, e, rep, bit_age)
-				visible[id] = true
+				engine.set_character(
+					e,
+					id,
+					coord = binarypath_coord_at(s, e, rep, bit_age),
+					visible = true,
+				)
 			}
 			s.active[write] = rep
 			write += 1
 		} else {
-			for bit in 0 ..< 8 do visible[s.bit_ids[rep * 8 + bit]] = false
+			for bit in 0 ..< 8 {
+				engine.set_character(e, s.bit_ids[rep * 8 + bit], visible = false)
+			}
 			s.states[rep] = .Collapse
 			s.starts[rep] = s.tick
 			id := s.characters[rep]
-			visual_symbols[id].symbol = input_symbols[id]
-			visible[id] = true
+			engine.set_symbol(e, id, input_symbols[id])
+			engine.set_character(e, id, visible = true)
 		}
 	}
 	resize(&s.active, write)
@@ -259,21 +263,22 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 		if age < 21 {
 			if s.color_handling == .Dynamic {
 				style := e.chars.input_style[id]
+				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_dimmed_input(
-					&visual_fg[id],
+					&visual,
 					engine.Color{0xFF, 0xFF, 0xFF},
 					style,
 					0.5,
 					6,
 					age / 3,
 				)
+				engine.set_visual(e, id, visual)
 			} else {
 				dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
-				visual_fg[id].fg = engine.gradient_between_step(
-					engine.Color{0xFF, 0xFF, 0xFF},
-					dim,
-					6,
-					age / 3,
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(engine.Color{0xFF, 0xFF, 0xFF}, dim, 6, age / 3),
 				)
 			}
 			any_collapse = true
@@ -290,5 +295,5 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Ch
 		return binarypath_next(s, e)
 	}
 	s.tick += 1
-	return s.render_ids[:], true
+	return nil, true
 }

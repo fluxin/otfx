@@ -156,7 +156,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.
 				slot := s.index_by_id[id]
 				s.start_ticks[slot] = s.tick
 				append(&s.active_slots, slot)
-				e.chars.is_visible[id] = true
+				engine.set_character(e, id, visible = true)
 			}
 			s.ball_delay = s.config.ball_delay
 		} else {
@@ -170,32 +170,42 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.
 		if age >= s.max_steps[slot] + 65 do continue
 		if age < s.max_steps[slot] - 1 {
 			progress := f64(age + 1) / f64(s.max_steps[slot])
-			e.chars.current_coord[id] = engine.coord_on_line(
-				s.origins[slot],
-				e.chars.input_coord[id],
-				ease.ease(s.config.movement_easing, progress),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_line(
+					s.origins[slot],
+					e.chars.input_coord[id],
+					ease.ease(s.config.movement_easing, progress),
+				),
 			)
-			e.chars.visual[id].symbol = s.ball_symbols[slot]
-			e.chars.visual[id].fg = s.ball_colors[slot]
+			engine.set_symbol(e, id, s.ball_symbols[slot])
+			engine.set_foreground(e, id, s.ball_colors[slot])
 		} else {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			engine.set_character(e, id, coord = e.chars.input_coord[id])
+			engine.set_symbol(e, id, e.chars.input_symbol[id])
 			fade_tick := age - (s.max_steps[slot] - 1)
 			fade_step := min(fade_tick / 6, 10)
 			if s.color_handling == .Dynamic {
+				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_input(
-					&e.chars.visual[id],
+					&visual,
 					s.ball_colors[slot],
 					e.chars.input_style[id],
 					10,
 					fade_step,
 				)
+				engine.set_visual(e, id, visual)
 			} else {
-				e.chars.visual[id].fg = engine.gradient_between_step(
-					s.ball_colors[slot],
-					s.final_colors[slot],
-					10,
-					fade_step,
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.ball_colors[slot],
+						s.final_colors[slot],
+						10,
+						fade_step,
+					),
 				)
 			}
 		}

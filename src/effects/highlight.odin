@@ -125,11 +125,15 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		if i == 0 do s.palette_len = len(hl)
 		append(&s.palette, ..hl[:])
 		delete(hl[:])
-		e.chars.visual[id] = {
-			symbol = e.chars.input_symbol[id],
-			fg     = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : base,
-			bg     = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual {
+				symbol = e.chars.input_symbol[id],
+				fg = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : base,
+				bg = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
+			},
+		)
 		e.chars.is_visible[id] = true
 	}
 }
@@ -155,10 +159,12 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Char
 		if age >= limit do continue
 		if s.color_handling == .Dynamic {
 			style := e.chars.input_style[id]
-			if style.fg != nil do e.chars.visual[id].fg = s.palette[slot * s.palette_len + age / 2]
-			e.chars.visual[id].bg = style.bg
+			if style.fg != nil {
+				engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
+			}
+			engine.set_background(e, id, style.bg)
 		} else {
-			e.chars.visual[id].fg = s.palette[slot * s.palette_len + age / 2]
+			engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
 		}
 		if age + 1 < limit {s.active_slots[write] = slot; write += 1}
 	}

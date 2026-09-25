@@ -187,7 +187,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			unordered_remove(pending, idx)
 			slot := s.index_by_id[next]
 			s.start_ticks[slot] = s.tick
-			visible[next] = true
+			engine.set_character(e, next, visible = true)
 			append(&s.render_ids, next)
 			append(&s.active_slots, slot)
 		}
@@ -199,32 +199,42 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		age := s.tick - start
 		if age < s.max_steps[slot] - 1 {
 			progress := f64(age + 1) / f64(s.max_steps[slot])
-			e.chars.current_coord[id] = engine.coord_on_line(
-				engine.coord(e.chars.input_coord[id].column, e.canvas.top),
-				e.chars.input_coord[id],
-				ease.ease(s.config.movement_easing, progress),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_line(
+					engine.coord(e.chars.input_coord[id].column, e.canvas.top),
+					e.chars.input_coord[id],
+					ease.ease(s.config.movement_easing, progress),
+				),
 			)
-			e.chars.visual[id].symbol = s.drop_symbols[slot]
-			e.chars.visual[id].fg = s.drop_colors[slot]
+			engine.set_symbol(e, id, s.drop_symbols[slot])
+			engine.set_foreground(e, id, s.drop_colors[slot])
 		} else {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			engine.set_character(e, id, coord = e.chars.input_coord[id])
+			engine.set_symbol(e, id, e.chars.input_symbol[id])
 			fade_tick := age - (s.max_steps[slot] - 1)
 			fade_step := min(fade_tick / 3, 7)
 			if s.color_handling == .Dynamic {
+				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_input(
-					&e.chars.visual[id],
+					&visual,
 					s.drop_colors[slot],
 					e.chars.input_style[id],
 					7,
 					fade_step,
 				)
+				engine.set_visual(e, id, visual)
 			} else {
-				e.chars.visual[id].fg = engine.gradient_between_step(
-					s.drop_colors[slot],
-					s.final_colors[slot],
-					7,
-					fade_step,
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.drop_colors[slot],
+						s.final_colors[slot],
+						7,
+						fade_step,
+					),
 				)
 			}
 		}

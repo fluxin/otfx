@@ -71,7 +71,7 @@ main :: proc() {
 					for id, cell in e.render_cells[:width * height] {
 						if id < 0 do continue
 						v := engine.effective_visual(
-							e.chars.visual[id],
+							engine.get_visual(e, engine.Char_Id(id)),
 							e.chars.input_style[id],
 							e.chars.uses_input_preexisting_colors[id],
 							cfg.existing_color_handling,

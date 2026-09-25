@@ -289,8 +289,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 	current_coords := e.chars.current_coord
 	input_coords := e.chars.input_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	for bi in 0 ..< len(s.bubble_states) {
 		state := s.bubble_states[bi]
@@ -303,20 +302,24 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 			anchor := engine.coord_on_line(s.bubble_origins[bi], s.bubble_targets[bi], progress)
 			landed := age + 1 >= steps
 			for id in members {
-				current_coords[id] = engine.coord(
-					anchor.column + s.circle_dx[id],
-					anchor.row + s.circle_dy[id],
+				engine.set_character(
+					e,
+					id,
+					coord = engine.coord(
+						anchor.column + s.circle_dx[id],
+						anchor.row + s.circle_dy[id],
+					),
 				)
 				landed ||= current_coords[id].row == s.bubble_targets[bi].row
-				visual_symbols[id].symbol = input_symbols[id]
+				engine.set_symbol(e, id, input_symbols[id])
 				if s.config.rainbow {
 					color_index := s.color_offsets[id] + (age / 4) % len(s.rainbow_palette)
 					if color_index >= len(s.rainbow_palette) do color_index -= len(s.rainbow_palette)
-					visual_fg[id].fg = s.rainbow_palette[color_index]
+					engine.set_foreground(e, id, s.rainbow_palette[color_index])
 				} else {
-					visual_fg[id].fg = s.bubble_colors[bi]
+					engine.set_foreground(e, id, s.bubble_colors[bi])
 				}
-				visible[id] = true
+				engine.set_character(e, id, visible = true)
 			}
 			if landed || (s.config.pop_condition == .Anywhere && rand.float64() < 0.002) {
 				s.bubble_states[bi] = .Pop
@@ -342,40 +345,59 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				expand_steps := s.expand_steps[id]
 				move_age := age - expand_steps
 				if age < expand_steps {
-					current_coords[id] = engine.coord_on_line(
-						s.pop_origins[id],
-						s.pop_targets[id],
-						ease.ease(.Exponential_Out, f64(age + 1) / f64(expand_steps)),
+					engine.set_character(
+						e,
+						id,
+						coord = engine.coord_on_line(
+							s.pop_origins[id],
+							s.pop_targets[id],
+							ease.ease(.Exponential_Out, f64(age + 1) / f64(expand_steps)),
+						),
 					)
 				} else {
 					steps := s.pop_steps[id]
-					current_coords[id] = engine.coord_on_line(
-						s.pop_targets[id],
-						input_coords[id],
-						ease.ease(.Exponential_In_Out, f64(min(move_age + 1, steps)) / f64(steps)),
+					engine.set_character(
+						e,
+						id,
+						coord = engine.coord_on_line(
+							s.pop_targets[id],
+							input_coords[id],
+							ease.ease(
+								.Exponential_In_Out,
+								f64(min(move_age + 1, steps)) / f64(steps),
+							),
+						),
 					)
-					if move_age + 1 >= steps do e.chars.layer[id] = 0
+					if move_age + 1 >= steps {
+						engine.set_character(e, id, layer = 0)
+					}
 				}
 				if age < 18 {
-					visual_symbols[id].symbol = age < 9 ? "*" : "'"
-					visual_fg[id].fg = s.config.pop_color
+					engine.set_symbol(e, id, age < 9 ? "*" : "'")
+					engine.set_foreground(e, id, s.config.pop_color)
 				} else {
 					color_age := age - 18
-					visual_symbols[id].symbol = input_symbols[id]
+					engine.set_symbol(e, id, input_symbols[id])
 					if s.color_handling == .Dynamic {
+						visual := engine.get_visual(e, id)
 						engine.dynamic_gradient_to_input(
-							&visual_fg[id],
+							&visual,
 							s.config.pop_color,
 							e.chars.input_style[id],
 							8,
 							min(color_age / 6, 8),
 						)
+						engine.set_visual(e, id, visual)
 					} else {
-						visual_fg[id].fg = engine.gradient_between_step(
-							s.config.pop_color,
-							s.final_colors[id],
-							8,
-							min(color_age / 6, 8),
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								s.config.pop_color,
+								s.final_colors[id],
+								8,
+								min(color_age / 6, 8),
+							),
 						)
 					}
 				}

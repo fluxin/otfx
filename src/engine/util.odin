@@ -470,6 +470,12 @@ eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease
 // ---------------------------------------------------------------------------
 
 buf_append_decimal :: proc(buf: ^$Buffer, v: int) {
+	// Colors fit three digits; cursor distances can span the full canvas.
+	if v >= 1000 {
+		storage: [20]byte
+		append(buf, ..transmute([]byte)strconv.write_int(storage[:], i64(v), 10))
+		return
+	}
 	if v >= 100 {
 		append(buf, byte('0') + byte(v / 100))
 	}
@@ -496,24 +502,6 @@ color_to_xterm :: proc(c: Color) -> u8 {
 		}
 	}
 	return u8(best_code)
-}
-
-buf_append_sgr_color :: proc(buf: ^$Buffer, selector: int, c: Color, xterm_colors: bool) {
-	append(buf, ansi.CSI)
-	buf_append_decimal(buf, selector)
-	if xterm_colors {
-		append(buf, ';', '5', ';')
-		buf_append_decimal(buf, int(color_to_xterm(c)))
-		append(buf, ansi.SGR)
-		return
-	}
-	append(buf, ';', '2', ';')
-	buf_append_decimal(buf, int(c.r))
-	append(buf, ';')
-	buf_append_decimal(buf, int(c.g))
-	append(buf, ';')
-	buf_append_decimal(buf, int(c.b))
-	append(buf, ansi.SGR)
 }
 
 move_cursor_up :: proc(n: int) -> string {

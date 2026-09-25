@@ -111,11 +111,15 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
 		e.chars.layer[id] = 1
-		e.chars.visual[id] = {
-			symbol = e.chars.input_symbol[id],
-			fg     = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : spectrum[0],
-			bg     = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual {
+				symbol = e.chars.input_symbol[id],
+				fg = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : spectrum[0],
+				bg = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
+			},
+		)
 		e.chars.is_visible[id] = true
 	}
 	s.initial_hold = 25
@@ -132,29 +136,41 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char
 		// The arrival tick already published the final coordinate, color, and layer.
 		if s.tick >= steps do continue
 		progress := f64(min(s.tick + 1, steps)) / f64(steps)
-		e.chars.current_coord[id] = engine.coord_on_line(
-			s.origins[i],
-			e.chars.input_coord[id],
-			ease.ease(s.config.movement_easing, progress),
+		engine.set_character(
+			e,
+			id,
+			coord = engine.coord_on_line(
+				s.origins[i],
+				e.chars.input_coord[id],
+				ease.ease(s.config.movement_easing, progress),
+			),
 		)
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+			visual := engine.get_visual(e, id)
+			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.set_visual(e, id, visual)
 		} else {
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.config.final_gradient_stops[0],
-				s.final_colors[i],
-				10,
-				min(engine.round_half_even(progress * 9), 10),
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(
+					s.config.final_gradient_stops[0],
+					s.final_colors[i],
+					10,
+					min(engine.round_half_even(progress * 9), 10),
+				),
 			)
 		}
 		if s.tick + 1 >= steps {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
+			engine.set_character(e, id, coord = e.chars.input_coord[id])
 			if s.color_handling == .Dynamic {
-				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
+				visual := engine.get_visual(e, id)
+				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.set_visual(e, id, visual)
 			} else {
-				e.chars.visual[id].fg = s.final_colors[i]
+				engine.set_foreground(e, id, s.final_colors[i])
 			}
-			e.chars.layer[id] = 0
+			engine.set_character(e, id, layer = 0)
 		}
 	}
 	s.tick += 1

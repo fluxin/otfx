@@ -224,12 +224,12 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	for i in 0 ..< 4 {
 		id := s.launcher_ids[i]
 		p := s.launcher_positions[i]
-		e.chars.current_coord[id] = p
-		e.chars.visual[id].symbol = s.launcher_symbols[i]
-		e.chars.visual[id].fg = engine.gradient_sample(
-			s.launcher_sampler,
-			s.launcher_spectrum[:],
-			p,
+		engine.set_character(e, id, coord = p)
+		engine.set_symbol(e, id, s.launcher_symbols[i])
+		engine.set_foreground(
+			e,
+			id,
+			engine.gradient_sample(s.launcher_sampler, s.launcher_spectrum[:], p),
 		)
 	}
 }
@@ -278,9 +278,9 @@ orbittingvolley_next :: proc(
 						),
 						1,
 					)
-					e.chars.current_coord[id] = s.launch_origins[i]
-					e.chars.layer[id] = 1
-					e.chars.is_visible[id] = true
+					engine.set_character(e, id, coord = s.launch_origins[i])
+					engine.set_character(e, id, layer = 1)
+					engine.set_character(e, id, visible = true)
 				}
 			}
 			s.delay = s.config.launch_delay
@@ -288,13 +288,14 @@ orbittingvolley_next :: proc(
 			s.delay -= 1
 		}
 	} else if !s.launchers_hidden {
-		for id in s.launcher_ids do e.chars.is_visible[id] = false
+		for id in s.launcher_ids {
+			engine.set_character(e, id, visible = false)
+		}
 		s.launchers_hidden = true
 	}
 
 	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
-	visual_fg := e.chars.visual
+
 	for id, i in s.characters {
 		start := s.launch_starts[i]
 		if start < 0 do continue
@@ -302,18 +303,26 @@ orbittingvolley_next :: proc(
 		steps := s.launch_steps[i]
 		if age >= steps {
 			// Preserve the layer transition one tick after the final motion sample.
-			if age == steps do e.chars.layer[id] = 0
+			if age == steps {
+				engine.set_character(e, id, layer = 0)
+			}
 			continue
 		}
-		current_coords[id] = engine.coord_on_line(
-			s.launch_origins[i],
-			input_coords[id],
-			ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
+		engine.set_character(
+			e,
+			id,
+			coord = engine.coord_on_line(
+				s.launch_origins[i],
+				input_coords[id],
+				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
+			),
 		)
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			visual := engine.get_visual(e, id)
+			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.set_visual(e, id, visual)
 		} else {
-			visual_fg[id].fg = s.final_colors[i]
+			engine.set_foreground(e, id, s.final_colors[i])
 		}
 	}
 	s.tick += 1

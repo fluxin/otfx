@@ -88,6 +88,8 @@ Colorshift_State :: struct {
 	gradient:          [dynamic]engine.Color, // one shared palette
 	shifts:            [dynamic]int, // indexed like character_sets.input
 	final_colors:      [dynamic]engine.Color, // indexed like character_sets.input
+	symbol_codes:      [dynamic]engine.Visual_Code_Id, // [distinct input symbol][gradient index]
+	symbol_index:      [dynamic]int, // Char_Id -> distinct symbol row
 	tick:              int,
 	palette_index:     int,
 	palette_tick:      int,
@@ -124,7 +126,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	}
 	input_coords := e.chars.input_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual
+
 	n := len(s.gradient)
 
 	for id, i in ids {
@@ -159,7 +161,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		}
 		if k == n do k = 0
 		s.shifts[i] = k
-		visual_fg[id].fg = s.gradient[k]
+		engine.set_foreground(e, id, s.gradient[k])
 		if len(s.final_colors) != 0 {
 			s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		}
@@ -168,19 +170,54 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 			s.dynamic_has_color = true
 		}
 	}
+
+	// The cycling phase only ever shows (input symbol, gradient color) pairs.
+	// Intern that product once and index it per character, so a frame assigns
+	// ids instead of rebuilding SGR bytes for every cell.
+	symbols: [dynamic]string
+	defer delete(symbols)
+	s.symbol_index = make([dynamic]int, len(e.chars))
+	rows := make(map[string]int)
+	defer delete(rows)
+	for id in ids {
+		sym := e.chars.input_symbol[id]
+		row, ok := rows[sym]
+		if !ok {
+			row = len(symbols)
+			rows[sym] = row
+			append(&symbols, sym)
+		}
+		s.symbol_index[id] = row
+	}
+	resize(&s.symbol_codes, len(symbols) * n)
+	for sym, row in symbols {
+		for color, k in s.gradient {
+			s.symbol_codes[row * n + k] = engine.prepare_visual(
+				e,
+				engine.Visual{symbol = sym, fg = color},
+			)
+		}
+	}
 }
 
 colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	ids := e.character_sets.input[:]
-	visual_fg := e.chars.visual
 	n := len(s.gradient)
 	frames := s.config.gradient_frames
 	cycle_ticks := s.config.cycles * n * frames
 	if s.config.cycles == 0 || s.tick < cycle_ticks {
-		for id, i in ids {
-			index := s.shifts[i] + s.palette_index
-			if index >= n do index -= n
-			visual_fg[id].fg = s.gradient[index]
+		for base := 0; base < len(ids); base += 8 {
+			count := min(8, len(ids) - base)
+			codes: [8]engine.Visual_Code_Id
+			for lane in 0 ..< count {
+				i := base + lane
+				id := ids[i]
+				row := s.symbol_index[id]
+				index := s.shifts[i] + s.palette_index
+				if index >= n do index -= n
+				codes[lane] = s.symbol_codes[row * n + index]
+			}
+			engine.set_visual_codes(e, ids[base:base + count], codes[:count])
 		}
 		s.palette_tick += 1
 		if s.palette_tick == frames {
@@ -196,25 +233,29 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Ch
 		transition_steps :: 8
 		if transition_step > transition_steps do return nil, false
 		for id, i in ids {
+			visual := engine.Visual {
+				symbol = e.chars.input_symbol[id],
+			}
 			start_index := s.shifts[i] - 1
 			if start_index < 0 do start_index += n
 			start := s.gradient[start_index]
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
-					&visual_fg[id],
+					&visual,
 					start,
 					e.chars.input_style[id],
 					transition_steps,
 					transition_step,
 				)
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					start,
 					s.final_colors[i],
 					transition_steps,
 					transition_step,
 				)
 			}
+			engine.set_visual(e, id, visual)
 		}
 	}
 	s.tick += 1

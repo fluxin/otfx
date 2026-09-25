@@ -112,12 +112,12 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	for id in characters {
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		e.chars.visual[id].symbol = e.chars.input_symbol[id]
+		engine.set_symbol(e, id, e.chars.input_symbol[id])
 		if s.color_handling == .Dynamic {
-			e.chars.visual[id].fg = e.chars.input_style[id].fg
-			e.chars.visual[id].bg = e.chars.input_style[id].bg
+			engine.set_foreground(e, id, e.chars.input_style[id].fg)
+			engine.set_background(e, id, e.chars.input_style[id].bg)
 		} else {
-			e.chars.visual[id].fg = s.final_colors[id]
+			engine.set_foreground(e, id, s.final_colors[id])
 		}
 		e.chars.is_visible[id] = true
 	}
@@ -149,8 +149,8 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		// A swapped pair has to read as an error from the first frame, not only
 		// once its own correction starts. The reference activates an
 		// error-coloured scene for both characters during setup.
-		e.chars.visual[first].fg = s.config.error_color
-		e.chars.visual[second].fg = s.config.error_color
+		engine.set_foreground(e, first, s.config.error_color)
+		engine.set_foreground(e, second, s.config.error_color)
 		append(&s.swapped, Errorcorrect_Pair{first, second})
 	}
 	reserve(&s.active, 2 * len(s.swapped))
@@ -174,48 +174,63 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 		if age >= total do continue
 		switch {
 		case age < 60:
-			if (age / 3) % 2 ==
-			   0 {e.chars.visual[id].symbol = "▓"; e.chars.visual[id].fg = s.config.error_color} else {e.chars.visual[id].symbol = e.chars.input_symbol[id]; e.chars.visual[id].fg = white}
+			if (age / 3) % 2 == 0 {
+				engine.set_symbol(e, id, "▓")
+				engine.set_foreground(e, id, s.config.error_color)
+			} else {
+				engine.set_symbol(e, id, e.chars.input_symbol[id])
+				engine.set_foreground(e, id, white)
+			}
 		case age < 84:
-			e.chars.visual[id].symbol = Errorcorrect_First_Wipe[(age - 60) / 3]
-			e.chars.visual[id].fg = s.config.error_color
+			engine.set_symbol(e, id, Errorcorrect_First_Wipe[(age - 60) / 3])
+			engine.set_foreground(e, id, s.config.error_color)
 		case age < last_start:
 			progress := f64(age - motion_start + 1) / f64(s.max_steps[id])
-			e.chars.current_coord[id] = engine.coord_on_line(
-				s.origins[id],
-				e.chars.input_coord[id],
-				progress,
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_line(s.origins[id], e.chars.input_coord[id], progress),
 			)
-			e.chars.layer[id] = 1
-			e.chars.visual[id].symbol = "█"
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.config.error_color,
-				s.config.correct_color,
-				10,
-				min(engine.round_half_even(progress * 10), 10),
+			engine.set_character(e, id, layer = 1)
+			engine.set_symbol(e, id, "█")
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(
+					s.config.error_color,
+					s.config.correct_color,
+					10,
+					min(engine.round_half_even(progress * 10), 10),
+				),
 			)
 		case age < last_start + 21:
-			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.layer[id] = 0
-			e.chars.visual[id].symbol = Errorcorrect_Last_Wipe[(age - last_start) / 3]
-			e.chars.visual[id].fg = s.config.correct_color
+			engine.set_character(e, id, coord = e.chars.input_coord[id])
+			engine.set_character(e, id, layer = 0)
+			engine.set_symbol(e, id, Errorcorrect_Last_Wipe[(age - last_start) / 3])
+			engine.set_foreground(e, id, s.config.correct_color)
 		case:
-			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			engine.set_symbol(e, id, e.chars.input_symbol[id])
 			step := min((age - last_start - 21) / 3, 10)
 			if s.color_handling == .Dynamic {
+				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_input(
-					&e.chars.visual[id],
+					&visual,
 					s.config.correct_color,
 					e.chars.input_style[id],
 					10,
 					step,
 				)
+				engine.set_visual(e, id, visual)
 			} else {
-				e.chars.visual[id].fg = engine.gradient_between_step(
-					s.config.correct_color,
-					s.final_colors[id],
-					10,
-					step,
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.config.correct_color,
+						s.final_colors[id],
+						10,
+						step,
+					),
 				)
 			}
 		}

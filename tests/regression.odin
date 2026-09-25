@@ -75,13 +75,16 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		engine.frame_build_all(&e)
 		testing.expect_value(t, len(e.out_buf), 0)
 		id := e.character_sets.input[0]
-		e.chars.visual[id].fg = engine.Color{255, 0, 0}
+		engine.set_foreground(&e, engine.Char_Id(id), engine.Color{255, 0, 0})
+		engine.mark_character_dirty(&e, id)
 		engine.frame_build_all(&e)
 		testing.expect_value(t, len(e.out_buf) == 0, no_color)
-		e.chars.visual[id].symbol = "X"
+		engine.set_symbol(&e, engine.Char_Id(id), "X")
+		engine.mark_character_dirty(&e, id)
 		engine.frame_build_all(&e)
 		testing.expect(t, strings.contains(string(e.out_buf[:]), "X"))
 		e.chars.is_visible[id] = false
+		engine.mark_character_dirty(&e, id)
 		engine.frame_build_all(&e)
 		testing.expect_value(t, string(e.out_buf[:]), " ")
 	}
@@ -152,12 +155,15 @@ render_painter_creation_order :: proc(t: ^testing.T) {
 	engine.update_render_cells_all(&e)
 	testing.expect_value(t, e.render_cells[0], i32(added))
 	e.chars.is_visible[added] = false
+	engine.mark_character_dirty(&e, added)
 	engine.update_render_cells_selected(&e, ids)
 	testing.expect_value(t, e.render_cells[0], i32(fill))
 	e.chars.is_visible[fill] = false
+	engine.mark_character_dirty(&e, fill)
 	engine.update_render_cells_selected(&e, ids)
 	testing.expect_value(t, e.render_cells[0], i32(b))
 	e.chars.layer[a] = 1
+	engine.mark_character_dirty(&e, a)
 	engine.update_render_cells_selected(&e, ids)
 	testing.expect_value(t, e.render_cells[0], i32(a))
 	engine.update_render_cells_all(&e)

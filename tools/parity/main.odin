@@ -78,7 +78,7 @@ otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 	for id in e.character_sets.input {
 		p := e.chars.input_coord[id]
 		cell := e.render_cells[(p.row - 1) * e.layout.visible_right + p.column - 1]
-		if cell < 0 || e.chars.visual[cell].symbol != e.chars.input_symbol[id] do return frames, false
+		if cell < 0 || engine.get_visual(e, engine.Char_Id(cell)).symbol != e.chars.input_symbol[id] do return frames, false
 	}
 	return frames, true
 }

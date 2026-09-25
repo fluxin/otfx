@@ -222,10 +222,9 @@ matrix_pending_column_pop :: proc(queue: ^Matrix_Column_Queue) -> int {
 }
 
 matrix_setup_column :: proc(
+	e: ^engine.Engine,
 	c: ^Matrix_Rain_Column,
 	characters: []engine.Char_Id,
-	is_visible: [^]bool,
-	current_coords, input_coords: [^]engine.Coord,
 	fall_delay_range: Int_Range_Value,
 	phase: Matrix_Column_Phase,
 ) {
@@ -235,8 +234,7 @@ matrix_setup_column :: proc(
 	c.full = false
 	c.phase = phase
 	for id in characters {
-		is_visible[id] = false
-		current_coords[id] = input_coords[id]
+		engine.set_character(e, id, visible = false, coord = e.chars.input_coord[id])
 	}
 	if phase == .Fill {
 		c.base_delay = rand.int_range(
@@ -262,42 +260,41 @@ matrix_trim :: proc(
 	c: ^Matrix_Rain_Column,
 	visible_characters: []engine.Char_Id,
 	rain_colors: []engine.Color,
-	chars: ^engine.Character_Storage,
+	e: ^engine.Engine,
 ) {
 	if c.visible_count == 0 do return
-	is_visible := chars.is_visible[:]
-	visual_symbols := chars.visual[:]
+
 	popped := visible_characters[c.characters.start + c.visible_head]
 	c.visible_head += 1
 	c.visible_count -= 1
-	is_visible[popped] = false
+	engine.set_character(e, popped, visible = false)
 	if c.visible_count > 1 {
 		// fade the new head to a darker tail color
 		tail := rain_colors[max(len(rain_colors) - 3, 0):]
 		darker := engine.adjust_color_brightness(tail[rand.int_max(len(tail))], 0.65)
 		target := visible_characters[c.characters.start + c.visible_head]
-		chars.visual[target] = {
-			symbol = visual_symbols[target].symbol,
-			fg     = darker,
-		}
+		engine.set_visual(
+			e,
+			target,
+			engine.Visual{symbol = engine.get_visual(e, target).symbol, fg = darker},
+		)
 	}
 }
 
 matrix_drop_column :: proc(
+	e: ^engine.Engine,
 	c: ^Matrix_Rain_Column,
 	visible_characters: []engine.Char_Id,
-	is_visible: [^]bool,
-	current_coords: [^]engine.Coord,
 	canvas_bottom: int,
 ) {
 	visible := matrix_column_visible(visible_characters, c^)
 	write := 0
 	for id in visible {
-		p := current_coords[id]
+		p := e.chars.current_coord[id]
 		p.row -= 1
-		current_coords[id] = p
+		engine.set_character(e, id, coord = p)
 		if p.row < canvas_bottom {
-			is_visible[id] = false
+			engine.set_character(e, id, visible = false)
 		} else {
 			visible[write] = id
 			write += 1
@@ -315,12 +312,10 @@ matrix_tick_column :: proc(
 	highlight_color: engine.Color,
 	symbol_swap_chance, color_swap_chance: f64,
 	canvas_bottom: int,
-	chars: ^engine.Character_Storage,
+	e: ^engine.Engine,
 ) {
-	is_visible := chars.is_visible[:]
-	current_coords := chars.current_coord[:]
-	visual_symbols := chars.visual[:]
-	visual_fg := chars.visual[:]
+
+
 	if c.active_delay != 0 {
 		c.active_delay -= 1
 	} else {
@@ -328,49 +323,42 @@ matrix_tick_column :: proc(
 			next := characters[c.pending_head]
 			c.pending_head += 1
 			sym := rain_symbols[rand.int_max(len(rain_symbols))]
-			chars.visual[next] = {
-				symbol = sym,
-				fg     = highlight_color,
-			}
+			engine.set_visual(e, next, engine.Visual{symbol = sym, fg = highlight_color})
 			if c.visible_count > 0 {
 				prev :=
 					visible_characters[c.characters.start + c.visible_head + c.visible_count - 1]
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				chars.visual[prev] = {
-					symbol = visual_symbols[prev].symbol,
-					fg     = col,
-				}
+				engine.set_visual(
+					e,
+					prev,
+					engine.Visual{symbol = engine.get_visual(e, prev).symbol, fg = col},
+				)
 			}
-			is_visible[next] = true
+			engine.set_character(e, next, visible = true)
 			visible_characters[c.characters.start + c.visible_head + c.visible_count] = next
 			c.visible_count += 1
 		} else if c.visible_count > 0 {
 			last := visible_characters[c.characters.start + c.visible_head + c.visible_count - 1]
-			last_fg := visual_fg[last].fg
+			last_fg := engine.get_visual(e, last).fg
 			if last_fg != nil && last_fg.? == highlight_color {
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				chars.visual[last] = {
-					symbol = visual_symbols[last].symbol,
-					fg     = col,
-				}
+				engine.set_visual(
+					e,
+					last,
+					engine.Visual{symbol = engine.get_visual(e, last).symbol, fg = col},
+				)
 			}
 			if c.hold_time != 0 {
 				c.hold_time -= 1
 			} else if c.phase == .Rain {
 				if rand.float64() < c.column_drop_chance {
-					matrix_drop_column(
-						c,
-						visible_characters,
-						is_visible,
-						current_coords,
-						canvas_bottom,
-					)
+					matrix_drop_column(e, c, visible_characters, canvas_bottom)
 				}
-				matrix_trim(c, visible_characters, rain_colors, chars)
+				matrix_trim(c, visible_characters, rain_colors, e)
 			}
 		}
 		if c.visible_count > c.length {
-			matrix_trim(c, visible_characters, rain_colors, chars)
+			matrix_trim(c, visible_characters, rain_colors, e)
 		}
 		c.active_delay = c.base_delay
 	}
@@ -385,8 +373,8 @@ matrix_tick_column :: proc(
 		if swap_symbol do next_symbol = rain_symbols[rand.int_max(len(rain_symbols))]
 		if swap_color do next_color = rain_colors[rand.int_max(len(rain_colors))]
 		if !swap_symbol && !swap_color do continue
-		current_symbol := visual_symbols[id].symbol
-		current_fg := visual_fg[id].fg
+		current_symbol := engine.get_visual(e, id).symbol
+		current_fg := engine.get_visual(e, id).fg
 		if swap_symbol &&
 		   next_symbol == current_symbol &&
 		   (!swap_color || (current_fg != nil && current_fg.? == next_color)) {
@@ -394,10 +382,7 @@ matrix_tick_column :: proc(
 		}
 		col := swap_color ? next_color : (current_fg != nil ? current_fg.? : highlight_color)
 		sym := swap_symbol ? next_symbol : current_symbol
-		chars.visual[id] = {
-			symbol = sym,
-			fg     = col,
-		}
+		engine.set_visual(e, id, engine.Visual{symbol = sym, fg = col})
 	}
 }
 
@@ -418,21 +403,19 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
+	characters := engine.get_characters(
 		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
 		engine.CHAR_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(chars[:])
+	defer delete(characters[:])
 	s.resolve_final_colors = make([]engine.Color, len(e.chars))
 	s.color_handling = e.cfg.existing_color_handling
 	s.resolve_ticks = make([]int, len(e.chars))
 	s.resolve_active_ids = make([]u8, len(e.chars))
-	input_coords := e.chars.input_coord[:]
-	input_symbols := e.chars.input_symbol[:]
 
-	for id in chars {
-		c := input_coords[id]
+	for id in characters {
+		c := e.chars.input_coord[id]
 		final := engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		s.resolve_final_colors[id] = final
 	}
@@ -456,15 +439,7 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		column.column_drop_chance = 0.08
 		// RainColumn.__init__ in the reference sets the first run's pending
 		// characters, delay, and visible trail length before it is activated.
-		matrix_setup_column(
-			&column,
-			g,
-			e.chars.is_visible,
-			e.chars.current_coord,
-			e.chars.input_coord,
-			s.config.rain_fall_delay_range,
-			.Rain,
-		)
+		matrix_setup_column(e, &column, g, s.config.rain_fall_delay_range, .Rain)
 		append(&s.columns, column)
 	}
 	engine.groups_delete(&col_groups)
@@ -474,39 +449,45 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	s.pending_columns.count = len(s.pending_columns.items)
 	reserve(&s.active_columns, len(s.columns))
 	reserve(&s.full_columns, len(s.columns))
-	reserve(&s.resolve_active, len(chars))
+	reserve(&s.resolve_active, len(characters))
 	rand.shuffle(s.pending_columns.items[:])
 	s.rain_start = engine.elapsed_seconds(e)
 	s.resolve_delay = s.config.resolve_delay
 }
 
-matrix_step_resolve :: proc(s: ^Matrix_State, chars: ^engine.Character_Storage) {
+matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	write := 0
 	for id in s.resolve_active {
 		tick := s.resolve_ticks[id]
 		step := min(tick / s.config.final_gradient_frames, 8)
-		chars.visual[id].symbol = chars.input_symbol[id]
+		engine.set_symbol(e, id, e.chars.input_symbol[id])
 		if s.color_handling == .Dynamic {
+			visual := engine.get_visual(e, id)
 			engine.dynamic_gradient_to_input(
-				&chars.visual[id],
+				&visual,
 				s.config.highlight_color,
-				chars.input_style[id],
+				e.chars.input_style[id],
 				8,
 				step,
 			)
+			engine.set_visual(e, id, visual)
 		} else {
-			chars.visual[id].fg = engine.gradient_between_step(
-				s.config.highlight_color,
-				s.resolve_final_colors[id],
-				8,
-				step,
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(
+					s.config.highlight_color,
+					s.resolve_final_colors[id],
+					8,
+					step,
+				),
 			)
 		}
 		tick += 1
 		limit := 9 * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic &&
-		   chars.input_style[id].fg == nil &&
-		   chars.input_style[id].bg == nil {
+		   e.chars.input_style[id].fg == nil &&
+		   e.chars.input_style[id].bg == nil {
 			limit = s.config.final_gradient_frames
 		}
 		if tick == limit {
@@ -526,11 +507,7 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 	columns := s.columns[:]
 	rain_symbols := s.config.rain_symbols[:]
 	rain_colors := s.rain_colors[:]
-	chars := &e.chars
-	is_visible := e.chars.is_visible
 	input_symbols := e.chars.input_symbol
-	current_coords := e.chars.current_coord
-	input_coords := e.chars.input_coord
 	canvas_bottom := e.canvas.bottom
 	if s.phase == .Rain || s.phase == .Fill {
 		if s.column_delay == 0 {
@@ -562,7 +539,7 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 				s.config.symbol_swap_chance,
 				s.config.color_swap_chance,
 				canvas_bottom,
-				chars,
+				e,
 			)
 			if column.pending_head == column.characters.len {
 				if column.phase == .Fill && !column.full {
@@ -571,11 +548,9 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 				} else if column.visible_count == 0 {
 					phase: Matrix_Column_Phase = s.phase == .Rain ? .Rain : .Fill
 					matrix_setup_column(
+						e,
 						column,
 						engine.span_slice(column_characters, column.characters),
-						is_visible,
-						current_coords,
-						input_coords,
 						s.config.rain_fall_delay_range,
 						phase,
 					)
@@ -621,11 +596,9 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 			for _ in 0 ..< s.pending_columns.count {
 				ci := s.pending_columns.items[pending_index]
 				matrix_setup_column(
+					e,
 					&columns[ci],
 					engine.span_slice(column_characters, columns[ci].characters),
-					is_visible,
-					current_coords,
-					input_coords,
 					s.config.rain_fall_delay_range,
 					.Fill,
 				)
@@ -646,7 +619,7 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 				s.config.symbol_swap_chance,
 				s.config.color_swap_chance,
 				canvas_bottom,
-				chars,
+				e,
 			)
 			if column.visible_count > 0 {
 				if s.resolve_delay == 0 {
@@ -663,14 +636,18 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 							if s.resolve_active_ids[next] == 0 {
 								s.resolve_active_ids[next] = 1
 								s.resolve_ticks[next] = 0
-								chars.visual[next] = {
-									symbol = input_symbols[next],
-									fg     = s.config.highlight_color,
-								}
+								engine.set_visual(
+									e,
+									next,
+									engine.Visual {
+										symbol = input_symbols[next],
+										fg = s.config.highlight_color,
+									},
+								)
 								append(&s.resolve_active, next)
 							}
 						} else {
-							is_visible[next] = false
+							engine.set_character(e, next, visible = false)
 						}
 					}
 					s.resolve_delay = s.config.resolve_delay
@@ -694,12 +671,12 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 	   len(s.resolve_active) > 0 ||
 	   s.pending_columns.count > 0 ||
 	   !s.rain_complete {
-		matrix_step_resolve(s, chars)
+		matrix_step_resolve(s, e)
 		return nil, true
 	}
 	if !s.final_frame_shown {
 		s.final_frame_shown = true
-		matrix_step_resolve(s, chars)
+		matrix_step_resolve(s, e)
 		return nil, true
 	}
 	return nil, false

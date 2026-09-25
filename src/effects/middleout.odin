@@ -151,10 +151,11 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		style := e.chars.input_style[id]
 		fade_ticks := s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 6 : 66
 		s.full_limit = max(s.full_limit, fade_ticks)
-		e.chars.visual[id] = {
-			symbol = e.chars.input_symbol[id],
-			fg     = s.config.starting_color,
-		}
+		engine.set_visual(
+			e,
+			id,
+			engine.Visual{symbol = e.chars.input_symbol[id], fg = s.config.starting_color},
+		)
 		e.chars.is_visible[id] = true
 	}
 }
@@ -167,10 +168,12 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 		s.phase_tick = 0
 	}
 	for id, i in s.characters {
+		position := e.chars.current_coord[id]
+		visual := engine.get_visual(e, id)
 		if s.phase_full {
 			if s.phase_tick < s.full_max_steps[i] {
 				progress := f64(s.phase_tick + 1) / f64(s.full_max_steps[i])
-				e.chars.current_coord[id] = engine.coord_on_line(
+				position = engine.coord_on_line(
 					s.center_targets[i],
 					e.chars.input_coord[id],
 					ease.ease(s.config.full_easing, progress),
@@ -179,14 +182,14 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 			gradient_step := min(s.phase_tick / 6, 10)
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
-					&e.chars.visual[id],
+					&visual,
 					s.config.starting_color,
 					e.chars.input_style[id],
 					10,
 					gradient_step,
 				)
 			} else {
-				e.chars.visual[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					s.config.starting_color,
 					s.final_colors[i],
 					10,
@@ -195,13 +198,14 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 			}
 		} else if s.phase_tick < s.center_max_steps[i] {
 			progress := f64(s.phase_tick + 1) / f64(s.center_max_steps[i])
-			e.chars.current_coord[id] = engine.coord_on_line(
+			position = engine.coord_on_line(
 				e.canvas.center,
 				s.center_targets[i],
 				ease.ease(s.config.center_easing, progress),
 			)
 		}
+		engine.set_character(e, id, coord = position, visual = visual)
 	}
 	s.phase_tick += 1
-	return s.characters[:], true
+	return nil, true
 }

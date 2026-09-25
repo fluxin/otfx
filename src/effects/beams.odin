@@ -282,7 +282,7 @@ beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Grou
 	group.head += 1
 	s.beam_start_ticks[next] = s.tick
 	s.beam_modes[next] = group.direction
-	e.chars.is_visible[next] = true
+	engine.set_character(e, next, visible = true)
 }
 
 beams_beam_active :: proc(s: Beams_State) -> bool {
@@ -313,10 +313,10 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 				palette_index := age / s.config.beam_gradient_frames
 				if palette_index < len(s.beam_palette) {
 					symbols := s.beam_modes[id] == .Row ? s.row_symbols : s.column_symbols
-					e.chars.visual[id].symbol = symbols[palette_index]
-					e.chars.visual[id].fg = s.beam_palette[palette_index]
+					engine.set_symbol(e, id, symbols[palette_index])
+					engine.set_foreground(e, id, s.beam_palette[palette_index])
 				} else {
-					e.chars.visual[id].symbol = e.chars.input_symbol[id]
+					engine.set_symbol(e, id, e.chars.input_symbol[id])
 					step := min(
 						(age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2,
 						10,
@@ -324,31 +324,43 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 					if s.color_handling == .Dynamic && !e.chars.is_fill[id] {
 						style := e.chars.input_style[id]
 						if fg, ok := style.fg.?; ok {
-							e.chars.visual[id].fg = engine.gradient_between_step(
-								fg,
-								engine.adjust_color_brightness(fg, 0.3),
-								10,
-								step,
+							engine.set_foreground(
+								e,
+								id,
+								engine.gradient_between_step(
+									fg,
+									engine.adjust_color_brightness(fg, 0.3),
+									10,
+									step,
+								),
 							)
 						} else {
-							e.chars.visual[id].fg = nil
+							engine.set_foreground(e, id, nil)
 						}
 						if bg, ok := style.bg.?; ok {
-							e.chars.visual[id].bg = engine.gradient_between_step(
-								bg,
-								engine.adjust_color_brightness(bg, 0.3),
-								10,
-								step,
+							engine.set_background(
+								e,
+								id,
+								engine.gradient_between_step(
+									bg,
+									engine.adjust_color_brightness(bg, 0.3),
+									10,
+									step,
+								),
 							)
 						} else {
-							e.chars.visual[id].bg = nil
+							engine.set_background(e, id, nil)
 						}
 					} else {
-						e.chars.visual[id].fg = engine.gradient_between_step(
-							s.final_colors[id],
-							s.faded_colors[id],
-							10,
-							step,
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								s.final_colors[id],
+								s.faded_colors[id],
+								10,
+								step,
+							),
 						)
 					}
 				}
@@ -359,36 +371,48 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 		if wipe_start >= 0 {
 			age := s.tick - wipe_start
 			if age < 11 * s.config.final_gradient_frames {
-				e.chars.visual[id].symbol = e.chars.input_symbol[id]
+				engine.set_symbol(e, id, e.chars.input_symbol[id])
 				step := min(age / s.config.final_gradient_frames, 10)
 				if s.color_handling == .Dynamic && !e.chars.is_fill[id] {
 					style := e.chars.input_style[id]
 					if fg, ok := style.fg.?; ok {
-						e.chars.visual[id].fg = engine.gradient_between_step(
-							engine.adjust_color_brightness(fg, 0.3),
-							fg,
-							10,
-							step,
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								engine.adjust_color_brightness(fg, 0.3),
+								fg,
+								10,
+								step,
+							),
 						)
 					} else {
-						e.chars.visual[id].fg = nil
+						engine.set_foreground(e, id, nil)
 					}
 					if bg, ok := style.bg.?; ok {
-						e.chars.visual[id].bg = engine.gradient_between_step(
-							engine.adjust_color_brightness(bg, 0.3),
-							bg,
-							10,
-							step,
+						engine.set_background(
+							e,
+							id,
+							engine.gradient_between_step(
+								engine.adjust_color_brightness(bg, 0.3),
+								bg,
+								10,
+								step,
+							),
 						)
 					} else {
-						e.chars.visual[id].bg = nil
+						engine.set_background(e, id, nil)
 					}
 				} else {
-					e.chars.visual[id].fg = engine.gradient_between_step(
-						s.faded_colors[id],
-						s.final_colors[id],
-						10,
-						step,
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(
+							s.faded_colors[id],
+							s.final_colors[id],
+							10,
+							step,
+						),
 					)
 				}
 			}
@@ -447,7 +471,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 				s.final_wipe_idx += 1
 				for id in g {
 					s.wipe_start_ticks[id] = s.tick
-					e.chars.is_visible[id] = true
+					engine.set_character(e, id, visible = true)
 				}
 			}
 		} else {

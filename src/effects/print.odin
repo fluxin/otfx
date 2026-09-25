@@ -173,7 +173,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			for _ in 0 ..< count {
 				id := characters[row.typed]
 				row.typed += 1
-				e.chars.is_visible[id] = true
+				engine.set_character(e, id, visible = true)
 				s.char_start_ticks[id] = s.tick
 				append(&s.active_chars, id)
 				s.last_column = e.chars.input_coord[id].column
@@ -182,7 +182,16 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			for row_index in 0 ..= s.current_row {
 				processed := &s.rows[row_index]
 				ids := print_row_characters(s, row_index)[:processed.typed]
-				for id in ids do e.chars.current_coord[id].row += 1
+				for id in ids {
+					engine.set_character(
+						e,
+						id,
+						coord = engine.Coord {
+							e.chars.current_coord[id].column,
+							e.chars.current_coord[id].row + (1),
+						},
+					)
+				}
 			}
 			previous := s.current_row
 			s.current_row += 1
@@ -203,8 +212,8 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			}
 
 			s.head_origin = engine.coord(s.last_column, 1)
-			e.chars.current_coord[s.typing_head] = s.head_origin
-			e.chars.is_visible[s.typing_head] = true
+			engine.set_character(e, s.typing_head, coord = s.head_origin)
+			engine.set_character(e, s.typing_head, visible = true)
 			target_column := e.chars.input_coord[current_ids[0]].column
 			s.head_target = engine.coord(target_column, 1)
 			s.head_max_steps = max(
@@ -226,32 +235,31 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		if age >= 18 do continue
 		frame := min(age / 3, 5)
 		if frame < 4 {
-			e.chars.visual[id].symbol = Print_Typing_Symbols[frame]
+			engine.set_symbol(e, id, Print_Typing_Symbols[frame])
 		} else if frame == 4 {
-			e.chars.visual[id].symbol = "░"
+			engine.set_symbol(e, id, "░")
 		} else {
-			e.chars.visual[id].symbol = e.chars.input_symbol[id]
+			engine.set_symbol(e, id, e.chars.input_symbol[id])
 		}
 		if s.color_handling == .Dynamic {
 			style := e.chars.input_style[id]
 			if fg, ok := style.fg.?; ok {
-				e.chars.visual[id].fg = engine.gradient_between_step(white, fg, 5, frame)
+				engine.set_foreground(e, id, engine.gradient_between_step(white, fg, 5, frame))
 			} else if style.bg == nil && frame < 5 {
-				e.chars.visual[id].fg = white
+				engine.set_foreground(e, id, white)
 			} else {
-				e.chars.visual[id].fg = nil
+				engine.set_foreground(e, id, nil)
 			}
 			if bg, ok := style.bg.?; ok {
-				e.chars.visual[id].bg = engine.gradient_between_step(white, bg, 5, frame)
+				engine.set_background(e, id, engine.gradient_between_step(white, bg, 5, frame))
 			} else {
-				e.chars.visual[id].bg = nil
+				engine.set_background(e, id, nil)
 			}
 		} else {
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				white,
-				s.final_colors[id],
-				5,
-				frame,
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(white, s.final_colors[id], 5, frame),
 			)
 		}
 		if age + 1 < 18 {
@@ -263,14 +271,18 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	if s.head_return_active {
 		age := s.tick - s.head_start_tick
 		progress := f64(age + 1) / f64(s.head_max_steps)
-		e.chars.current_coord[s.typing_head] = engine.coord_on_line(
-			s.head_origin,
-			s.head_target,
-			ease.ease(s.config.print_head_easing, progress),
+		engine.set_character(
+			e,
+			s.typing_head,
+			coord = engine.coord_on_line(
+				s.head_origin,
+				s.head_target,
+				ease.ease(s.config.print_head_easing, progress),
+			),
 		)
 		if age + 1 >= s.head_max_steps {
-			e.chars.current_coord[s.typing_head] = s.head_target
-			e.chars.is_visible[s.typing_head] = false
+			engine.set_character(e, s.typing_head, coord = s.head_target)
+			engine.set_character(e, s.typing_head, visible = false)
 			s.head_return_active = false
 		}
 	}

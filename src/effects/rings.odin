@@ -112,7 +112,6 @@ Rings_State :: struct {
 	steps:              [dynamic]int,
 	max_steps:          [dynamic]int,
 	modes:              [dynamic]Rings_Mode,
-	render_ids:         [dynamic]engine.Char_Id,
 	rings:              [dynamic]Ring,
 	phase:              Rings_Phase,
 	initial_disperse:   bool,
@@ -177,19 +176,19 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	s.steps = make([dynamic]int, n)
 	s.max_steps = make([dynamic]int, n)
 	s.modes = make([dynamic]Rings_Mode, n)
-	reserve(&s.render_ids, n)
-	append(&s.render_ids, ..chars[:])
 
 	input_coords := e.chars.input_coord
-	visual_fg := e.chars.visual
+
 	visible := e.chars.is_visible
 	for id, slot in chars {
 		s.final_colors[slot] = engine.gradient_sample(sampler, final_spectrum[:], input_coords[id])
 		s.ring_by_slot[slot] = -1
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			visual := engine.get_visual(e, id)
+			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.set_visual(e, id, visual)
 		} else {
-			visual_fg[id].fg = s.final_colors[slot]
+			engine.set_foreground(e, id, s.final_colors[slot])
 		}
 		visible[id] = true
 	}
@@ -298,51 +297,54 @@ rings_begin_spin :: proc(s: ^Rings_State, e: ^engine.Engine) {
 rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	for slot in 0 ..< len(s.ids) {
 		id := s.ids[slot]
-		e.chars.is_visible[id] = true
+		engine.set_character(e, id, visible = true)
 		s.modes[slot] = .Home
 		rings_begin_line(s, e, slot, e.chars.input_coord[id], 0.8)
 	}
 }
 
 rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
-	visual_fg := e.chars.visual
 	for slot in 0 ..< len(s.ids) {
 		id := s.ids[slot]
+		visual := engine.get_visual(e, id)
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.set_character(e, id, visual = visual)
 			continue
 		}
 		ring_index := s.ring_by_slot[slot]
 		if ring_index < 0 {
-			if s.phase == .Final do visual_fg[id].fg = s.final_colors[slot]
+			if s.phase == .Final {
+				visual.fg = s.final_colors[slot]
+			}
+			engine.set_character(e, id, visual = visual)
 			continue
 		}
 		ring_color := s.rings[ring_index].color
 		switch s.phase {
 		case .Disperse:
-			visual_fg[id].fg = engine.gradient_between_step(
+			visual.fg = engine.gradient_between_step(
 				ring_color,
 				s.final_colors[slot],
 				8,
 				min(s.color_tick / 10, 8),
 			)
 		case .Spin:
-			visual_fg[id].fg = engine.gradient_between_step(
+			visual.fg = engine.gradient_between_step(
 				s.final_colors[slot],
 				ring_color,
 				8,
 				min(s.color_tick / 3, 8),
 			)
 		case .Final:
-			visual_fg[id].fg = s.final_colors[slot]
+			visual.fg = s.final_colors[slot]
 		case .Start, .Complete:
 		}
+		engine.set_character(e, id, visual = visual)
 	}
 }
 
 rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
-	coords := e.chars.current_coord
-	visible := e.chars.is_visible
 	for slot in 0 ..< len(s.ids) {
 		mode := s.modes[slot]
 		if mode == .Idle || mode == .Complete do continue
@@ -359,7 +361,11 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			factor = ease.ease(.Quadratic_Out, factor)
 		case .Disperse_Loop, .Condense, .Rotate, .Idle, .Complete:
 		}
-		coords[id] = engine.coord_on_line(s.origins[slot], s.targets[slot], factor)
+		engine.set_character(
+			e,
+			id,
+			coord = engine.coord_on_line(s.origins[slot], s.targets[slot], factor),
+		)
 		if step < maximum {
 			s.steps[slot] = step
 			continue
@@ -397,7 +403,7 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 				s.rings[s.ring_by_slot[slot]].rotation_speed,
 			)
 		case .External:
-			visible[id] = false
+			engine.set_character(e, id, visible = false)
 			s.modes[slot] = .Complete
 		case .Home:
 			s.modes[slot] = .Complete
@@ -451,5 +457,5 @@ rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	rings_update_colors(s, e)
 	rings_update_motion(s, e)
 	s.color_tick += 1
-	return s.render_ids[:], true
+	return nil, true
 }

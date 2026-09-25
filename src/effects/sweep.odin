@@ -192,7 +192,9 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	change := engine.group_reveal_step(&s.reveal)
 	for gi in change.added.start ..< change.added.start + change.added.len {
 		for id in engine.group_members(s.reveal.groups, gi) {
-			if s.first_phase do e.chars.is_visible[id] = true
+			if s.first_phase {
+				engine.set_character(e, id, visible = true)
+			}
 			phase: i8 = 0
 			if !s.first_phase {
 				phase = 1
@@ -219,7 +221,7 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		span := phase == 0 ? s.first_frame_spans[id] : s.second_frame_spans[id]
 		age := s.tick - s.start_ticks[id]
 		frame := age / 5
-		e.chars.visual[id] = s.frames[span.start + frame].visual
+		engine.set_visual(e, id, s.frames[span.start + frame].visual)
 		if age + 1 == (span.len - 1) * 5 + 1 {
 			s.active_phase[id] = -1
 		} else {

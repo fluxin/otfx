@@ -269,11 +269,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 	s.launch_delay -= 1
 
 	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
 	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
-	visible := e.chars.is_visible
 	launch_phases := s.shell_launch_phase
 	for id, i in s.characters {
 		shell := s.shell_index[i]
@@ -288,19 +284,19 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 		bloom_steps := s.bloom_steps[i]
 		explode_end := apex_end + explode_steps
 		bloom_end := explode_end + bloom_steps
-		visible[id] = true
-		e.chars.layer[id] = 2
+		position := e.chars.current_coord[id]
+		visual := engine.get_visual(e, id)
 		if age < apex_end {
-			current_coords[id] = engine.coord_on_line(
+			position = engine.coord_on_line(
 				launch,
 				origin,
 				ease.ease(.Exponential_Out, f64(age + 1) / f64(s.apex_steps[i])),
 			)
-			visual_symbols[id].symbol = s.config.firework_symbol
-			visual_fg[id].fg = launch_phases[shell] == 2 ? engine.Color{0xFF, 0xFF, 0xFF} : color
+			visual.symbol = s.config.firework_symbol
+			visual.fg = launch_phases[shell] == 2 ? engine.Color{0xFF, 0xFF, 0xFF} : color
 		} else if age < explode_end {
 			move_age := age - apex_end
-			current_coords[id] = engine.coord_on_line(
+			position = engine.coord_on_line(
 				origin,
 				s.explode_targets[i],
 				ease.ease(.Circular_Out, f64(move_age + 1) / f64(explode_steps)),
@@ -318,16 +314,16 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				gradient_frames - 1,
 			)
 			gradient_step := math.floor_div(frame_index, 2)
-			visual_symbols[id].symbol = input_symbols[id]
+			visual.symbol = input_symbols[id]
 			if gradient_step <= 5 {
-				visual_fg[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					color,
 					engine.Color{0xFF, 0xFF, 0xFF},
 					5,
 					gradient_step,
 				)
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					engine.Color{0xFF, 0xFF, 0xFF},
 					color,
 					5,
@@ -336,7 +332,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 			}
 		} else if age < bloom_end {
 			move_age := age - explode_end
-			current_coords[id] = engine.coord_on_quadratic_bezier(
+			position = engine.coord_on_quadratic_bezier(
 				s.explode_targets[i],
 				s.bloom_controls[i],
 				s.bloom_targets[i],
@@ -352,16 +348,16 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				gradient_frames - 1,
 			)
 			entry := math.floor_div(frame_index, 2)
-			visual_symbols[id].symbol = input_symbols[id]
+			visual.symbol = input_symbols[id]
 			if entry <= 5 {
-				visual_fg[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					color,
 					engine.Color{0xFF, 0xFF, 0xFF},
 					5,
 					entry,
 				)
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					engine.Color{0xFF, 0xFF, 0xFF},
 					color,
 					5,
@@ -372,24 +368,24 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 			fall_age := age - bloom_end
 			input := input_coords[id]
 			if fall_age < s.fall_steps[i] {
-				current_coords[id] = engine.coord_on_quadratic_bezier(
+				position = engine.coord_on_quadratic_bezier(
 					s.bloom_targets[i],
 					engine.coord(s.bloom_targets[i].column, 1),
 					input,
 					ease.ease(.Quartic_In_Out, f64(fall_age + 1) / f64(s.fall_steps[i])),
 				)
 			}
-			visual_symbols[id].symbol = input_symbols[id]
+			visual.symbol = input_symbols[id]
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
-					&visual_fg[id],
+					&visual,
 					color,
 					e.chars.input_style[id],
 					15,
 					min(fall_age / 10, 15),
 				)
 			} else {
-				visual_fg[id].fg = engine.gradient_between_step(
+				visual.fg = engine.gradient_between_step(
 					color,
 					s.final_colors[i],
 					15,
@@ -397,6 +393,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				)
 			}
 		}
+		engine.set_character(e, id, coord = position, visible = true, layer = 2, visual = visual)
 	}
 	for shell in 0 ..< len(launch_phases) {
 		if s.shell_start_ticks[shell] < 0 do continue
@@ -404,5 +401,5 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 		launch_phases[shell] = phase == 3 ? 0 : phase
 	}
 	s.tick += 1
-	return s.characters[:], true
+	return nil, true
 }

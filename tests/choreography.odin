@@ -77,14 +77,14 @@ smoke_symbols_span_the_gradient :: proc(t: ^testing.T) {
 			for _ in 0 ..< 3 {
 				_, alive := effects.smoke_next(&s, &e)
 				testing.expect(t, alive)
-				testing.expect_value(t, e.chars.visual[id].symbol, symbol)
+				testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).symbol, symbol)
 			}
 		}
 		for s.tick < s.last_tick do effects.smoke_next(&s, &e)
-		testing.expect_value(t, e.chars.visual[id].symbol, "X")
+		testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).symbol, "X")
 		testing.expect_value(
 			t,
-			e.chars.visual[id].fg,
+			engine.get_visual(&e, engine.Char_Id(id)).fg,
 			Maybe(engine.Color)(engine.Color{255, 255, 255}),
 		)
 		_, alive := effects.smoke_next(&s, &e)
@@ -208,7 +208,11 @@ laseretch_sparks_cool_during_flight :: proc(t: ^testing.T) {
 	for _ in 0 ..< 3 do effects.laseretch_next(&s, &e)
 	id := s.spark_ids[0]
 	testing.expect(t, s.spark_steps[0] > 3)
-	testing.expect_value(t, e.chars.visual[id].fg, Maybe(engine.Color)(s.spark_spectrum[1]))
+	testing.expect_value(
+		t,
+		engine.get_visual(&e, engine.Char_Id(id)).fg,
+		Maybe(engine.Color)(s.spark_spectrum[1]),
+	)
 	// Reclaim on color-scene completion even if the movement path is longer.
 	for s.tick <= len(s.spark_spectrum) * 2 do effects.laseretch_next(&s, &e)
 	testing.expect(t, !e.chars.is_visible[id])

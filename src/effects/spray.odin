@@ -204,7 +204,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			if len(s.pending) == 0 do break
 			id := pop(&s.pending)
 			s.start_ticks[s.index_by_id[id]] = s.tick
-			e.chars.is_visible[id] = true
+			engine.set_character(e, id, visible = true)
 		}
 	}
 	for id, i in s.characters {
@@ -213,34 +213,44 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		age := s.tick - start
 		if age < s.max_steps[i] {
 			progress := f64(age + 1) / f64(s.max_steps[i])
-			e.chars.current_coord[id] = engine.coord_on_line(
-				s.origin,
-				e.chars.input_coord[id],
-				ease.ease(s.config.movement_easing, progress),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_line(
+					s.origin,
+					e.chars.input_coord[id],
+					ease.ease(s.config.movement_easing, progress),
+				),
 			)
-			e.chars.layer[id] = 1
+			engine.set_character(e, id, layer = 1)
 		} else {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.layer[id] = 0
+			engine.set_character(e, id, coord = e.chars.input_coord[id])
+			engine.set_character(e, id, layer = 0)
 		}
 		if s.color_handling == .Dynamic {
 			step := min(age / 20, 7)
+			visual := engine.get_visual(e, id)
 			engine.dynamic_gradient_to_input(
-				&e.chars.visual[id],
+				&visual,
 				s.start_colors[i],
 				e.chars.input_style[id],
 				7,
 				step,
 			)
+			engine.set_visual(e, id, visual)
 		} else if age < 160 {
-			e.chars.visual[id].fg = engine.gradient_between_step(
-				s.start_colors[i],
-				s.final_colors[i],
-				7,
-				min(age / 20, 7),
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(
+					s.start_colors[i],
+					s.final_colors[i],
+					7,
+					min(age / 20, 7),
+				),
 			)
 		} else {
-			e.chars.visual[id].fg = s.final_colors[i]
+			engine.set_foreground(e, id, s.final_colors[i])
 		}
 	}
 	s.tick += 1

@@ -112,22 +112,20 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 		maximum := s.max_steps[i]
 		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
 		factor := ease.ease(s.config.expand_easing, progress)
-		e.chars.current_coord[id] = engine.coord_on_line(
-			e.canvas.center,
-			e.chars.input_coord[id],
-			factor,
-		)
+		visual := engine.get_visual(e, id)
+		layer := e.chars.layer[id]
+		position := engine.coord_on_line(e.canvas.center, e.chars.input_coord[id], factor)
 		step := min(engine.round_half_even(factor * 10), 10)
 		if s.color_handling == .Dynamic {
 			engine.dynamic_gradient_to_input(
-				&e.chars.visual[id],
+				&visual,
 				s.config.final_gradient_stops[0],
 				e.chars.input_style[id],
 				10,
 				step,
 			)
 		} else {
-			e.chars.visual[id].fg = engine.gradient_between_step(
+			visual.fg = engine.gradient_between_step(
 				s.config.final_gradient_stops[0],
 				s.final_colors[i],
 				10,
@@ -135,16 +133,17 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 			)
 		}
 		if s.tick + 1 >= maximum {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
+			position = e.chars.input_coord[id]
 			if s.color_handling == .Dynamic {
-				e.chars.visual[id].fg = e.chars.input_style[id].fg
-				e.chars.visual[id].bg = e.chars.input_style[id].bg
+				visual.fg = e.chars.input_style[id].fg
+				visual.bg = e.chars.input_style[id].bg
 			} else {
-				e.chars.visual[id].fg = s.final_colors[i]
+				visual.fg = s.final_colors[i]
 			}
-			e.chars.layer[id] = 0
+			layer = 0
 		}
+		engine.set_character(e, id, coord = position, layer = layer, visual = visual)
 	}
 	s.tick += 1
-	return s.characters[:], true
+	return nil, true
 }

@@ -158,7 +158,6 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	for i in 0 ..< n do s.start_ticks[i] = -1
 	input_coords := e.chars.input_coord[:]
 	current_coords := e.chars.current_coord[:]
-	input_symbols := e.chars.input_symbol[:]
 	visible := e.chars.is_visible[:]
 
 	for gi in 0 ..< len(groups.spans) {
@@ -212,7 +211,7 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 				if s.head >= cur.len do break
 				next := pool[cur.start + s.head]
 				s.head += 1
-				visible[next] = true
+				engine.set_character(e, next, visible = true)
 				append(&s.revealed, next)
 				slot := s.index_by_id[next]
 				s.start_ticks[slot] = s.tick
@@ -241,38 +240,42 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		if age >= life do continue
 		if age < s.max_steps[slot] {
 			progress := f64(age + 1) / f64(s.max_steps[slot])
-			e.chars.current_coord[id] = engine.coord_on_line(
-				s.origins[slot],
-				e.chars.input_coord[id],
-				ease.ease(s.config.movement_easing, progress),
+			engine.set_character(
+				e,
+				id,
+				coord = engine.coord_on_line(
+					s.origins[slot],
+					e.chars.input_coord[id],
+					ease.ease(s.config.movement_easing, progress),
+				),
 			)
 		} else {
-			e.chars.current_coord[id] = e.chars.input_coord[id]
+			engine.set_character(e, id, coord = e.chars.input_coord[id])
 		}
 		if age < color_ticks {
 			step := min(age / s.config.final_gradient_frames, color_steps)
 			if s.color_handling == .Dynamic {
-				engine.dynamic_gradient_to_input(
-					&e.chars.visual[id],
-					s.config.starting_color,
-					style,
-					10,
-					step,
-				)
+				visual := engine.get_visual(e, id)
+				engine.dynamic_gradient_to_input(&visual, s.config.starting_color, style, 10, step)
+				engine.set_visual(e, id, visual)
 			} else {
-				e.chars.visual[id].fg = engine.gradient_between_step(
-					s.config.starting_color,
-					s.final_colors[slot],
-					s.color_steps,
-					step,
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.config.starting_color,
+						s.final_colors[slot],
+						s.color_steps,
+						step,
+					),
 				)
 			}
 		} else {
 			if s.color_handling == .Dynamic {
-				e.chars.visual[id].fg = style.fg
-				e.chars.visual[id].bg = style.bg
+				engine.set_foreground(e, id, style.fg)
+				engine.set_background(e, id, style.bg)
 			} else {
-				e.chars.visual[id].fg = s.final_colors[slot]
+				engine.set_foreground(e, id, s.final_colors[slot])
 			}
 		}
 		if age + 1 < life {s.active_slots[write] = slot; write += 1}

@@ -128,7 +128,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 
 	current_coords := e.chars.current_coord
 	visible := e.chars.is_visible
-	visual_fg := e.chars.visual
+
 	for id, i in s.characters {
 		edge := rand.int_max(4)
 		target: engine.Coord
@@ -167,10 +167,14 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		current_coords[id] = jumbled
 		if s.color_handling == .Dynamic {
 			style := e.chars.input_style[id]
-			visual_fg[id].fg = style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
-			visual_fg[id].bg = style.bg
+			engine.set_foreground(
+				e,
+				id,
+				style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80},
+			)
+			engine.set_background(e, id, style.bg)
 		} else {
-			visual_fg[id].fg = final_color
+			engine.set_foreground(e, id, final_color)
 		}
 		visible[id] = true
 	}
@@ -180,65 +184,65 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 
 unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	input_coords := e.chars.input_coord
-	current_coords := e.chars.current_coord
-	visual_fg := e.chars.visual
 
 	for {
 		switch s.phase {
 		case .Rumble:
-			// A jittered frame remains in character storage until it has been
-			// consumed by the engine. Restore the stable positions before
-			// advancing the next effect tick.
-			for id, i in s.characters do current_coords[id] = s.jumbled_coords[i]
 			if s.phase_tick == 150 {
 				s.phase = .Explosion
 				s.phase_tick = 0
 				continue
 			}
+			// Compute the final position before publishing this frame.
+			jitter := s.phase_tick > 30 && s.phase_tick % s.rumble_delay == 0
+			row_offset, column_offset := 0, 0
+			if jitter {
+				row_offset = rand.int_range(-1, 2)
+				column_offset = rand.int_range(-1, 2)
+			}
 			color_step := min(s.phase_tick / 10, 12)
 			for id, i in s.characters {
+				visual := engine.get_visual(e, id)
 				if s.color_handling == .Dynamic {
 					style := e.chars.input_style[id]
 					start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
-					visual_fg[id].fg = engine.gradient_between_step(
+					visual.fg = engine.gradient_between_step(
 						start,
 						s.config.unstable_color,
 						12,
 						color_step,
 					)
 					if bg, ok := style.bg.?; ok {
-						visual_fg[id].bg = engine.gradient_between_step(
+						visual.bg = engine.gradient_between_step(
 							bg,
 							s.config.unstable_color,
 							12,
 							color_step,
 						)
 					} else {
-						visual_fg[id].bg = nil
+						visual.bg = nil
 					}
 				} else {
-					visual_fg[id].fg = engine.gradient_between_step(
+					visual.fg = engine.gradient_between_step(
 						s.final_colors[i],
 						s.config.unstable_color,
 						12,
 						color_step,
 					)
 				}
-			}
-			jitter := s.phase_tick > 30 && s.phase_tick % s.rumble_delay == 0
-			if jitter {
-				row_offset := rand.int_range(-1, 2)
-				column_offset := rand.int_range(-1, 2)
-				for id, i in s.characters {
-					p := s.jumbled_coords[i]
-					current_coords[id] = engine.coord(p.column + column_offset, p.row + row_offset)
-				}
+				p := s.jumbled_coords[i]
+				engine.set_character(
+					e,
+					id,
+					coord = engine.coord(p.column + column_offset, p.row + row_offset),
+					visual = visual,
+				)
 			}
 			if jitter {
 				s.rumble_delay = max(s.rumble_delay - 1, 1)
 			}
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 
 		case .Explosion:
 			if s.phase_tick == s.explosion_max_steps {
@@ -249,14 +253,15 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 			for id, i in s.characters {
 				steps := s.explosion_steps[i]
 				progress := f64(min(s.phase_tick + 1, steps)) / f64(steps)
-				current_coords[id] = engine.coord_on_line(
+				position := engine.coord_on_line(
 					s.jumbled_coords[i],
 					s.explosion_targets[i],
 					ease.ease(s.config.explosion_ease, progress),
 				)
+				engine.set_character(e, id, coord = position)
 			}
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 
 		case .Explosion_Hold:
 			if s.phase_tick == 30 {
@@ -265,7 +270,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 				continue
 			}
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 
 		case .Reassembly:
 			// 13 gradient entries at three frames each. Motion and color settle
@@ -282,9 +287,10 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 			if s.phase_tick == final_ticks do return nil, false
 			color_step := min(s.phase_tick / 3, 12)
 			for id, i in s.characters {
+				visual := engine.get_visual(e, id)
 				steps := s.reassembly_steps[i]
 				progress := f64(min(s.phase_tick + 1, steps)) / f64(steps)
-				current_coords[id] = engine.coord_on_line(
+				position := engine.coord_on_line(
 					s.explosion_targets[i],
 					input_coords[id],
 					ease.ease(s.config.reassembly_ease, progress),
@@ -292,16 +298,16 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 				if s.color_handling == .Dynamic {
 					style := e.chars.input_style[id]
 					if style.fg == nil && s.phase_tick >= 39 {
-						visual_fg[id].fg = nil
+						visual.fg = nil
 					} else if fg, ok := style.fg.?; ok {
-						visual_fg[id].fg = engine.gradient_between_step(
+						visual.fg = engine.gradient_between_step(
 							s.config.unstable_color,
 							fg,
 							12,
 							color_step,
 						)
 					} else {
-						visual_fg[id].fg = engine.gradient_between_step(
+						visual.fg = engine.gradient_between_step(
 							s.config.unstable_color,
 							engine.Color{0x80, 0x80, 0x80},
 							12,
@@ -309,26 +315,27 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 						)
 					}
 					if bg, ok := style.bg.?; ok {
-						visual_fg[id].bg = engine.gradient_between_step(
+						visual.bg = engine.gradient_between_step(
 							s.config.unstable_color,
 							bg,
 							12,
 							color_step,
 						)
 					} else {
-						visual_fg[id].bg = nil
+						visual.bg = nil
 					}
 				} else {
-					visual_fg[id].fg = engine.gradient_between_step(
+					visual.fg = engine.gradient_between_step(
 						s.config.unstable_color,
 						s.final_colors[i],
 						12,
 						color_step,
 					)
 				}
+				engine.set_character(e, id, coord = position, visual = visual)
 			}
 			s.phase_tick += 1
-			return s.characters[:], true
+			return nil, true
 		}
 	}
 }
