@@ -5,6 +5,7 @@ import "../engine"
 import "core:fmt"
 import "core:math/ease"
 import "core:math/rand"
+import "core:mem"
 import "core:time"
 
 // Thunderstorm keeps its weather as dense particle rows.  It deliberately does
@@ -100,6 +101,32 @@ Thunderstorm_Phase :: enum {
 	Poststorm,
 }
 
+// Generation scratch in the frame arena. A branch owns a contiguous span
+// of segments; child offsets record where depth-first playback must detour.
+// No branch tree or generation state is traversed during animation.
+Thunderstorm_Strike_Segment :: struct {
+	column, row: int,
+	symbol:      u32,
+	child:       int, // start + 1; zero means no child
+}
+
+Thunderstorm_Branch_Tip :: struct {
+	column, row: int,
+	next:        int,
+	chance:      u32, // whole percent, following Python's 5%, -1%, reset rule
+	side:        bool,
+	symbol:      u32,
+	fork:        bool,
+}
+
+Thunderstorm_Strike_Work :: struct {
+	tips, next_tips: #soa[dynamic]Thunderstorm_Branch_Tip,
+	draws:           [dynamic]u32,
+	segments:        [dynamic]Thunderstorm_Strike_Segment,
+	walk:            [dynamic]engine.Span,
+	order:           [dynamic]int,
+}
+
 Thunderstorm_State :: struct {
 	config:              Thunderstorm_Config,
 	characters:          [dynamic]engine.Char_Id,
@@ -126,11 +153,8 @@ Thunderstorm_State :: struct {
 	rain_free:           [dynamic]int,
 	rain_delay:          int,
 
-	// The main bolt can branch once from every row. A branch beginning at row r
-	// contains at most r rows, so height * (height + 3) / 2 is the exact
-	// geometric maximum for one strike (main trunk plus every possible arm).
-	// Sparks can overlap across stochastic strikes, so that pool grows only to
-	// live demand.
+	// Strike storage grows at generation boundaries and is reused thereafter.
+	// Recursive branches have no quadratic height-only capacity bound.
 	strike_ids:          [dynamic]engine.Char_Id,
 	strike_pending:      [dynamic]engine.Char_Id,
 	strike_pending_head: int,
@@ -237,10 +261,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	}
 	// Input glyphs are the permanent render prefix. Weather rows append only
 	// while live, keeping the painter pass proportional to visible particles.
-	reserve(
-		&s.render_ids,
-		n + 9 * (e.canvas.height + 1) + 6 + e.canvas.height * (e.canvas.height + 3) / 2 + 18,
-	)
+	reserve(&s.render_ids, n + 9 * (e.canvas.height + 1) + 6 + e.canvas.height + 18)
 	append(&s.render_ids, ..s.characters[:])
 
 	// See the strict bound documented on the state fields. Allocate every rain
@@ -264,7 +285,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		append(&s.rain_free, slot)
 	}
 
-	strike_capacity := e.canvas.height * (e.canvas.height + 3) / 2
+	strike_capacity := e.canvas.height
 	reserve(&s.strike_ids, strike_capacity)
 	for _ in 0 ..< strike_capacity {
 		id := engine.add_character(e, "|", engine.coord(0, 0))
@@ -318,76 +339,146 @@ thunderstorm_spawn_rain :: proc(
 	s.rain_delay = rand.int_range(1, 8)
 }
 
-thunderstorm_append_strike_segment :: proc(
-	s: ^Thunderstorm_State,
-	chars: ^engine.Character_Storage,
-	column, row: int,
-	symbol: string,
-) {
-	segment := len(s.strike_pending)
-	assert(segment < len(s.strike_ids))
-	id := s.strike_ids[segment]
-	chars.current_coord[id] = engine.coord(column, row)
-	chars.visual[id].symbol = symbol
-	chars.visual[id].fg = s.config.lightning_color
-	chars.is_visible[id] = false
-	append(&s.strike_pending, id)
-}
-
-// A side arm is a full descending bolt whose first segment departs left or
-// right from its parent. It cannot branch again, matching the reference's
-// branch-neighbor guard while keeping the strike as flat SoA-backed rows.
-thunderstorm_append_strike_branch :: proc(
-	s: ^Thunderstorm_State,
-	chars: ^engine.Character_Storage,
-	canvas: engine.Canvas,
-	column, row: int,
-) {
-	branch_column, branch_row := column, row
-	first := true
-	for branch_row >= canvas.bottom {
-		symbol: string
-		if first {
-			right := rand.int_max(2) != 0
-			symbol = right ? "\\" : "/"
-			first = false
-		} else {
-			symbol_index := rand.int_max(3)
-			symbol = symbol_index == 0 ? "\\" : symbol_index == 1 ? "/" : "|"
+// Random words are filled in bulk before this independent branch-tip pass.
+// Native RNG ordering differs from Python; branch rules and replay order do not.
+thunderstorm_branch_step :: proc(tips: #soa[]Thunderstorm_Branch_Tip, draws: []u32) {
+	n := len(tips)
+	for i in 0 ..< n {
+		choice := draws[i]
+		tips.symbol[i] = choice % 3
+		if tips.side[i] {
+			tips.symbol[i] = choice & 1
+			tips.column[i] += 1 - 2 * int(tips.symbol[i])
 		}
-		thunderstorm_append_strike_segment(s, chars, branch_column, branch_row, symbol)
-		branch_row -= 1
-		if symbol == "\\" {
-			branch_column += 1
-		} else if symbol == "/" {
-			branch_column -= 1
-		}
+		// Quantization is below two parts per billion for these probabilities.
+		tips.fork[i] = !tips.side[i] && draws[n + i] < tips.chance[i] * 42_949_672
 	}
 }
 
-thunderstorm_begin_strike :: proc(
-	s: ^Thunderstorm_State,
-	chars: ^engine.Character_Storage,
+thunderstorm_strike_generate :: proc(
+	work: ^Thunderstorm_Strike_Work,
 	canvas: engine.Canvas,
+	column: int,
+	allocator := context.allocator,
 ) {
-	clear(&s.strike_pending)
+	context.allocator = allocator
+	clear(&work.tips)
+	clear(&work.next_tips)
+	clear(&work.segments)
+	clear(&work.walk)
+	clear(&work.order)
+	resize(&work.segments, canvas.height)
+	append(&work.tips, Thunderstorm_Branch_Tip{column = column, row = canvas.top, chance = 5})
+	for len(work.tips) > 0 {
+		n := len(work.tips)
+		resize(&work.draws, 2 * n)
+		_ = rand.read(mem.slice_to_bytes(work.draws[:]))
+		thunderstorm_branch_step(work.tips[:], work.draws[:])
+		clear(&work.next_tips)
+		for tip in work.tips {
+			segment := Thunderstorm_Strike_Segment {
+				column = tip.column,
+				row    = tip.row,
+				symbol = tip.symbol,
+			}
+			if tip.fork {
+				child_start := len(work.segments)
+				resize(&work.segments, child_start + tip.row - canvas.bottom + 1)
+				segment.child = child_start + 1
+				append(
+					&work.next_tips,
+					Thunderstorm_Branch_Tip {
+						column = tip.column,
+						row = tip.row,
+						next = child_start,
+						chance = tip.chance - 1,
+						side = true,
+					},
+				)
+			}
+			work.segments[tip.next] = segment
+			if tip.row > canvas.bottom {
+				// Python resets the shared probability to 5% when a child
+				// returns. Encode that continuation locally so tips can advance
+				// together while their children are generated independently.
+				append(
+					&work.next_tips,
+					Thunderstorm_Branch_Tip {
+						column = tip.column + int(tip.symbol == 0) - int(tip.symbol == 1),
+						row = tip.row - 1,
+						next = tip.next + 1,
+						chance = 5 if tip.fork else tip.chance,
+					},
+				)
+			}
+		}
+		work.tips, work.next_tips = work.next_tips, work.tips
+	}
+
+	thunderstorm_strike_order(work, canvas)
+}
+
+thunderstorm_strike_order :: proc(work: ^Thunderstorm_Strike_Work, canvas: engine.Canvas) {
+	// Flatten child-before-parent-continuation ordering once. Each segment is
+	// visited exactly once; the animation consumes only this flat order.
+	resize(&work.order, len(work.segments))
+	reserve(&work.walk, canvas.height)
+	write := 0
+	span := engine.Span{0, canvas.height}
+	for {
+		for span.len > 0 {
+			index := span.start
+			span.start += 1
+			span.len -= 1
+			work.order[write] = index
+			write += 1
+			segment := work.segments[index]
+			if segment.child != 0 {
+				if span.len > 0 do append(&work.walk, span)
+				span = {segment.child - 1, segment.row - canvas.bottom + 1}
+			}
+		}
+		if len(work.walk) == 0 do break
+		span = pop(&work.walk)
+	}
+}
+
+thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+	// The frame arena owns generation scratch only. Playback is copied into
+	// the engine's persistent character pool before the arena is reclaimed.
+	work: Thunderstorm_Strike_Work
+	thunderstorm_strike_generate(
+		&work,
+		e.canvas,
+		rand.int_range(e.canvas.left, e.canvas.right + 1),
+		context.temp_allocator,
+	)
+	count := len(work.order)
+	// Materialize once, before any segment is revealed. Reserve the completed
+	// size before filling; segment replay needs no further pool growth.
+	reserve(&s.strike_ids, count)
+	reserve(&s.strike_pending, count)
+	new_count := max(0, count - len(s.strike_ids))
+	reserve(&e.chars, len(e.chars) + new_count)
+	reserve(&e.character_sets.added, len(e.character_sets.added) + new_count)
+	for len(s.strike_ids) < count {
+		id := engine.add_character(e, "|", engine.coord(0, 0))
+		e.chars.layer[id] = 2
+		e.chars.is_visible[id] = false
+		append(&s.strike_ids, id)
+	}
+	resize(&s.strike_pending, count)
+	reserve(&s.render_ids, len(s.characters) + len(s.rain_ids) + count + len(s.spark_ids))
+	for index, i in work.order {
+		segment := work.segments[index]
+		id := s.strike_ids[i]
+		e.chars.current_coord[id] = engine.coord(segment.column, segment.row)
+		e.chars.visual[id].symbol = segment.symbol == 0 ? "\\" : segment.symbol == 1 ? "/" : "|"
+		e.chars.visual[id].fg = s.config.lightning_color
+		e.chars.is_visible[id] = false
+		s.strike_pending[i] = id
+	}
 	s.strike_pending_head, s.strike_delay, s.strike_flash_age = 0, 0, -1
-	column := rand.int_range(canvas.left, canvas.right + 1)
-	row := canvas.top
-	for row >= canvas.bottom {
-		symbol_index := rand.int_max(3)
-		symbol := symbol_index == 0 ? "\\" : symbol_index == 1 ? "/" : "|"
-		thunderstorm_append_strike_segment(s, chars, column, row, symbol)
-		// The reference draws this random value for every trunk segment and
-		// inserts a non-recursive arm at a successful branch point.
-		if rand.float64() < 0.05 do thunderstorm_append_strike_branch(s, chars, canvas, column, row)
-		row -= 1
-		if symbol == "\\" {
-			column += 1
-		} else if symbol == "/" {
-			column -= 1
-		}
-	}
 	s.strike_live = true
 }
 
@@ -483,6 +574,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			}
 		}
 		clear(&s.strike_pending)
+		s.strike_pending_head = 0
 		s.strike_live = false
 		return
 	}
@@ -580,7 +672,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, chars: ^engine.Characte
 thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Char_Id {
 	resize(&s.render_ids, len(s.characters))
 	for slot in s.rain_active do append(&s.render_ids, s.rain_ids[slot])
-	append(&s.render_ids, ..s.strike_pending[:])
+	append(&s.render_ids, ..s.strike_pending[:s.strike_pending_head])
 	for slot in s.spark_active do append(&s.render_ids, s.spark_ids[slot])
 	return s.render_ids[:]
 }
@@ -618,13 +710,12 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		}
 	case .Storm:
 		thunderstorm_spawn_rain(s, chars, e.canvas)
-		if !s.strike_live && rand.float64() < 0.008 do thunderstorm_begin_strike(s, chars, e.canvas)
+		if !s.strike_live && rand.float64() < 0.008 do thunderstorm_begin_strike(s, e)
 		thunderstorm_reveal_strike(s, e)
 		thunderstorm_update_rain(s, chars)
 		thunderstorm_update_sparks(s, chars, e.cfg.terminal_background_color)
 		thunderstorm_update_text(s, chars)
-		if engine.now_wall(e) - s.storm_started >= f64(s.config.storm_time) &&
-		   !s.strike_live {
+		if engine.now_wall(e) - s.storm_started >= f64(s.config.storm_time) && !s.strike_live {
 			for id in s.rain_ids do chars.is_visible[id] = false
 			for id in s.spark_ids do chars.is_visible[id] = false
 			clear(&s.rain_active)

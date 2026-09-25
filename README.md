@@ -63,6 +63,10 @@ parity.** Given the same seed, the two programs may use different random draws,
 frame counts, terminal bytes, and intermediate composition while still
 producing the same named effect and honoring its supported option surface.
 
+The original Python TerminalTextEffects implementation is the **accuracy
+oracle**; Rust `ttfx` is the **performance oracle**. Visual and behavioral
+decisions are checked against Python, while resource comparisons use Rust.
+
 ## Performance
 
 [`bench/bench.odin`](bench/bench.odin) runs the real Rust and Odin CLIs with
@@ -343,6 +347,9 @@ itself, not borrowed from the reference:
 ### thunderstorm
 
 ![otfx thunderstorm effect](docs/images/thunderstorm.gif)
+
+Recursive lightning is generated in scalar batches, then flattened for replay.
+See the [branching validation and measurements](docs/thunderstorm-branching.md).
 
 ### unstable
 
