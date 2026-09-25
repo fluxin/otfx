@@ -6,7 +6,20 @@ import "core:math/ease"
 import "core:math/linalg"
 import "core:strconv"
 import "core:strings"
-import ansi "core:terminal/ansi"
+import "core:terminal/ansi"
+
+// Spread a shorter sequence across a longer gradient/symbol lane. Earlier
+// values receive the remainder, matching Python's apply_gradient_to_symbols.
+sequence_expand :: proc(values: []$T, count: int) -> [dynamic]T {
+	assert(len(values) > 0 && count >= len(values))
+	out := make([dynamic]T, 0, count)
+	for value, i in values {
+		for _ in 0 ..< count / len(values) + int(i < count % len(values)) {
+			append(&out, value)
+		}
+	}
+	return out
+}
 
 // ---------------------------------------------------------------------------
 // geometry
@@ -22,12 +35,12 @@ coord :: proc(column, row: int) -> Coord {
 }
 
 round_half_even :: proc(x: f64) -> int {
-	floor := math.floor(x)
-	diff := x - floor
-	if diff > 0.5 do return int(floor) + 1
-	if diff < 0.5 do return int(floor)
-	f := int(floor)
-	return f if f % 2 == 0 else f + 1
+	whole := int(x)
+	diff := x - f64(whole)
+	odd := whole & 1 != 0
+	if diff > 0.5 || (diff == 0.5 && odd) do return whole + 1
+	if diff < -0.5 || (diff == -0.5 && odd) do return whole - 1
+	return whole
 }
 
 // Terminal cells are ~2:1; row deltas are doubled when requested.

@@ -71,8 +71,7 @@ Burn_State :: struct {
 	characters:        [dynamic]engine.Char_Id,
 	final_colors:      [dynamic]engine.Color,
 	start_ticks:       [dynamic]int,
-	order:             [dynamic]int,
-	next_character:    int,
+	last_fire_tick:    int,
 	fire_palette:      [dynamic]engine.Color,
 	fire_symbols:      [dynamic]string,
 	smoke_ids:         [dynamic]engine.Char_Id,
@@ -81,9 +80,75 @@ Burn_State :: struct {
 	smoke_targets:     [dynamic]engine.Coord,
 	smoke_steps:       [dynamic]int,
 	next_smoke:        int,
+	active_smoke:      [dynamic]int,
 	render_ids:        [dynamic]engine.Char_Id,
 	tick:              int,
 	color_handling:    engine.Existing_Color_Handling,
+}
+
+// Random frontier growth (Python's PrimsSimple), including blank bridge cells.
+// Batch the growth and 2..4-cell ignition cadence once; replay keeps only each
+// source character's start tick. No tree or frontier survives construction.
+burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
+	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
+	cells := engine.get_characters(query, {.Input, .Inner_Fill}, .Top_Bottom_Left_Right)
+	defer delete(cells)
+	n := len(cells)
+	if n == 0 do return
+	visited := make([]bool, n, context.temp_allocator)
+	frontier := make([dynamic]int, 0, n, context.temp_allocator)
+	order := make([dynamic]int, 0, n, context.temp_allocator)
+	index_by_id := make([]int, len(e.chars), context.temp_allocator)
+	for id, i in s.characters do index_by_id[id] = i
+	width := e.canvas.text_width
+	offsets := [4]int{-width, 1, width, -1}
+	root := rand.int_max(n)
+	visited[root] = true
+	append(&order, root)
+	append(&frontier, root)
+	for len(frontier) > 0 {
+		pick := rand.int_max(len(frontier))
+		current := frontier[pick]
+		last := pop(&frontier)
+		if pick < len(frontier) do frontier[pick] = last
+		neighbors: [dynamic; 4]int
+		column := current % width
+		for offset, direction in offsets {
+			next := current + offset
+			if next < 0 ||
+			   next >= n ||
+			   (direction == 1 && column == width - 1) ||
+			   (direction == 3 && column == 0) ||
+			   visited[next] {
+				continue
+			}
+			append(&neighbors, next)
+		}
+		if len(neighbors) == 0 do continue
+		next := neighbors[rand.int_max(len(neighbors))]
+		visited[next] = true
+		append(&order, next)
+		if len(neighbors) > 1 do append(&frontier, current)
+		append(&frontier, next)
+	}
+	tick, remaining := 0, rand.int_range(2, 5)
+	for cell in order {
+		id := cells[cell]
+		if !e.chars.is_fill[id] &&
+		   (e.chars.input_symbol[id] != " " || s.color_handling != .Ignore) {
+			i := index_by_id[id]
+			s.start_ticks[i] = tick
+			final_ticks := 36
+			if s.color_handling == .Dynamic &&
+			   e.chars.input_style[id].fg == nil &&
+			   e.chars.input_style[id].bg == nil {
+				final_ticks = 4
+			}
+			s.last_fire_tick = max(s.last_fire_tick, tick + len(s.fire_palette) * 4 + final_ticks)
+		}
+		remaining -= 1
+		if remaining == 0 {tick += 1; remaining = rand.int_range(2, 5)}
+	}
 }
 
 burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
@@ -101,26 +166,24 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	s.fire_palette = engine.gradient_make(s.config.burn_colors[:], []int{10}, false)
-	s.fire_symbols = make([dynamic]string, len(s.fire_palette))
+	palette := engine.gradient_make(s.config.burn_colors[:], []int{10}, false)
+	defer delete(palette[:])
 	cycle_symbols := Burn_Char_Order
-	symbol_index := 0
-	for i in 0 ..< len(s.fire_symbols) {
-		s.fire_symbols[i] = cycle_symbols[symbol_index]
-		symbol_index += 1
-		if symbol_index == len(cycle_symbols) do symbol_index = 0
-	}
+	entries := max(len(palette), len(cycle_symbols))
+	s.fire_palette = engine.sequence_expand(palette[:], entries)
+	s.fire_symbols = engine.sequence_expand(cycle_symbols[:], entries)
 
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.start_ticks = make([dynamic]int, n)
-	s.order = make([dynamic]int, n)
 	s.smoke_start_ticks = make([dynamic]int, n)
 	s.smoke_origins = make([dynamic]engine.Coord, n)
 	s.smoke_targets = make([dynamic]engine.Coord, n)
 	s.smoke_steps = make([dynamic]int, n)
+	reserve(&s.active_smoke, n)
+	reserve(&s.render_ids, n * 2)
 
 	input_coords := e.chars.input_coord
 	visual_fg := e.chars.visual
@@ -133,11 +196,10 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		)
 		s.start_ticks[i] = -1
 		s.smoke_start_ticks[i] = -1
-		s.order[i] = i
 		visual_fg[id].fg = s.config.starting_color
 		visible[id] = true
 	}
-	rand.shuffle(s.order[:])
+	burn_start_ticks(s, e)
 
 	// At most one smoke trail can be born from each source character. Allocate
 	// that exact maximum up front; no hidden per-frame particle allocation.
@@ -148,13 +210,13 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		append(&s.smoke_ids, id)
 	}
 	append(&s.render_ids, ..s.characters[:])
-	append(&s.render_ids, ..s.smoke_ids[:])
 }
 
 burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 	if rand.float64() > s.config.smoke_chance || s.next_smoke >= len(s.smoke_ids) do return
 	particle := s.next_smoke
 	s.next_smoke += 1
+	append(&s.active_smoke, particle)
 	id := s.smoke_ids[particle]
 	origin := e.chars.input_coord[s.characters[source_index]]
 	target := engine.coord(rand.int_range(origin.column - 4, origin.column + 5), e.canvas.top + 1)
@@ -174,40 +236,9 @@ burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 
 burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	fire_ticks := len(s.fire_palette) * 4
-	final_ticks :: 36 // 9 entries, four frames each
-	active := s.next_character < len(s.order)
-	for start_tick, i in s.start_ticks {
-		if start_tick >= 0 {
-			id := s.characters[i]
-			life := final_ticks
-			if s.color_handling == .Dynamic &&
-			   e.chars.input_style[id].fg == nil &&
-			   e.chars.input_style[id].bg == nil {
-				life = 4
-			}
-			if s.tick - start_tick < fire_ticks + life {
-				active = true
-				break
-			}
-		}
-	}
-	if !active {
-		for i in 0 ..< s.next_smoke {
-			age := s.tick - s.smoke_start_ticks[i]
-			if age < max(s.smoke_steps[i], 100) {
-				active = true
-				break
-			}
-		}
-	}
+	active := s.tick < s.last_fire_tick
+	for i in s.active_smoke do active ||= s.tick - s.smoke_start_ticks[i] < max(s.smoke_steps[i], 100)
 	if !active do return nil, false
-
-	for _ in 0 ..< rand.int_range(2, 5) {
-		if s.next_character >= len(s.order) do break
-		i := s.order[s.next_character]
-		s.next_character += 1
-		s.start_ticks[i] = s.tick
-	}
 
 	input_symbols := e.chars.input_symbol
 	visual_symbols := e.chars.visual
@@ -216,6 +247,11 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		start_tick := s.start_ticks[i]
 		if start_tick < 0 do continue
 		age := s.tick - start_tick
+		if age < 0 do continue
+		if age >= fire_ticks + 36 {
+			s.start_ticks[i] = -1
+			continue
+		}
 		if age < fire_ticks {
 			entry := age / 4
 			visual_symbols[id].symbol = s.fire_symbols[entry]
@@ -247,7 +283,9 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	smoke_fg := e.chars.visual
 	smoke_gradient_start := engine.Color{0x50, 0x4F, 0x4F}
 	smoke_gradient_end := engine.Color{0xC7, 0xC7, 0xC7}
-	for i in 0 ..< s.next_smoke {
+	write := 0
+	resize(&s.render_ids, len(s.characters))
+	for i in s.active_smoke {
 		age := s.tick - s.smoke_start_ticks[i]
 		life := max(s.smoke_steps[i], 100)
 		id := s.smoke_ids[i]
@@ -255,6 +293,9 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			smoke_visible[id] = false
 			continue
 		}
+		s.active_smoke[write] = i
+		write += 1
+		append(&s.render_ids, id)
 		progress := f64(min(age + 1, s.smoke_steps[i])) / f64(s.smoke_steps[i])
 		smoke_start[id] = engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress)
 		smoke_fg[id].fg = engine.gradient_between_step(
@@ -264,6 +305,7 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			min(age / 10, 9),
 		)
 	}
+	resize(&s.active_smoke, write)
 	s.tick += 1
 	return s.render_ids[:], true
 }

@@ -71,6 +71,7 @@ Blackhole_Phase :: enum {
 }
 
 Blackhole_Star_Symbols :: [7]string{"*", "'", "`", "¤", "•", "°", "·"}
+Blackhole_Pulse_Symbols :: [7]string{"◦", "◎", "◉", "●", "◉", "◎", "◦"}
 
 // Ring membership is a dense source-index column; ring source indices and
 // circle positions are compact slices. There is no set, map, path, scene, or
@@ -83,15 +84,23 @@ Blackhole_State :: struct {
 	star_symbols:        [dynamic]string,
 	star_coords:         [dynamic]engine.Coord,
 	consume_steps:       [dynamic]int,
+	consume_durations:   [dynamic]int,
+	consume_progress:    [dynamic]f64,
 	ring_slot_by_source: [dynamic]int,
 	ring_sources:        [dynamic]int,
 	ring_positions:      [dynamic]engine.Coord,
 	expanded_positions:  [dynamic]engine.Coord,
+	collapse_origins:    [dynamic]engine.Coord,
+	expand_steps:        [dynamic]int,
+	collapse_steps:      [dynamic]int,
+	collapse_limit:      int,
+	pulse_colors:        [21]engine.Color,
 	ring_starts:         [dynamic]int,
 	ring_steps:          [dynamic]int,
-	ring_colors:         [dynamic]engine.Color,
 	explode_targets:     [dynamic]engine.Coord,
 	explode_steps:       [dynamic]int,
+	explode_durations:   [dynamic]int,
+	explode_progress:    [dynamic]f64,
 	return_steps:        [dynamic]int,
 	explode_colors:      [dynamic]engine.Color,
 	radius:              int,
@@ -110,6 +119,27 @@ blackhole_ring_position :: #force_inline proc(s: ^Blackhole_State, slot: int) ->
 	index := slot + s.rotation
 	if index >= len(s.ring_positions) do index -= len(s.ring_positions)
 	return s.ring_positions[index]
+}
+
+// Thousands of stars share a small set of integer path durations. Evaluate
+// exponential easing once per distinct duration, then replay by direct index.
+blackhole_progress_table :: proc(
+	steps: []int,
+) -> (
+	durations: [dynamic]int,
+	progress: [dynamic]f64,
+) {
+	longest := 0
+	for step in steps do longest = max(longest, step)
+	progress = make([dynamic]f64, longest + 1)
+	for &value in progress do value = -1
+	for step in steps {
+		if progress[step] < 0 {
+			append(&durations, step)
+			progress[step] = 0
+		}
+	}
+	return
 }
 
 blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
@@ -160,6 +190,10 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		ring_count,
 		true,
 	)
+	s.collapse_origins = make([dynamic]engine.Coord, ring_count)
+	s.expand_steps = make([dynamic]int, ring_count)
+	s.collapse_steps = make([dynamic]int, ring_count)
+	for &color in s.pulse_colors do color = s.config.star_colors[rand.int_max(len(s.config.star_colors))]
 
 	input_coords := e.chars.input_coord
 	current_coords := e.chars.current_coord
@@ -195,7 +229,8 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		available[i] = i
 		s.consume_steps[i] = max(
 			engine.round_half_even(
-				engine.line_length(s.star_coords[i], e.canvas.center, true) / 0.23,
+				engine.line_length(s.star_coords[i], e.canvas.center, true) /
+				rand.float64_range(0.17, 0.30),
 			),
 			1,
 		)
@@ -217,7 +252,12 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 				1,
 			),
 		)
-		append(&s.ring_colors, s.config.star_colors[rand.int_max(len(s.config.star_colors))])
+		s.collapse_steps[slot] = max(
+			engine.round_half_even(
+				engine.line_length(s.expanded_positions[slot], e.canvas.center, true) / 0.3,
+			),
+			1,
+		)
 	}
 	for id, i in s.characters {
 		direction := explode_directions[rand.int_max(len(explode_directions))]
@@ -240,14 +280,22 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 			1,
 		)
 		s.explode_colors[i] = s.config.star_colors[rand.int_max(len(s.config.star_colors))]
-		s.explode_limit = max(s.explode_limit, s.explode_steps[i] + s.return_steps[i] + 30)
+		style := e.chars.input_style[id]
+		cool_ticks := s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 1 : 220
+		s.explode_limit = max(
+			s.explode_limit,
+			s.explode_steps[i] + max(s.return_steps[i], cool_ticks),
+		)
 	}
+	s.consume_durations, s.consume_progress = blackhole_progress_table(s.consume_steps[:])
+	s.explode_durations, s.explode_progress = blackhole_progress_table(s.explode_steps[:])
 	s.formation_delay = max(math.floor_div(100, max(ring_count, 1)), 6)
 	s.delay = s.formation_delay
 	s.phase = .Forming
 }
 
 blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	pulse_symbols := Blackhole_Pulse_Symbols
 	current_coords := e.chars.current_coord
 	input_coords := e.chars.input_coord
 	input_symbols := e.chars.input_symbol
@@ -296,6 +344,12 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 			return s.characters[:], true
 
 		case .Consuming:
+			for steps in s.consume_durations {
+				s.consume_progress[steps] = ease.ease(
+					.Exponential_In,
+					f64(min(s.phase_tick + 1, steps)) / f64(steps),
+				)
+			}
 			complete := true
 			for id, i in s.characters {
 				slot := s.ring_slot_by_source[i]
@@ -306,23 +360,41 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 					continue
 				}
 				steps := s.consume_steps[i]
-				progress := f64(min(s.phase_tick + 1, steps)) / f64(steps)
+				if s.phase_tick >= steps do continue
+				distance_fraction := s.consume_progress[steps]
 				current_coords[id] = engine.coord_on_line(
 					s.star_coords[i],
 					e.canvas.center,
-					ease.ease(.Exponential_In, progress),
+					distance_fraction,
 				)
 				visual_fg[id].fg = engine.gradient_between_step(
 					s.star_colors[i],
 					engine.Color{0x00, 0x00, 0x00},
 					10,
-					min(s.phase_tick / 4, 10),
+					min(engine.round_half_even(11 * distance_fraction), 10),
 				)
+				visual_symbols[id].symbol = s.phase_tick + 1 >= steps ? " " : s.star_symbols[i]
+				e.chars.layer[id] = 2
 				if s.phase_tick < steps do complete = false
 			}
 			s.rotation += 1
 			if s.rotation == len(s.ring_positions) do s.rotation = 0
 			if complete && s.phase_tick > 20 {
+				// Capture the actual rotating ring once. Only these few paths
+				// depend on the consumption duration; playback uses flat lanes.
+				for source, slot in s.ring_sources {
+					origin := current_coords[s.characters[source]]
+					s.collapse_origins[slot] = origin
+					s.expand_steps[slot] = max(
+						engine.round_half_even(
+							engine.line_length(origin, s.expanded_positions[slot], true) / 0.2,
+						),
+						1,
+					)
+					end := s.expand_steps[slot] + s.collapse_steps[slot]
+					if slot == 0 do end += len(s.pulse_colors) * 3
+					s.collapse_limit = max(s.collapse_limit, end)
+				}
 				s.phase = .Collapsing
 				s.phase_tick = 0
 				continue
@@ -331,7 +403,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 			return s.characters[:], true
 
 		case .Collapsing:
-			if s.phase_tick == 60 {
+			if s.phase_tick >= s.collapse_limit {
 				for id, _ in s.characters {
 					current_coords[id] = e.canvas.center
 					visible[id] = true
@@ -347,27 +419,45 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 					visible[id] = false
 					continue
 				}
-				if s.phase_tick < 18 {
+				expand_steps, collapse_steps := s.expand_steps[slot], s.collapse_steps[slot]
+				if s.phase_tick < expand_steps {
 					current_coords[id] = engine.coord_on_line(
-						blackhole_ring_position(s, slot),
+						s.collapse_origins[slot],
 						s.expanded_positions[slot],
-						ease.ease(.Exponential_Out, f64(s.phase_tick + 1) / 18),
+						ease.ease(.Exponential_In, f64(s.phase_tick + 1) / f64(expand_steps)),
 					)
 				} else {
 					current_coords[id] = engine.coord_on_line(
 						s.expanded_positions[slot],
 						e.canvas.center,
-						ease.ease(.Exponential_In, f64(s.phase_tick - 17) / 42),
+						ease.ease(
+							.Exponential_In,
+							f64(min(s.phase_tick - expand_steps + 1, collapse_steps)) /
+							f64(collapse_steps),
+						),
 					)
 				}
-				visual_symbols[id].symbol = s.phase_tick < 45 ? "◉" : "●"
-				visual_fg[id].fg = s.ring_colors[slot]
+				visual_symbols[id].symbol = "*"
+				visual_fg[id].fg = s.config.blackhole_color
+				pulse_age := s.phase_tick - expand_steps - collapse_steps
+				if slot == 0 && pulse_age >= 0 {
+					entry := min(pulse_age / 3, len(s.pulse_colors) - 1)
+					visual_symbols[id].symbol = pulse_symbols[entry % len(pulse_symbols)]
+					visual_fg[id].fg = s.pulse_colors[entry]
+					e.chars.layer[id] = 3
+				}
 			}
 			s.phase_tick += 1
 			return s.characters[:], true
 
 		case .Exploding:
 			if s.phase_tick == s.explode_limit do return nil, false
+			for steps in s.explode_durations {
+				s.explode_progress[steps] = ease.ease(
+					.Exponential_Out,
+					f64(min(s.phase_tick + 1, steps)) / f64(steps),
+				)
+			}
 			for id, i in s.characters {
 				age := s.phase_tick
 				visual_symbols[id].symbol = input_symbols[id]
@@ -375,7 +465,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 					current_coords[id] = engine.coord_on_line(
 						e.canvas.center,
 						s.explode_targets[i],
-						ease.ease(.Exponential_Out, f64(age + 1) / f64(s.explode_steps[i])),
+						s.explode_progress[s.explode_steps[i]],
 					)
 					visual_fg[id].fg = s.explode_colors[i]
 				} else {
@@ -387,6 +477,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 							ease.ease(.Cubic_In, f64(return_age + 1) / f64(s.return_steps[i])),
 						)
 					}
+					if return_age % 20 != 0 do continue
 					if s.color_handling == .Dynamic {
 						style := e.chars.input_style[id]
 						if style.fg == nil && style.bg == nil {
@@ -398,7 +489,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 								s.explode_colors[i],
 								style,
 								10,
-								min(return_age / 3, 10),
+								min(return_age / 20, 10),
 							)
 						}
 					} else {
@@ -406,7 +497,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Char
 							s.explode_colors[i],
 							s.final_colors[i],
 							10,
-							min(return_age / 3, 10),
+							min(return_age / 20, 10),
 						)
 					}
 				}

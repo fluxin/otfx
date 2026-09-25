@@ -104,6 +104,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	s.color_handling = e.cfg.existing_color_handling
+	reserve(&s.active_slots, len(s.characters))
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.start_ticks = make([dynamic]int, len(e.chars))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1

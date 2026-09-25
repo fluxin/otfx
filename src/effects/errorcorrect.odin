@@ -153,6 +153,7 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		e.chars.visual[second].fg = s.config.error_color
 		append(&s.swapped, Errorcorrect_Pair{first, second})
 	}
+	reserve(&s.active, 2 * len(s.swapped))
 }
 
 errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {

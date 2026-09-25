@@ -129,6 +129,8 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char
 	}
 	for id, i in s.characters {
 		steps := s.max_steps[i]
+		// The arrival tick already published the final coordinate, color, and layer.
+		if s.tick >= steps do continue
 		progress := f64(min(s.tick + 1, steps)) / f64(steps)
 		e.chars.current_coord[id] = engine.coord_on_line(
 			s.origins[i],

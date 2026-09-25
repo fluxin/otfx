@@ -173,6 +173,7 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		}
 	}
 	s.max_active = max(engine.round_half_even(s.config.active_binary_groups * f64(n)), 1)
+	reserve(&s.active, min(n, s.max_active))
 }
 
 binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int) -> engine.Coord {

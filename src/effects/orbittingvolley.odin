@@ -300,19 +300,21 @@ orbittingvolley_next :: proc(
 		if start < 0 do continue
 		age := s.tick - start
 		steps := s.launch_steps[i]
-		if age < steps {
-			current_coords[id] = engine.coord_on_line(
-				s.launch_origins[i],
-				input_coords[id],
-				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
-			)
+		if age >= steps {
+			// Preserve the layer transition one tick after the final motion sample.
+			if age == steps do e.chars.layer[id] = 0
+			continue
 		}
+		current_coords[id] = engine.coord_on_line(
+			s.launch_origins[i],
+			input_coords[id],
+			ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
+		)
 		if s.color_handling == .Dynamic {
 			engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
 		} else {
 			visual_fg[id].fg = s.final_colors[i]
 		}
-		if age >= steps do e.chars.layer[id] = 0
 	}
 	s.tick += 1
 	return s.render_ids[:], true

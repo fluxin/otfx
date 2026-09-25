@@ -113,7 +113,10 @@ Bubbles_State :: struct {
 	circle_dx:       [dynamic]int, // Char_Id indexed
 	circle_dy:       [dynamic]int,
 	color_offsets:   [dynamic]int,
+	pop_offsets:     [dynamic]engine.Coord,
+	pop_origins:     [dynamic]engine.Coord,
 	pop_targets:     [dynamic]engine.Coord,
+	expand_steps:    [dynamic]int,
 	pop_steps:       [dynamic]int,
 	bubbles:         engine.Char_Groups,
 	bubble_origins:  [dynamic]engine.Coord,
@@ -127,7 +130,6 @@ Bubbles_State :: struct {
 	next_bubble:     int,
 	delay:           int,
 	rainbow_palette: [dynamic]engine.Color,
-	rainbow_index:   int,
 	tick:            int,
 	color_handling:  engine.Existing_Color_Handling,
 }
@@ -153,7 +155,10 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	s.circle_dx = make([dynamic]int, len(e.chars))
 	s.circle_dy = make([dynamic]int, len(e.chars))
 	s.color_offsets = make([dynamic]int, len(e.chars))
+	s.pop_offsets = make([dynamic]engine.Coord, len(e.chars))
+	s.pop_origins = make([dynamic]engine.Coord, len(e.chars))
 	s.pop_targets = make([dynamic]engine.Coord, len(e.chars))
+	s.expand_steps = make([dynamic]int, len(e.chars))
 	s.pop_steps = make([dynamic]int, len(e.chars))
 	input_coords := e.chars.input_coord
 	visible := e.chars.is_visible
@@ -164,6 +169,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			input_coords[id],
 		)
 		visible[id] = false
+		e.chars.layer[id] = 1
 	}
 
 	rows := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
@@ -215,14 +221,28 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			len(members),
 			false,
 		)
+		pop_points := engine.find_coords_on_circle(
+			engine.coord(0, 0),
+			radius + 3,
+			len(members),
+			false,
+		)
 		palette_offset := 0
 		for id, point in members {
 			s.circle_dx[id] = circle_points[point].column
 			s.circle_dy[id] = circle_points[point].row
 			s.color_offsets[id] = palette_offset
-			palette_offset += 2
+			palette_offset += (point + 1) * 2
+			s.pop_offsets[id] = pop_points[point]
+			s.expand_steps[id] = max(
+				engine.round_half_even(
+					engine.line_length(circle_points[point], pop_points[point], true) / 0.3,
+				),
+				1,
+			)
 		}
 		delete(circle_points[:])
+		delete(pop_points[:])
 	}
 	if s.config.rainbow {
 		s.rainbow_palette = engine.gradient_make(
@@ -242,6 +262,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			for s.color_offsets[id] >= len(s.rainbow_palette) do s.color_offsets[id] -= len(s.rainbow_palette)
 		}
 	}
+	s.delay = s.config.bubble_delay
 }
 
 bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
@@ -259,7 +280,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 			s.next_bubble += 1
 			s.bubble_states[bi] = .Float
 			s.bubble_starts[bi] = s.tick
-			s.delay = s.config.bubble_delay
+			s.delay = s.config.bubble_delay - 1
 		} else {
 			s.delay -= 1
 		}
@@ -280,14 +301,16 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 			steps := s.bubble_steps[bi]
 			progress := f64(min(age + 1, steps)) / f64(steps)
 			anchor := engine.coord_on_line(s.bubble_origins[bi], s.bubble_targets[bi], progress)
+			landed := age + 1 >= steps
 			for id in members {
 				current_coords[id] = engine.coord(
 					anchor.column + s.circle_dx[id],
 					anchor.row + s.circle_dy[id],
 				)
+				landed ||= current_coords[id].row == s.bubble_targets[bi].row
 				visual_symbols[id].symbol = input_symbols[id]
 				if s.config.rainbow {
-					color_index := s.color_offsets[id] + s.rainbow_index
+					color_index := s.color_offsets[id] + (age / 4) % len(s.rainbow_palette)
 					if color_index >= len(s.rainbow_palette) do color_index -= len(s.rainbow_palette)
 					visual_fg[id].fg = s.rainbow_palette[color_index]
 				} else {
@@ -295,14 +318,14 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				}
 				visible[id] = true
 			}
-			if age >= steps || (s.config.pop_condition == .Anywhere && rand.float64() < 0.002) {
+			if landed || (s.config.pop_condition == .Anywhere && rand.float64() < 0.002) {
 				s.bubble_states[bi] = .Pop
-				s.pop_starts[bi] = s.tick
+				s.pop_starts[bi] = s.tick + 1
 				for id in members {
-					p := current_coords[id]
+					s.pop_origins[id] = current_coords[id]
 					s.pop_targets[id] = engine.coord(
-						p.column + 3 * s.circle_dx[id],
-						p.row + 3 * s.circle_dy[id],
+						anchor.column + s.pop_offsets[id].column,
+						anchor.row + s.pop_offsets[id].row,
 					)
 					s.pop_steps[id] = max(
 						engine.round_half_even(
@@ -314,23 +337,30 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 			}
 		} else {
 			age := s.tick - s.pop_starts[bi]
-			max_steps := 0
-			for id in members do max_steps = max(max_steps, s.pop_steps[id])
+			complete := true
 			for id in members {
+				expand_steps := s.expand_steps[id]
+				move_age := age - expand_steps
+				if age < expand_steps {
+					current_coords[id] = engine.coord_on_line(
+						s.pop_origins[id],
+						s.pop_targets[id],
+						ease.ease(.Exponential_Out, f64(age + 1) / f64(expand_steps)),
+					)
+				} else {
+					steps := s.pop_steps[id]
+					current_coords[id] = engine.coord_on_line(
+						s.pop_targets[id],
+						input_coords[id],
+						ease.ease(.Exponential_In_Out, f64(min(move_age + 1, steps)) / f64(steps)),
+					)
+					if move_age + 1 >= steps do e.chars.layer[id] = 0
+				}
 				if age < 18 {
-					current_coords[id] = s.pop_targets[id]
 					visual_symbols[id].symbol = age < 9 ? "*" : "'"
 					visual_fg[id].fg = s.config.pop_color
 				} else {
-					move_age := age - 18
-					steps := s.pop_steps[id]
-					if move_age < steps {
-						current_coords[id] = engine.coord_on_line(
-							s.pop_targets[id],
-							input_coords[id],
-							ease.ease(s.config.movement_easing, f64(move_age + 1) / f64(steps)),
-						)
-					}
+					color_age := age - 18
 					visual_symbols[id].symbol = input_symbols[id]
 					if s.color_handling == .Dynamic {
 						engine.dynamic_gradient_to_input(
@@ -338,34 +368,30 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 							s.config.pop_color,
 							e.chars.input_style[id],
 							8,
-							min(move_age / 6, 8),
+							min(color_age / 6, 8),
 						)
 					} else {
 						visual_fg[id].fg = engine.gradient_between_step(
 							s.config.pop_color,
 							s.final_colors[id],
 							8,
-							min(move_age / 6, 8),
+							min(color_age / 6, 8),
 						)
 					}
 				}
+				style := e.chars.input_style[id]
+				final_ticks :=
+					s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 6 : 54
+				complete &&= age + 1 >= max(expand_steps + s.pop_steps[id], 18 + final_ticks)
 			}
-			final_ticks := 54
-			if s.color_handling == .Dynamic {
-				for id in members {
-					if e.chars.input_style[id].fg == nil && e.chars.input_style[id].bg == nil {
-						final_ticks = 6
-						break
-					}
-				}
-			}
-			if age >= 18 + max(max_steps, final_ticks) do s.bubble_states[bi] = .Done
+			if complete do s.bubble_states[bi] = .Done
 		}
 	}
-	if s.config.rainbow {
-		s.rainbow_index += 1
-		if s.rainbow_index == len(s.rainbow_palette) do s.rainbow_index = 0
-	}
 	s.tick += 1
-	return s.characters[:], true
+	visible_count := 0
+	if s.next_bubble > 0 {
+		last := s.bubbles.spans[s.next_bubble - 1]
+		visible_count = last.start + last.len
+	}
+	return s.bubbles.members[:visible_count], true
 }

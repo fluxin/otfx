@@ -337,7 +337,7 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 	}
 	rand.shuffle(s.group_order[:])
 
-	s.active_limit = max(int(f64(group_count) * s.config.max_active_blocks), 1)
+	s.active_limit = max(int(math.ceil(f64(group_count) * s.config.max_active_blocks)), 1)
 }
 
 synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
@@ -364,7 +364,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Char
 	}
 
 	if s.phase == .Text {
-		for s.next_group < len(s.groups.spans) && s.active_count < s.active_limit {
+		if s.next_group < len(s.groups.spans) && s.active_count < s.active_limit {
 			group := s.group_order[s.next_group]
 			members := engine.group_members(s.groups, group)
 			s.group_remaining[group] = len(members)

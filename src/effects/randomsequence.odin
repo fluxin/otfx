@@ -80,6 +80,7 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	s.characters = chars
+	reserve(&s.active_slots, len(chars))
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.start_ticks = make([dynamic]int, len(chars))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1

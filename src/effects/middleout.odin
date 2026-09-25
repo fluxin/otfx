@@ -148,16 +148,19 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		)
 		s.center_limit = max(s.center_limit, s.center_max_steps[i])
 		s.full_limit = max(s.full_limit, s.full_max_steps[i])
+		style := e.chars.input_style[id]
+		fade_ticks := s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 6 : 66
+		s.full_limit = max(s.full_limit, fade_ticks)
 		e.chars.visual[id] = {
 			symbol = e.chars.input_symbol[id],
 			fg     = s.config.starting_color,
 		}
 		e.chars.is_visible[id] = true
 	}
-	s.full_limit = max(s.full_limit, 60)
 }
 
 middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+	if len(s.characters) == 0 do return nil, false
 	if s.phase_full && s.phase_tick >= s.full_limit do return nil, false
 	if !s.phase_full && s.phase_tick >= s.center_limit {
 		s.phase_full = true

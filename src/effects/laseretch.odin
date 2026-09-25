@@ -5,6 +5,7 @@ import engine "../engine"
 import "core:fmt"
 import "core:math/ease"
 import "core:math/rand"
+import "core:slice"
 
 Laseretch_Config :: struct {
 	etch_pattern:             Maybe(engine.Character_Group), // nil = algorithm order
@@ -101,32 +102,74 @@ laseretch_parse :: proc(cfg: ^Laseretch_Config, args: []string) -> bool {
 // glyph emits at most one spark, so this is the exact reachable upper bound,
 // including an arbitrary --etch-speed that emits every glyph in one frame.
 Laseretch_State :: struct {
-	config:           Laseretch_Config,
-	characters:       [dynamic]engine.Char_Id,
-	index_by_id:      [dynamic]int,
-	render_ids:       [dynamic]engine.Char_Id,
-	final_colors:     [dynamic]engine.Color,
-	source_starts:    [dynamic]int,
-	active_sources:   [dynamic]int,
-	pending:          [dynamic]engine.Char_Id,
-	pending_head:     int,
-	cool_spectrum:    [dynamic]engine.Color,
-	laser_spectrum:   [dynamic]engine.Color,
-	spark_spectrum:   [dynamic]engine.Color,
-	beam_ids:         [dynamic]engine.Char_Id,
-	beam_color_index: int,
-	laser_position:   engine.Coord,
-	spark_ids:        [dynamic]engine.Char_Id,
-	spark_starts:     [dynamic]int,
-	spark_origins:    [dynamic]engine.Coord,
-	spark_controls:   [dynamic]engine.Coord,
-	spark_targets:    [dynamic]engine.Coord,
-	spark_steps:      [dynamic]int,
-	active_sparks:    [dynamic]int,
-	next_spark:       int,
-	delay:            int,
-	tick:             int,
-	color_handling:   engine.Existing_Color_Handling,
+	config:         Laseretch_Config,
+	characters:     [dynamic]engine.Char_Id,
+	index_by_id:    [dynamic]int,
+	render_ids:     [dynamic]engine.Char_Id,
+	final_colors:   [dynamic]engine.Color,
+	source_starts:  [dynamic]int,
+	active_sources: [dynamic]int,
+	pending:        [dynamic]engine.Char_Id,
+	pending_head:   int,
+	cool_spectrum:  [dynamic]engine.Color,
+	laser_spectrum: [dynamic]engine.Color,
+	spark_spectrum: [dynamic]engine.Color,
+	beam_ids:       [dynamic]engine.Char_Id,
+	laser_position: engine.Coord,
+	spark_ids:      [dynamic]engine.Char_Id,
+	spark_starts:   [dynamic]int,
+	spark_origins:  [dynamic]engine.Coord,
+	spark_controls: [dynamic]engine.Coord,
+	spark_targets:  [dynamic]engine.Coord,
+	spark_steps:    [dynamic]int,
+	active_sparks:  [dynamic]int,
+	next_spark:     int,
+	delay:          int,
+	tick:           int,
+	color_handling: engine.Existing_Color_Handling,
+}
+
+// First visits of a randomized depth-first walk. Fill cells bridge gaps in the
+// text but are not etched. Only the resulting target order survives build.
+laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
+	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
+	cells := engine.get_characters(query, {.Input, .Inner_Fill}, .Top_Bottom_Left_Right)
+	defer delete(cells)
+	n := len(cells)
+	if n == 0 do return
+	visited := make([]bool, n, context.temp_allocator)
+	stack := make([dynamic]int, 0, n, context.temp_allocator)
+	width := e.canvas.text_width
+	offsets := [4]int{-width, 1, width, -1}
+	current := rand.int_max(n)
+	for {
+		if !visited[current] {
+			visited[current] = true
+			append(&stack, current)
+			id := cells[current]
+			if !e.chars.is_fill[id] do append(&s.pending, id)
+		}
+		neighbors: [dynamic; 4]int
+		column := current % width
+		for offset, direction in offsets {
+			next := current + offset
+			if next < 0 ||
+			   next >= n ||
+			   (direction == 1 && column == width - 1) ||
+			   (direction == 3 && column == 0) ||
+			   visited[next] {
+				continue
+			}
+			append(&neighbors, next)
+		}
+		if len(neighbors) > 0 {
+			current = neighbors[rand.int_max(len(neighbors))]
+		} else {
+			pop(&stack)
+			if len(stack) == 0 do break
+			current = stack[len(stack) - 1]
+		}
+	}
 }
 
 laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
@@ -146,15 +189,20 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	)
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	reserve(&s.pending, len(s.characters))
 	if group, has_group := s.config.etch_pattern.?; has_group {
 		grouped := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, group)
 		defer engine.groups_delete(&grouped)
+		for _, i in grouped.spans {
+			if i % 2 != 0 do slice.reverse(engine.group_members(grouped, i))
+		}
 		append(&s.pending, ..grouped.members[:])
 	} else {
-		append(&s.pending, ..s.characters[:])
-		rand.shuffle(s.pending[:])
+		laseretch_order(s, e)
 	}
 	n := len(s.characters)
+	reserve(&s.active_sources, n)
+	reserve(&s.active_sparks, n)
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.source_starts = make([dynamic]int, n)
@@ -174,10 +222,9 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 		s.source_starts[i] = -1
 		visible[id] = false
 	}
-	// The render prefix is permanent: source glyphs and the beam can remain
-	// visible. Active spark ids are appended as a compact suffix each frame.
+	// Retain the beam and revealed source glyphs as a prefix. Unrevealed
+	// source glyphs never need to enter the painter's work set.
 	reserve(&s.render_ids, n * 2 + e.canvas.top + 1)
-	append(&s.render_ids, ..s.characters[:])
 
 	// Create all generated rows after no storage column is borrowed. There is one
 	// spark row per source glyph, the exact upper bound for this one-strike-per-
@@ -191,7 +238,8 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 		append(&s.render_ids, id)
 	}
 	for i in 0 ..< n {
-		id := engine.add_character(e, "*", engine.coord(0, 0))
+		symbols := [3]string{".", ",", "*"}
+		id := engine.add_character(e, symbols[rand.int_max(len(symbols))], engine.coord(0, 0))
 		e.chars.is_visible[id] = false
 		e.chars.layer[id] = 2
 		append(&s.spark_ids, id)
@@ -225,6 +273,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 	   len(s.active_sparks) == 0 {
 		return nil, false
 	}
+	resize(&s.render_ids, len(s.beam_ids) + s.pending_head)
 
 	if s.pending_head < len(s.pending) {
 		if s.delay == 0 {
@@ -232,6 +281,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 				if s.pending_head == len(s.pending) do break
 				id := s.pending[s.pending_head]
 				s.pending_head += 1
+				append(&s.render_ids, id)
 				i := s.index_by_id[id]
 				s.source_starts[i] = s.tick
 				append(&s.active_sources, i)
@@ -256,7 +306,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 		id := s.characters[i]
 		start := s.source_starts[i]
 		age := s.tick - start
-		source_lifetime := 3 + len(s.cool_spectrum) * 3 + 8 * s.config.final_gradient_frames + 1
+		source_lifetime := 3 + (len(s.cool_spectrum) + 8) * 3
 		if s.color_handling == .Dynamic {
 			has_style := e.chars.input_style[id].fg != nil || e.chars.input_style[id].bg != nil
 			source_lifetime = 3 + len(s.cool_spectrum) * 3 + (has_style ? 9 : 10) * 3
@@ -272,7 +322,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 		}
 		visual_symbols[id].symbol = age < 3 ? "^" : input_symbols[id]
 		if age < 3 {
-			visual_fg[id].fg = s.cool_spectrum[0]
+			visual_fg[id].fg = engine.Color{0xFF, 0xE6, 0x80}
 		} else if age < 3 + len(s.cool_spectrum) * 3 {
 			visual_fg[id].fg = s.cool_spectrum[(age - 3) / 3]
 		} else {
@@ -304,7 +354,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 					s.cool_spectrum[len(s.cool_spectrum) - 1],
 					s.final_colors[i],
 					8,
-					min(cool_age / s.config.final_gradient_frames, 8),
+					min(1 + cool_age / 3, 8),
 				)
 			}
 		}
@@ -315,17 +365,17 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 
 	visible := e.chars.is_visible
 	if s.pending_head < len(s.pending) {
-		color := s.laser_spectrum[s.beam_color_index]
+		color_index := (s.tick / 3) % len(s.laser_spectrum)
 		for id, beam in s.beam_ids {
 			current_coords[id] = engine.coord(
 				s.laser_position.column + beam,
 				s.laser_position.row + beam,
 			)
-			visual_fg[id].fg = color
+			visual_fg[id].fg = s.laser_spectrum[color_index]
 			visible[id] = true
+			color_index += 1
+			if color_index == len(s.laser_spectrum) do color_index = 0
 		}
-		s.beam_color_index += 1
-		if s.beam_color_index == len(s.laser_spectrum) do s.beam_color_index = 0
 	} else {
 		for id in s.beam_ids do visible[id] = false
 	}
@@ -338,6 +388,12 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 		id := s.spark_ids[i]
 		start := s.spark_starts[i]
 		age := s.tick - start
+		color_step := age / s.config.spark_cooling_frames
+		if color_step >= len(s.spark_spectrum) {
+			visible[id] = false
+			s.spark_starts[i] = -1
+			continue
+		}
 		if age < s.spark_steps[i] {
 			current_coords[id] = engine.coord_on_quadratic_bezier(
 				s.spark_origins[i],
@@ -345,25 +401,14 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Char
 				s.spark_targets[i],
 				ease.ease(.Sine_Out, f64(age + 1) / f64(s.spark_steps[i])),
 			)
-			visual_fg[id].fg = s.spark_spectrum[0]
-		} else {
-			cool_age := age - s.spark_steps[i]
-			color_step := cool_age / s.config.spark_cooling_frames
-			if color_step >= len(s.spark_spectrum) {
-				visible[id] = false
-				s.spark_starts[i] = -1
-				continue
-			}
-			visual_fg[id].fg = s.spark_spectrum[color_step]
 		}
+		visual_fg[id].fg = s.spark_spectrum[color_step]
 		s.active_sparks[spark_write] = i
 		spark_write += 1
 	}
 	resize(&s.active_sparks, spark_write)
 
 	// Keep the permanent prefix in place; replace only the compact spark tail.
-	base_render_count := len(s.characters) + len(s.beam_ids)
-	resize(&s.render_ids, base_render_count)
 	for i in s.active_sparks do append(&s.render_ids, s.spark_ids[i])
 	s.tick += 1
 	return s.render_ids[:], true

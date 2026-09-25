@@ -424,11 +424,16 @@ Run_Outcome :: enum {
 run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> Run_Outcome {
 	build_effect(effect, ctx)
 	free_all(context.temp_allocator)
-	engine.prep_canvas(ctx.cfg.reuse_canvas, ctx.move_to_top, ctx.visible_right, ctx.visible_top)
+	engine.prep_canvas(
+		ctx.cfg.reuse_canvas,
+		ctx.move_to_top,
+		ctx.layout.visible_right,
+		ctx.layout.visible_top,
+	)
 	frames := 0
 	for ctx.cfg.max_frames == nil || frames < ctx.cfg.max_frames.? {
 		if resize_aware && engine.resize_settled(ctx) {
-			engine.reset_canvas_area(ctx.visible_top)
+			engine.reset_canvas_area(ctx.layout.visible_top)
 			return .Terminal_Resized
 		}
 		render_candidates, produced := next_frame(effect, ctx)
@@ -439,7 +444,7 @@ run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> 
 			engine.frame(ctx, render_candidates)
 		}
 		if resize_aware && engine.resize_settled(ctx) {
-			engine.reset_canvas_area(ctx.visible_top)
+			engine.reset_canvas_area(ctx.layout.visible_top)
 			return .Terminal_Resized
 		}
 		engine.print_frame(ctx.move_to_top, ctx.out_buf[:])

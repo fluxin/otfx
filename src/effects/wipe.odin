@@ -107,6 +107,7 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
+	reserve(&s.active, len(chars))
 	s.color_handling = e.cfg.existing_color_handling
 	s.frame_spans = make([dynamic]engine.Span, len(e.chars))
 	s.start_ticks = make([dynamic]int, len(e.chars))

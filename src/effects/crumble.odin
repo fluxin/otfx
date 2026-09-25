@@ -100,6 +100,8 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	n := len(s.characters)
+	reserve(&s.fall_active, n)
+	reserve(&s.vacuum_active, n)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.weak_colors = make([dynamic]engine.Color, n)
 	s.dust_colors = make([dynamic]engine.Color, n)

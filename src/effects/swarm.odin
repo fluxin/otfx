@@ -65,7 +65,7 @@ swarm_parse :: proc(cfg: ^Swarm_Config, args: []string) -> bool {
 	return true
 }
 
-SWARM_MAX_STAGES :: 13 // four areas × (enter + two inner moves), then land
+SWARM_FLASH_ENTRIES :: 26 // eight ramp entries, ten flash entries, eight returning
 
 // A swarm is a contiguous slice, while each source glyph owns a fixed-width
 // waypoint row. Only the currently active swarm is touched per frame.
@@ -77,7 +77,8 @@ Swarm_State :: struct {
 	final_colors:       [dynamic]engine.Color,
 	swarms:             engine.Char_Groups,
 	group_stage_counts: [dynamic]int,
-	group_colors:       [dynamic]engine.Color,
+	flash_colors:       [dynamic]engine.Color,
+	stage_stride:       int,
 	group_area_stages:  [dynamic]int,
 	group_spawns:       [dynamic]engine.Coord,
 	group_start_ticks:  [dynamic]int,
@@ -85,6 +86,7 @@ Swarm_State :: struct {
 	lane_origins:       [dynamic]engine.Coord,
 	lane_starts:        [dynamic]int,
 	lane_ends:          [dynamic]int,
+	lane_steps:         [dynamic]int,
 	lane_next:          [dynamic]int,
 	lane_finish:        [dynamic]int,
 	character_stages:   [dynamic]int,
@@ -104,7 +106,7 @@ swarm_waypoint :: #force_inline proc(
 	s: ^Swarm_State,
 	character_index, stage: int,
 ) -> engine.Coord {
-	return s.waypoints[character_index * SWARM_MAX_STAGES + stage]
+	return s.waypoints[character_index * s.stage_stride + stage]
 }
 
 swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
@@ -124,14 +126,17 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
 	n := len(s.characters)
+	s.stage_stride = s.config.swarm_area_count_range.hi * 3 + 1
+	reserve(&s.active_indexes, n)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.chars))
 	s.final_colors = make([dynamic]engine.Color, n)
-	s.waypoints = make([dynamic]engine.Coord, n * SWARM_MAX_STAGES)
-	s.lane_origins = make([dynamic]engine.Coord, n * SWARM_MAX_STAGES)
-	s.lane_starts = make([dynamic]int, n * SWARM_MAX_STAGES)
-	s.lane_ends = make([dynamic]int, n * SWARM_MAX_STAGES)
-	s.lane_next = make([dynamic]int, n * SWARM_MAX_STAGES)
+	s.waypoints = make([dynamic]engine.Coord, n * s.stage_stride)
+	s.lane_origins = make([dynamic]engine.Coord, n * s.stage_stride)
+	s.lane_starts = make([dynamic]int, n * s.stage_stride)
+	s.lane_ends = make([dynamic]int, n * s.stage_stride)
+	s.lane_steps = make([dynamic]int, n * s.stage_stride)
+	s.lane_next = make([dynamic]int, n * s.stage_stride)
 	s.lane_finish = make([dynamic]int, n)
 	s.character_stages = make([dynamic]int, n)
 	for &next in s.lane_next do next = -1
@@ -153,18 +158,18 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 		append(&s.swarms.members, ..s.characters[start:end])
 		append(&s.swarms.spans, engine.Span{span_start, end - start})
 	}
-	// Exclude a tiny final group, matching the prior offset representation's
-	// visible rhythm. Its characters remain in the member pool but have no span.
+	// Merge a tiny tail into the preceding contiguous group; every glyph plays.
 	groups := len(s.swarms.spans)
 	if groups > 1 {
 		last := &s.swarms.spans[groups - 1]
 		if last.len < math.floor_div(swarm_size, 2) {
+			s.swarms.spans[groups - 2].len += last.len
 			resize(&s.swarms.spans, groups - 1)
 		}
 	}
 	groups = len(s.swarms.spans)
 	s.group_stage_counts = make([dynamic]int, groups)
-	s.group_colors = make([dynamic]engine.Color, groups)
+	s.flash_colors = make([dynamic]engine.Color, groups * SWARM_FLASH_ENTRIES)
 	s.group_area_stages = make([dynamic]int, groups)
 	s.group_spawns = make([dynamic]engine.Coord, groups)
 	s.group_start_ticks = make([dynamic]int, groups)
@@ -176,15 +181,23 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 			s.config.swarm_area_count_range.lo,
 			s.config.swarm_area_count_range.hi + 1,
 		)
-		area_count = min(area_count, 4)
 		stages := area_count * 3 + 1
 		s.group_stage_counts[group] = stages
-		s.group_colors[group] = s.config.base_colors[rand.int_max(len(s.config.base_colors))]
+		base_color := s.config.base_colors[rand.int_max(len(s.config.base_colors))]
+		for entry in 0 ..< SWARM_FLASH_ENTRIES {
+			step := entry < 8 ? entry : (entry < 18 ? 7 : 25 - entry)
+			s.flash_colors[group * SWARM_FLASH_ENTRIES + entry] = engine.gradient_between_step(
+				base_color,
+				s.config.flash_color,
+				7,
+				step,
+			)
+		}
 		spawn := engine.canvas_random_coord(e.canvas, true, false)
 		s.group_spawns[group] = spawn
 		area_radius := max(math.floor_div(min(e.canvas.right, e.canvas.top), 6), 1) * 2
 		focus_radius := max(math.floor_div(min(e.canvas.right, e.canvas.top), 2), 1)
-		area_coords: [4][dynamic]engine.Coord
+		area_coords := make([][dynamic]engine.Coord, area_count, context.temp_allocator)
 		last_focus := spawn
 		for area in 0 ..< area_count {
 			// The source keeps each area around the *previous* focus, then
@@ -211,11 +224,11 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 			for area in 0 ..< area_count {
 				base_stage := area * 3
 				for inner in 0 ..< 3 {
-					s.waypoints[i * SWARM_MAX_STAGES + base_stage + inner] =
+					s.waypoints[i * s.stage_stride + base_stage + inner] =
 						area_coords[area][rand.int_max(len(area_coords[area]))]
 				}
 			}
-			s.waypoints[i * SWARM_MAX_STAGES + stages - 1] = input_coords[id]
+			s.waypoints[i * s.stage_stride + stages - 1] = input_coords[id]
 		}
 		for &coords in area_coords[:area_count] do delete(coords[:])
 	}
@@ -227,8 +240,13 @@ swarm_stage_speed :: #force_inline proc(stage, stage_count: int) -> f64 {
 	return stage % 3 == 0 ? 0.4 : 0.18
 }
 
-swarm_lane_index :: #force_inline proc(character, stage: int) -> int {
-	return character * SWARM_MAX_STAGES + stage
+swarm_stage_easing :: #force_inline proc(stage, stage_count: int) -> ease.Ease {
+	if stage + 1 == stage_count do return .Quadratic_In_Out
+	return stage % 3 == 0 ? .Sine_Out : .Sine_In_Out
+}
+
+swarm_lane_index :: #force_inline proc(s: ^Swarm_State, character, stage: int) -> int {
+	return character * s.stage_stride + stage
 }
 
 swarm_event_less :: #force_inline proc(a, b: Swarm_Plan_Event) -> bool {
@@ -266,18 +284,15 @@ swarm_event_pop :: proc(events: ^[dynamic]Swarm_Plan_Event) -> Swarm_Plan_Event 
 }
 
 swarm_lane_position :: proc(s: ^Swarm_State, character, stage, tick: int) -> engine.Coord {
-	row := swarm_lane_index(character, stage)
-	start, end := s.lane_starts[row], s.lane_ends[row]
-	duration := max(end - start, 1)
+	row := swarm_lane_index(s, character, stage)
+	start := s.lane_starts[row]
+	duration := s.lane_steps[row]
 	progress := f64(clamp(tick - start, 0, duration)) / f64(duration)
 	stage_count := s.group_stage_counts[s.group_by_index[character]]
 	return engine.coord_on_line(
 		s.lane_origins[row],
 		swarm_waypoint(s, character, stage),
-		ease.ease(
-			stage + 1 == stage_count ? ease.Ease.Quadratic_In_Out : ease.Ease.Sine_In_Out,
-			progress,
-		),
+		ease.ease(swarm_stage_easing(stage, stage_count), progress),
 	)
 }
 
@@ -288,7 +303,7 @@ swarm_plan_segment :: proc(
 	events: ^[dynamic]Swarm_Plan_Event,
 ) {
 	stage_count := s.group_stage_counts[s.group_by_index[character]]
-	row := swarm_lane_index(character, stage)
+	row := swarm_lane_index(s, character, stage)
 	target := swarm_waypoint(s, character, stage)
 	steps := max(
 		engine.round_half_even(
@@ -299,6 +314,7 @@ swarm_plan_segment :: proc(
 	s.lane_origins[row] = origin
 	s.lane_starts[row] = tick
 	s.lane_ends[row] = tick + steps
+	s.lane_steps[row] = steps
 	s.lane_next[row] = -1
 	swarm_event_push(events, {tick + steps, character, stage})
 }
@@ -317,7 +333,7 @@ swarm_plan_coordinate_area :: proc(
 		if i == leader || plan_stages[i] < 0 || plan_stages[i] >= stage do continue
 		if rand.float64() >= s.config.swarm_coordination do continue
 		old_stage := plan_stages[i]
-		old_row := swarm_lane_index(i, old_stage)
+		old_row := swarm_lane_index(s, i, old_stage)
 		s.lane_ends[old_row] = tick
 		s.lane_next[old_row] = stage
 		plan_stages[i] = stage
@@ -325,7 +341,7 @@ swarm_plan_coordinate_area :: proc(
 	}
 }
 
-swarm_plan_group :: proc(s: ^Swarm_State, group, start_tick: int) {
+swarm_plan_group :: proc(s: ^Swarm_State, e: ^engine.Engine, group, start_tick: int) {
 	plan_stages := make([]int, len(s.characters), context.temp_allocator)
 	for &stage in plan_stages do stage = -1
 	events: [dynamic]Swarm_Plan_Event
@@ -339,11 +355,15 @@ swarm_plan_group :: proc(s: ^Swarm_State, group, start_tick: int) {
 	for len(events) > 0 {
 		event := swarm_event_pop(&events)
 		i, stage := event.character, event.stage
-		row := swarm_lane_index(i, stage)
+		row := swarm_lane_index(s, i, stage)
 		if plan_stages[i] != stage || s.lane_ends[row] != event.tick do continue
 		stage_count := s.group_stage_counts[group]
 		if stage + 1 == stage_count {
-			s.lane_finish[i] = event.tick + 30
+			id := s.characters[i]
+			style := e.chars.input_style[id]
+			fade_ticks :=
+				s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 36 : 33
+			s.lane_finish[i] = event.tick + fade_ticks
 			plan_stages[i] = -1
 			continue
 		}
@@ -362,7 +382,7 @@ swarm_plan_lanes :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	launched := 0
 	for group := len(s.swarms.spans) - 1; group >= 0; group -= 1 {
 		s.group_start_ticks[group] = start_tick
-		swarm_plan_group(s, group, start_tick)
+		swarm_plan_group(s, e, group, start_tick)
 		members := engine.group_members(s.swarms, group)
 		for id in members do append(&finish_ticks, s.lane_finish[s.index_by_id[id]])
 		launched += len(members)
@@ -383,7 +403,7 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		s.character_stages[i] = 0
-		e.chars.current_coord[id] = s.lane_origins[swarm_lane_index(i, 0)]
+		e.chars.current_coord[id] = s.lane_origins[swarm_lane_index(s, i, 0)]
 		e.chars.is_visible[id] = true
 		append(&s.active_indexes, i)
 	}
@@ -403,16 +423,15 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		stage_count := s.group_stage_counts[group]
 		stage := s.character_stages[i]
 		id := s.characters[i]
-		row := swarm_lane_index(i, stage)
+		row := swarm_lane_index(s, i, stage)
+		// Coordination can replace a newly entered lane in the same tick.
+		// Skip every expired lane before deciding between motion and landing.
+		for s.tick >= s.lane_ends[row] && s.lane_next[row] >= 0 {
+			stage = s.lane_next[row]
+			s.character_stages[i] = stage
+			row = swarm_lane_index(s, i, stage)
+		}
 		if s.tick >= s.lane_ends[row] {
-			next_stage := s.lane_next[row]
-			if next_stage >= 0 {
-				current_coords[id] = swarm_waypoint(s, i, stage)
-				s.character_stages[i] = next_stage
-				s.active_indexes[write] = i
-				write += 1
-				continue
-			}
 			if s.tick >= s.lane_finish[i] {
 				if s.color_handling == .Dynamic {
 					engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
@@ -421,10 +440,13 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 				}
 				continue
 			}
+			e.chars.layer[id] = 0
 			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
 			if s.color_handling == .Dynamic {
 				style := e.chars.input_style[id]
-				if fg, ok := style.fg.?; ok {
+				if style.fg == nil && style.bg == nil && s.tick - s.lane_ends[row] >= 33 {
+					visual_fg[id].fg = nil
+				} else if fg, ok := style.fg.?; ok {
 					visual_fg[id].fg = engine.gradient_between_step(
 						s.config.flash_color,
 						fg,
@@ -465,28 +487,26 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			continue
 		}
 		if s.tick >= s.lane_starts[row] {
-			progress :=
-				f64(s.tick - s.lane_starts[row] + 1) / f64(s.lane_ends[row] - s.lane_starts[row])
+			progress := f64(s.tick - s.lane_starts[row] + 1) / f64(s.lane_steps[row])
 			current_coords[id] = engine.coord_on_line(
 				s.lane_origins[row],
 				swarm_waypoint(s, i, stage),
-				ease.ease(
-					stage + 1 == stage_count ? ease.Ease.Quadratic_In_Out : ease.Ease.Sine_In_Out,
-					progress,
-				),
+				ease.ease(swarm_stage_easing(stage, stage_count), progress),
 			)
 			visual_symbols[id].symbol = input_symbols[id]
-			if stage + 1 == stage_count {
-				visual_fg[id].fg = s.config.flash_color
-			} else {
-				flash_step := min(s.tick - s.lane_starts[row], 6)
-				visual_fg[id].fg = engine.gradient_between_step(
-					s.group_colors[group],
-					s.config.flash_color,
-					6,
-					flash_step,
+			e.chars.layer[id] = 1
+			entry := 0
+			if stage % 3 == 0 {
+				// Entry and landing flash through a mirrored palette as distance
+				// progresses. Inner paths retain the base color.
+				distance_fraction := ease.ease(swarm_stage_easing(stage, stage_count), progress)
+				entry = clamp(
+					engine.round_half_even(f64(SWARM_FLASH_ENTRIES - 1) * distance_fraction),
+					0,
+					SWARM_FLASH_ENTRIES - 1,
 				)
 			}
+			visual_fg[id].fg = s.flash_colors[group * SWARM_FLASH_ENTRIES + entry]
 		}
 		s.active_indexes[write] = i
 		write += 1

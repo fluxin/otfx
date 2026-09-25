@@ -198,6 +198,7 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		overflow_append_row(s, row, true)
 	}
 
+	reserve(&s.active_rows, len(s.pending_rows))
 	steps := max(
 		math.floor_div(e.canvas.top, max(1, len(s.config.overflow_gradient_stops) - 1)),
 		1,

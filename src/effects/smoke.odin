@@ -3,6 +3,7 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
+import "core:math/rand"
 
 Smoke_Config :: struct {
 	starting_color:           engine.Color,
@@ -70,13 +71,99 @@ Smoke_State :: struct {
 	config:         Smoke_Config,
 	characters:     [dynamic]engine.Char_Id,
 	arrivals:       [dynamic]int,
+	previous:       [dynamic]int,
+	changes:        [dynamic]engine.Sample_Change,
+	samples:        [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	smoke_palette:  [dynamic]engine.Color,
+	smoke_symbols:  [dynamic]string,
 	paint_pairs:    [dynamic]int,
 	paint_steps:    [dynamic]int,
 	tick:           int,
 	last_tick:      int,
 	color_handling: engine.Existing_Color_Handling,
+}
+
+// Generate Python's weighted Prim tree once, then retain only BFS arrival
+// ticks. Cells are row-major, top to bottom. Four bits encode tree neighbors;
+// equal-weight candidate edges share flat buckets with random removal.
+smoke_arrivals :: proc(arrivals: []int, width: int) {
+	n := len(arrivals)
+	if n == 0 do return
+	context.allocator = context.temp_allocator
+	weights := make([]u8, n)
+	links := make([]u8, n)
+	visited := make([]bool, n)
+	buckets: [100]engine.Span
+	current := rand.int_max(n)
+	for &weight in weights {
+		weight = u8(rand.int_max(100))
+		buckets[weight].len += 4
+	}
+	start := 0
+	for &bucket in buckets {
+		bucket.start = start
+		start += bucket.len
+		bucket.len = 0
+	}
+	Edge :: struct {
+		source, direction: int,
+	}
+	edges := make([]Edge, 4 * n)
+	offsets := [4]int{-width, 1, width, -1}
+	visited[current] = true
+	for {
+		column := current % width
+		for offset, direction in offsets {
+			next := current + offset
+			if next < 0 ||
+			   next >= n ||
+			   (direction == 1 && column == width - 1) ||
+			   (direction == 3 && column == 0) ||
+			   visited[next] {
+				continue
+			}
+			bucket := &buckets[weights[next]]
+			edges[bucket.start + bucket.len] = {current, direction}
+			bucket.len += 1
+		}
+		found := false
+		for &bucket in buckets {
+			for bucket.len > 0 {
+				pick := rand.int_max(bucket.len)
+				edge := edges[bucket.start + pick]
+				bucket.len -= 1
+				edges[bucket.start + pick] = edges[bucket.start + bucket.len]
+				next := edge.source + offsets[edge.direction]
+				if visited[next] do continue
+				links[edge.source] |= 1 << u8(edge.direction)
+				links[next] |= 1 << u8((edge.direction + 2) % 4)
+				visited[next] = true
+				current, found = next, true
+				break
+			}
+			if found do break
+		}
+		if !found do break
+	}
+	queue := make([]int, n)
+	for &arrival in arrivals do arrival = -1
+	root := rand.int_max(n)
+	queue[0], arrivals[root] = root, 0
+	tail := 1
+	for head := 0; head < tail; head += 1 {
+		cell := queue[head]
+		for offset, direction in offsets {
+			if links[cell] & (1 << u8(direction)) == 0 do continue
+			next := cell + offset
+			if arrivals[next] >= 0 do continue
+			arrivals[next] = arrivals[cell] + 1
+			queue[tail] = next
+			tail += 1
+		}
+	}
+	// Python steps the first BFS layer before emitting its first frame.
+	for &arrival in arrivals do arrival = max(arrival - 1, 0)
 }
 
 smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
@@ -105,7 +192,13 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	)
 	append(&stops, ..s.config.smoke_gradient_stops[:])
 	for i := len(s.config.final_gradient_stops) - 1; i >= 0; i -= 1 do append(&stops, s.config.final_gradient_stops[i])
-	s.smoke_palette = engine.gradient_make(stops[:], []int{3, 4}, false)
+	palette := engine.gradient_make(stops[:], []int{3, 4}, false)
+	defer delete(palette[:])
+	// Distribute the shorter lane evenly, with the remainder at the front,
+	// just like Python's apply_gradient_to_symbols (including long symbol lists).
+	entries := max(len(palette), len(s.config.smoke_symbols))
+	s.smoke_palette = engine.sequence_expand(palette[:], entries)
+	s.smoke_symbols = engine.sequence_expand(s.config.smoke_symbols[:], entries)
 
 	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
 	// Smoke always needs the text rectangle, including its spaces. The
@@ -117,18 +210,14 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	s.arrivals = make([dynamic]int, n)
 	s.final_colors = make([dynamic]engine.Color, n)
 
-	within_text := !s.config.use_whole_canvas
-	origin := engine.canvas_random_coord(e.canvas, false, within_text)
+	width := s.config.use_whole_canvas ? e.canvas.width : e.canvas.text_width
+	smoke_arrivals(s.arrivals[:], width)
 	input_coords := e.chars.input_coord
 	visual_fg := e.chars.visual
 	visible := e.chars.is_visible
 	for id, i in s.characters {
 		p := input_coords[id]
-		// A Manhattan flood front has the same contiguous growth property as the
-		// original spanning-tree traversal, without retaining adjacency objects.
-		arrival := abs(p.column - origin.column) + abs(p.row - origin.row)
-		s.arrivals[i] = arrival
-		s.last_tick = max(s.last_tick, arrival)
+		s.last_tick = max(s.last_tick, s.arrivals[i])
 		s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
 		if s.color_handling == .Dynamic {
 			visual_fg[id].fg = engine.Color{0x00, 0x00, 0x00}
@@ -159,6 +248,20 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	} else {
 		s.last_tick += len(s.smoke_palette) * 3 + paint_entries * 5
 	}
+	// Store one shared clock across smoke and paint, including their different
+	// hold durations. Character-specific colors are computed only on changes.
+	s.previous = make([dynamic]int, n)
+	s.changes = make([dynamic]engine.Sample_Change, n)
+	for &sample in s.previous do sample = -1
+	smoke_count :=
+		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
+	smoke_hold := s.color_handling == .Dynamic ? 10 : 3
+	paint_count := s.color_handling == .Dynamic ? 1 : paint_entries
+	s.samples = make([dynamic]int, smoke_count * smoke_hold + paint_count * 5)
+	for &sample, tick in s.samples {
+		sample =
+			tick < smoke_count * smoke_hold ? tick / smoke_hold : smoke_count + (tick - smoke_count * smoke_hold) / 5
+	}
 }
 
 smoke_paint_color :: proc(
@@ -175,31 +278,33 @@ smoke_paint_color :: proc(
 
 smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
 	if s.tick == s.last_tick do return nil, false
-	smoke_ticks :=
-		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) * 10 : len(s.smoke_palette) * 3
-	paint_entries := 1 + 5 * len(s.config.final_gradient_stops)
-	input_symbols := e.chars.input_symbol
-	visual_symbols := e.chars.visual
-	visual_fg := e.chars.visual
-	for id, i in s.characters {
-		age := s.tick - s.arrivals[i]
-		if age < 0 do continue
-		if age < smoke_ticks {
+	smoke_count :=
+		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
+	changes := engine.sample_timeline_changes(
+		s.changes[:],
+		s.arrivals[:],
+		s.previous[:],
+		s.tick,
+		s.samples[:],
+	)
+	for change in changes {
+		i, sample := change.slot, change.sample
+		id := s.characters[i]
+		if sample < smoke_count {
 			if s.color_handling == .Dynamic {
-				visual_symbols[id].symbol = s.config.smoke_symbols[age / 10]
-				engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+				e.chars.visual[id].symbol = s.config.smoke_symbols[sample]
+				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
 			} else {
-				visual_symbols[id].symbol =
-					s.config.smoke_symbols[min(age / 3, len(s.config.smoke_symbols) - 1)]
-				visual_fg[id].fg = s.smoke_palette[age / 3]
+				e.chars.visual[id].symbol = s.smoke_symbols[sample]
+				e.chars.visual[id].fg = s.smoke_palette[sample]
 			}
 		} else {
-			visual_symbols[id].symbol = input_symbols[id]
+			e.chars.visual[id].symbol = e.chars.input_symbol[id]
 			if s.color_handling == .Dynamic {
-				engine.dynamic_apply_input_colors(&visual_fg[id], e.chars.input_style[id])
+				engine.dynamic_apply_input_colors(&e.chars.visual[id], e.chars.input_style[id])
 			} else {
-				paint_entry := min((age - smoke_ticks) / 5, paint_entries - 1)
-				visual_fg[id].fg = smoke_paint_color(
+				paint_entry := sample - smoke_count
+				e.chars.visual[id].fg = smoke_paint_color(
 					s.config.final_gradient_stops[:],
 					s.final_colors[i],
 					s.paint_pairs[paint_entry],

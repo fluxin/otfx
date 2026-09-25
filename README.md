@@ -34,7 +34,7 @@ The design is data-oriented from the renderer through the effects:
   Effects feed it; no effect owns a second canvas or raster.
 - The renderer compares the current and prior cell grids and emits only changed
   terminal runs into one reusable byte buffer.
-- Effects use flat `[dynamic]` pools, spans, and `Char_Groups {chars, offsets}`.
+- Effects use flat `[dynamic]` pools, spans, and `Char_Groups {members, spans}`.
   They do not use maps for character state.
 - Newer effects evaluate movement, color ramps, and phase state directly from
   dense columns rather than allocating paths, scenes, callbacks, or per-glyph
@@ -66,98 +66,64 @@ producing the same named effect and honoring its supported option surface.
 The original Python TerminalTextEffects implementation is the **accuracy
 oracle**; Rust `ttfx` is the **performance oracle**. Visual and behavioral
 decisions are checked against Python, while resource comparisons use Rust.
+The [37-effect visual review](docs/accuracy-review.md) records sampled behavior,
+accepted differences, and remaining coverage limits. Shared ownership and
+playback contracts are described in [architecture](docs/architecture.md).
 
 ## Performance
 
-[`bench/bench.odin`](bench/bench.odin) runs the real Rust and Odin CLIs with
-the same dense 200×50 input, seed, and `--frame-rate 0`. It reports best and
-mean wall time, child user-plus-system CPU from Linux `wait4` microseconds,
-maximum child peak RSS across measured samples, and observed terminal frame
-markers. This is an end-to-end production benchmark, not terminal-stream or
-intermediate-frame parity.
-
-Historical full-suite results against `ttfx v0.3.3` (`54d21f0`): five repeats with
-`BENCH_MIN_SECONDS=1`, a dense 200×50 input, seed 1, and disabled frame pacing.
-The aggregation is an unweighted mean across the 35 fixed-duration effects;
-Matrix and Thunderstorm are excluded because their wall-clock duration is
-configured independently.
+On the measured workload, Odin is faster on **35/35 finite effects**, with a
+**2.35× geometric wall-speedup**. [Per-effect results](docs/rust-benchmark.tsv)
+include wall time, CPU, peak RSS, and frame counts.
 
 | Metric | Rust | Odin | Odin / Rust |
 |---|---:|---:|---:|
-| Best wall, mean per effect | 212.2 ms | 116.7 ms | 0.55× (1.82× faster) |
-| Peak RSS, mean per effect | 131.5 MiB | 13.2 MiB | 0.10× |
+| Best wall, mean per effect | 196.0 ms | 85.9 ms | 0.44× (2.28× faster) |
+| CPU, mean per effect | 196.6 ms | 85.9 ms | 0.44× |
+| Peak RSS, mean per effect | 133.2 MiB | 13.9 MiB | 0.10× |
 
-The historical CPU aggregate is withdrawn: the old process-wait path truncated
-each child to 10 ms CPU ticks. The harness now uses `wait4` microseconds for
-every measured process, so short effects retain their fractional CPU cost.
+Measured 2026-09-25 on an AMD Ryzen 9 9900X3D, pinned to CPU 2. Odin
+`dev-2026-09-nightly:a2fb372`, built with `-o:speed -debug`; Rust `ttfx v0.3.3`
+at `54d21f0`, using its release binary. The native [benchmark](bench/bench.odin)
+runs both real CLIs with dense 190×46 text on a 200×50 canvas, seed 1,
+`--frame-rate 0`, and stdout redirected to `/dev/null`: three repeats, minimum
+0.5 seconds per sample. CPU is child user-plus-system time from Linux `wait4`;
+RSS is the maximum observed across measured children. Table aggregates are
+unweighted means over the 35 finite effects. The harness computes aggregates
+before rounding individual rows for display.
 
-The harness prints best and mean wall time, child CPU time, peak RSS, and
-observed frame markers for every effect. Frame counts are diagnostics rather
-than throughput normalizers: the two implementations can construct different
-intermediate compositions while honoring the same effect contract.
+These are complete-run costs for the implemented animations. Choreography and
+frame counts can differ; this is neither equal-frame throughput nor a claim
+about every input and option. Terminal-emulator cost is excluded.
+[Performance decisions](docs/performance-decisions.md) retain the reasons for
+keeping or rejecting the main optimizations.
 
-### Wall-clock-gated effects
-
-`matrix` (`--rain-time`) and `thunderstorm` (`--storm-time`) deliberately run
-for a configured interval. With pacing disabled, both use a full CPU core;
-their elapsed-time ratio and emitted frames are therefore diagnostics, **not**
-normalized throughput or semantic-parity claims.
-
-The following historical five-repeat diagnostics use `BENCH_MATRIX_RAIN_TIME=5`
-and the default `--storm-time 1` at 200×50. CPU is mean child CPU time; peak RSS is
-one `wait4` observation. Frame counts are host- and renderer-dependent
-observations only.
-
-| Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Observed frames, Rust / Odin |
-|---|---:|---:|---:|---:|
-| Matrix (`--rain-time 5`) | 5,105.1 / 5,088.0 ms | 5,118.3 / 5,096.0 ms | 44.4 / 11.1 MiB | 100,401 / 104,421 |
-| Thunderstorm (`--storm-time 1`) | 1,099.5 / 1,100.0 ms | 1,015.6 / 1,004.0 ms | 142.7 / 11.0 MiB | 4,173 / 30,909 |
-
-Different frame counts in the same time window are expected with the two
-renderer designs. A speed or parity claim for these effects needs a fixed
-logical-frame capture harness; `--virtual-clock` supplies the shared clock half
-of that, advancing `--rain-time` and `--storm-time` by logical frames instead
-of by wall time, so an unpaced capture no longer depends on host speed.
-
-### Paced 60 fps duty cycle
-
-The default frame rate is 60 fps. The following historical three-run sample uses
-the same dense 200×50 input and seed, with `--rain-time 1` or `--storm-time 1`.
-Output is redirected, so these are application-process costs rather than
-terminal-emulator costs. CPU is user plus system CPU seconds per run.
-
-| Effect | Rust wall / CPU | Odin wall / CPU | Rust / Odin peak RSS | Interpretation |
-|---|---:|---:|---:|---|
-| Matrix | 22.19 s / 0.31 s | 22.15 s / 0.17 s | 44.2 / 11.1 MiB | Odin uses about 45% less application CPU at a comparable duration. |
-| Thunderstorm | 5.79 s / 0.14 s | 4.21 s / 0.02 s | 134.3 / 11.0 MiB | Lower CPU and RSS; the independent Odin choreography is 27% shorter. Duration is diagnostic. |
-
-The frame-rate setting is a fixed application target, selected with
-`--frame-rate N` (60 by default; `0` disables pacing). Terminal applications
-do not have a portable, reliable display-refresh query or a vsynced terminal
-output path.
-
-Run the current production benchmark with:
+### Reproduce
 
 ```sh
-odin build src -o:speed -out:otfx
+odin build src -o:speed -debug -out:otfx
 odin build bench -o:speed -out:bench/bench
-BENCH_MIN_SECONDS=1 ./bench/bench 5
-# Resource cost at 60 fps; defaults to Matrix and Thunderstorm
-BENCH_MATRIX_RAIN_TIME=1 ./bench/bench --paced 3
+BENCH_MIN_SECONDS=0.5 BENCH_MATRIX_RAIN_TIME=1 BENCH_STORM_TIME=1 taskset -c 2 ./bench/bench 3
+# Application resource cost at 60 fps; defaults to Matrix and Thunderstorm
+BENCH_MATRIX_RAIN_TIME=1 BENCH_STORM_TIME=1 ./bench/bench --paced 3
 ```
 
-The benchmark is entirely Odin; build it once and reuse `bench/bench`. It sets
-fixed terminal dimensions for each child process, batches short effects into
-multi-second samples, and emits an end-of-run summary of unweighted mean wall
-time, child CPU time, peak RSS, and geometric wall-speedup. Matrix and
-Thunderstorm are explicitly excluded from that normalized summary.
-`BENCH_MATRIX_RAIN_TIME` and `BENCH_STORM_TIME` can shorten their default
-5-second and 1-second diagnostic windows.
+The harness uses the local Rust reference release binary. Short unpaced runs
+are batched to reach the minimum sample duration; each paced repeat is one
+complete animation.
 
-`--paced` reports mean CPU per run, CPU duty (CPU/wall relative to one core),
-maximum observed peak RSS, and actual duration at 60 fps. It does not publish
-a wall-time speedup or a throughput aggregate. Output goes to `/dev/null`, so
-terminal-emulator costs are excluded. Each paced repeat is one complete run.
+### Timing-gated effects
+
+Matrix (`--rain-time`) and Thunderstorm (`--storm-time`) run for configured
+intervals and are excluded from the throughput aggregate. With pacing disabled,
+both can use a full CPU core: a faster update loop does more work within the
+same time window. Their elapsed times and frame counts are diagnostics.
+
+At the default 60 fps, sleeping adds wall time but no CPU time. Use `--paced`
+to measure CPU per animation, CPU duty (CPU/wall relative to one core), peak RSS,
+and actual duration. Thunderstorm has independent choreography, so different
+animation durations do not establish a throughput speedup. For deterministic
+captures, `--virtual-clock` advances the duration gates by logical frames.
 
 ### Documentation previews
 
@@ -193,7 +159,8 @@ as the effect actually runs.
 
 ### Compile time
 
-These are same-host wall times. “Cacheless” means a fresh Rust target directory
+These are earlier same-host samples, not rerun for the current source.
+“Cacheless” means a fresh Rust target directory
 or a fresh Odin output path; it does not redownload dependencies. “Repeated”
 means the immediate repeat of the same command. Rust reuses compiled artifacts;
 Odin's direct build still performs its compilation work. The Rust invalidation
@@ -206,9 +173,8 @@ build, so it measures a real cached source edit rather than a clean build.
 | Repeated | 0.01 s | 0.02 s | 0.88 s | 8.00 s |
 | Cached source invalidation | — | 18.39 s | — | — |
 
-The Rust debug cacheless measurement is included for fun as well as the
-optimized comparison. These are compile latency samples, not a compiler quality
-ranking: toolchains, CPU parallelism, cache state, and dependency graphs differ.
+Toolchains, CPU parallelism, cache state, and dependency graphs differ, so these
+samples do not establish a compiler quality ranking.
 
 ## Effects
 
@@ -349,7 +315,7 @@ itself, not borrowed from the reference:
 ![otfx thunderstorm effect](docs/images/thunderstorm.gif)
 
 Recursive lightning is generated in scalar batches, then flattened for replay.
-See the [branching validation and measurements](docs/thunderstorm-branching.md).
+See the [branch generation and replay contract](docs/architecture.md#thunderstorm).
 
 ### unstable
 
@@ -456,18 +422,16 @@ The diagnostic tool checks Odin completion and final input glyphs and reports
 reference frame-count differences without failing on them. Reasonable visual,
 RNG, and duration differences are acceptable for meaningful performance gains;
 exact reference frames and terminal streams are not acceptance requirements.
-Intermediate visual comparison still needs a capture harness.
+[`tools/accuracy`](tools/accuracy) captures paired Python/Odin renderer cells and
+contact sheets. The [visual review](docs/accuracy-review.md) records its coverage
+and limitations; matching frame counts or final text alone is insufficient.
 
 ## Remaining validation work
 
-- Build visual-frame capture on top of `--virtual-clock` to investigate phase
-  progression and composition. The shared clock already makes the two
-  seconds-budgeted effects advance by frames, as the documentation previews do.
-- Record paced end-to-end durations effect by effect. Matrix is close in the
-  60 fps sample above. Thunderstorm deliberately uses independent choreography;
-  its duration difference is acceptable and is not a wall-time speedup claim.
-- Add regression captures for input SGR combinations, xterm-color emission,
-  and `always`/`dynamic` behavior across effects.
+- Broaden paired Python captures beyond one fixture, seed, and default option set,
+  including input SGR, xterm colors, and `always`/`dynamic` behavior.
+- Broaden paced CPU measurements independently of unpaced throughput. Matrix and
+  Thunderstorm need CPU-duty and duration reporting, not elapsed-time speedups.
 
 ## Credit and license
 

@@ -157,6 +157,7 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		append(&s.rows, Print_Row{{start, len(s.row_chars) - start}, 0})
 	}
 	s.typing = len(s.rows) > 0
+	reserve(&s.active_chars, len(s.row_chars))
 }
 
 print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {

@@ -223,7 +223,6 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 		}
 	} else {
 		if s.illuminate_range > s.expand_limit do return nil, false
-		s.illuminate_range += 1
 	}
 
 	input_coords := e.chars.input_coord
@@ -261,5 +260,6 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 			visual_fg[id].bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
 		}
 	}
+	if s.phase == .Expand do s.illuminate_range += 1
 	return s.characters[:], true
 }

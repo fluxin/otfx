@@ -272,6 +272,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	s.column_symbols = beams_expand_symbols(s.config.beam_column_symbols[:], len(s.beam_palette))
 
 	for gi in 0 ..< len(s.groups) do append(&s.pending, gi)
+	reserve(&s.active, len(s.groups))
 	rand.shuffle(s.pending[:])
 }
 

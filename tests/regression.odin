@@ -93,8 +93,30 @@ typed_input_errors :: proc(t: ^testing.T) {
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
 	context.allocator = mem.dynamic_arena_allocator(&arena)
-	inputs := []string{"\x1b", "\x1b[38;5;999mX", "\x1b[2JX"}
-	errors := []engine.Input_Error{.Unsupported_Escape, .Unsupported_SGR, .Unsupported_Cursor}
+	inputs := []string {
+		"\x1b",
+		"\x1b\n",
+		"\x1b7",
+		"\x1b]0;title\x07",
+		"\x1b]0;title\x1b\\",
+		"\x1b]unterminated",
+		"\x1b[",
+		"\x1b[123",
+		"\x1b[2JX",
+		"\x1b[38;5;999mX",
+	}
+	errors := []engine.Input_Error {
+		.Unsupported_Escape,
+		.Unsupported_Escape,
+		.Unsupported_Escape,
+		.Unsupported_Escape,
+		.Unsupported_Escape,
+		.Unsupported_Escape,
+		.Unsupported_Cursor,
+		.Unsupported_Cursor,
+		.Unsupported_Cursor,
+		.Unsupported_SGR,
+	}
 	cfg := engine.config_default()
 	for input, i in inputs {
 		_, err := engine.engine_make(input, cfg, context.allocator)
@@ -103,6 +125,108 @@ typed_input_errors :: proc(t: ^testing.T) {
 	cfg.tab_width = 0
 	_, err := engine.engine_make("\tX", cfg, context.allocator)
 	testing.expect(t, err == .Invalid_Tab_Width)
+}
+
+@(test)
+render_painter_creation_order :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A  B", cfg, context.allocator)
+	testing.expect(t, err == .None)
+	a, b := e.character_sets.input[0], e.character_sets.input[1]
+	fill := e.character_sets.inner_fill[0]
+	added := engine.add_character(&e, "X", {1, 1})
+	ids := []engine.Char_Id{added, fill, b, a}
+	for id in ids {
+		e.chars.is_visible[id] = true
+		e.chars.current_coord[id] = {1, 1}
+	}
+	// Selection order must not decide equal-layer collisions. Spaces between
+	// input glyphs, fills and added glyphs all retain creation-order priority.
+	engine.update_render_cells_selected(&e, ids)
+	testing.expect_value(t, e.render_cells[0], i32(added))
+	engine.update_render_cells_all(&e)
+	testing.expect_value(t, e.render_cells[0], i32(added))
+	e.chars.is_visible[added] = false
+	engine.update_render_cells_selected(&e, ids)
+	testing.expect_value(t, e.render_cells[0], i32(fill))
+	e.chars.is_visible[fill] = false
+	engine.update_render_cells_selected(&e, ids)
+	testing.expect_value(t, e.render_cells[0], i32(b))
+	e.chars.layer[a] = 1
+	engine.update_render_cells_selected(&e, ids)
+	testing.expect_value(t, e.render_cells[0], i32(a))
+	engine.update_render_cells_all(&e)
+	testing.expect_value(t, e.render_cells[0], i32(a))
+}
+
+@(test)
+layout_resize_contract :: proc(t: ^testing.T) {
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 4, 2
+	widths := []int{9, 0, 3}
+	// An even 4x2 canvas inside a 9x7 terminal exercises odd centre rounding.
+	offsets := [engine.Anchor]engine.Coord {
+		.N  = {2, 5},
+		.Ne = {5, 5},
+		.E  = {5, 2},
+		.Se = {5, 0},
+		.S  = {2, 0},
+		.Sw = {0, 0},
+		.W  = {0, 2},
+		.Nw = {0, 5},
+		.C  = {2, 2},
+	}
+	for anchor in engine.Anchor {
+		cfg.anchor_canvas = anchor
+		canvas, layout := engine.layout_make(cfg, widths, 9, 7)
+		p := offsets[anchor]
+		testing.expect_value(t, canvas.width, 4)
+		testing.expect_value(t, canvas.height, 2)
+		testing.expect_value(
+			t,
+			layout,
+			engine.Render_Layout {
+				p.row + 2,
+				p.row + 1,
+				p.column + 4,
+				p.column + 1,
+				p.column,
+				p.row,
+			},
+		)
+		e := engine.Engine {
+			cfg    = cfg,
+			canvas = canvas,
+			layout = layout,
+		}
+		append(&e.input_line_widths, ..widths)
+		testing.expect(t, !engine.resize_layout_changed(&e, 9, 7))
+		testing.expect_value(t, engine.resize_layout_changed(&e, 11, 9), anchor != .Sw)
+		delete(e.input_line_widths)
+	}
+	cfg.anchor_canvas = .C
+	cfg.canvas_width, cfg.canvas_height = 12, 10
+	_, cropped := engine.layout_make(cfg, widths, 9, 7)
+	testing.expect_value(t, cropped, engine.Render_Layout{7, 1, 9, 1, -2, -2})
+	cfg.canvas_width, cfg.canvas_height, cfg.wrap_text = -1, -1, true
+	canvas, _ := engine.layout_make(cfg, widths, 4, 10)
+	testing.expect_value(t, canvas.width, 4)
+	testing.expect_value(t, canvas.height, 5) // three wrapped rows, blank, short row
+	cfg.ignore_terminal_dimensions = true
+	unclipped: engine.Render_Layout
+	canvas, unclipped = engine.layout_make(cfg, widths, 4, 10)
+	testing.expect_value(t, canvas.width, 9)
+	testing.expect_value(t, canvas.height, 3)
+	testing.expect_value(t, unclipped, engine.Render_Layout{3, 1, 9, 1, 0, 0})
+	cfg.canvas_width, cfg.canvas_height = 0, 0
+	canvas, _ = engine.layout_make(cfg, widths, 4, 10)
+	testing.expect_value(t, canvas.width, 4)
+	testing.expect_value(t, canvas.height, 10)
 }
 
 @(test)

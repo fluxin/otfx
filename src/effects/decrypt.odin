@@ -53,6 +53,7 @@ Decrypt_Phase :: enum {
 	Decrypting,
 }
 Decrypt_Typing_Frames :: 5
+Decrypt_Typing_Samples :: [9]int{0, 0, 1, 1, 2, 2, 3, 3, 4}
 Decrypt_Fast_Frames :: 80
 Decrypt_Slow_Max_Frames :: 15
 Decrypt_Fast_Ticks :: Decrypt_Fast_Frames * 2
@@ -66,6 +67,9 @@ Decrypt_State :: struct {
 	characters:          [dynamic]engine.Char_Id,
 	final_colors:        [dynamic]engine.Color,
 	typing_start_ticks:  [dynamic]int,
+	typing_previous:     [dynamic]int,
+	typing_changes:      [dynamic]engine.Sample_Change,
+	typing_tail:         int,
 	typing_colors:       [dynamic]engine.Color, // n * 5
 	typing_symbols:      [dynamic]u16,
 	decrypt_colors:      [dynamic]engine.Color,
@@ -118,6 +122,8 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.typing_start_ticks = make([dynamic]int, n)
+	s.typing_previous = make([dynamic]int, n)
+	s.typing_changes = make([dynamic]engine.Sample_Change, n)
 	s.typing_colors = make([dynamic]engine.Color, n * Decrypt_Typing_Frames)
 	s.typing_symbols = make([dynamic]u16, n)
 	s.decrypt_colors = make([dynamic]engine.Color, n)
@@ -132,6 +138,7 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	for id, i in s.characters {
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
 		s.typing_start_ticks[i] = -1
+		s.typing_previous[i] = -1
 		base := i * Decrypt_Typing_Frames
 		for frame in 0 ..< Decrypt_Typing_Frames - 1 do s.typing_colors[base + frame] = s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
 		s.typing_symbols[i] = u16(rand.int_max(len(s.encrypted_symbols)))
@@ -178,13 +185,26 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				}
 			}
 			blocks := Decrypt_Block_Symbols
-			for id, i in s.characters {
-				start := s.typing_start_ticks[i]
-				if start < 0 do continue
-				frame := min((s.typing_tick - start) / 2, Decrypt_Typing_Frames - 1)
+			samples := Decrypt_Typing_Samples
+			changes := engine.sample_timeline_changes(
+				s.typing_changes[:],
+				s.typing_start_ticks[s.typing_tail:s.typing_head],
+				s.typing_previous[s.typing_tail:s.typing_head],
+				s.typing_tick,
+				samples[:],
+			)
+			for change in changes {
+				i := s.typing_tail + change.slot
+				id, frame := s.characters[i], change.sample
 				e.chars.visual[id].symbol =
 					frame < Decrypt_Typing_Frames - 1 ? blocks[frame] : s.encrypted_symbols[int(s.typing_symbols[i])]
 				e.chars.visual[id].fg = s.typing_colors[i * Decrypt_Typing_Frames + frame]
+			}
+			// Activations are ordered, so completed visual writers form a prefix.
+			// The existing finish tick still supplies the final one-tick hold.
+			for s.typing_tail < s.typing_head &&
+			    s.typing_previous[s.typing_tail] == Decrypt_Typing_Frames - 1 {
+				s.typing_tail += 1
 			}
 			s.typing_tick += 1
 			return s.characters[:], true

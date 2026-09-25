@@ -138,17 +138,16 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 		s.config.wave_gradient_steps[:],
 		false,
 	)
-	wave_frames := len(s.wave_spectrum) * s.config.wave_count
-	s.wave_colors = make([dynamic]engine.Color, wave_frames)
-	s.wave_symbols = make([dynamic]string, wave_frames)
-	color_index, symbol_index := 0, 0
-	for i in 0 ..< wave_frames {
-		s.wave_colors[i] = s.wave_spectrum[color_index]
-		s.wave_symbols[i] = s.config.wave_symbols[symbol_index]
-		color_index += 1
-		if color_index == len(s.wave_spectrum) do color_index = 0
-		symbol_index += 1
-		if symbol_index == len(s.config.wave_symbols) do symbol_index = 0
+	entries := max(len(s.wave_spectrum), len(s.config.wave_symbols))
+	colors := engine.sequence_expand(s.wave_spectrum[:], entries)
+	symbols := engine.sequence_expand(s.config.wave_symbols[:], entries)
+	defer delete(colors)
+	defer delete(symbols)
+	s.wave_colors = make([dynamic]engine.Color, 0, entries * s.config.wave_count)
+	s.wave_symbols = make([dynamic]string, 0, entries * s.config.wave_count)
+	for _ in 0 ..< s.config.wave_count {
+		append(&s.wave_colors, ..colors[:])
+		append(&s.wave_symbols, ..symbols[:])
 	}
 
 	chars := engine.get_characters(
@@ -157,6 +156,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
+	reserve(&s.revealed, len(chars))
 	input_coords := e.chars.input_coord[:]
 	visible := e.chars.is_visible
 	s.final_colors = make([dynamic]engine.Color, len(e.chars))

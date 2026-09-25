@@ -108,6 +108,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
+	reserve(&s.active, len(chars))
 	s.first_frame_spans = make([dynamic]engine.Span, len(e.chars))
 	s.second_frame_spans = make([dynamic]engine.Span, len(e.chars))
 	s.start_ticks = make([dynamic]int, len(e.chars))

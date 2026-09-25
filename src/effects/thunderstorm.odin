@@ -273,6 +273,8 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.rain_targets, rain_capacity)
 	reserve(&s.rain_steps, rain_capacity)
 	reserve(&s.rain_free, rain_capacity)
+	reserve(&s.rain_active, rain_capacity)
+	reserve(&s.glow_active, n)
 	for slot in 0 ..< rain_capacity {
 		id := engine.add_character(e, ".", engine.coord(0, 0))
 		e.chars.layer[id] = 1
@@ -301,6 +303,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.spark_targets, 18)
 	reserve(&s.spark_steps, 18)
 	reserve(&s.spark_free, 18)
+	reserve(&s.spark_active, 18)
 }
 
 thunderstorm_spawn_rain :: proc(
@@ -706,7 +709,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		if s.phase_tick >= Thunderstorm_Fade_Frames {
 			s.phase = .Storm
 			s.phase_tick = 0
-			s.storm_started = engine.now_wall(e)
+			s.storm_started = engine.elapsed_seconds(e)
 		}
 	case .Storm:
 		thunderstorm_spawn_rain(s, chars, e.canvas)
@@ -715,7 +718,8 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		thunderstorm_update_rain(s, chars)
 		thunderstorm_update_sparks(s, chars, e.cfg.terminal_background_color)
 		thunderstorm_update_text(s, chars)
-		if engine.now_wall(e) - s.storm_started >= f64(s.config.storm_time) && !s.strike_live {
+		if engine.elapsed_seconds(e) - s.storm_started >= f64(s.config.storm_time) &&
+		   !s.strike_live {
 			for id in s.rain_ids do chars.is_visible[id] = false
 			for id in s.spark_ids do chars.is_visible[id] = false
 			clear(&s.rain_active)
