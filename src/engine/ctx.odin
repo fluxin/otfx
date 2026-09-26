@@ -4,7 +4,7 @@ import "core:math/ease"
 
 // Eased reveal of a prefix of character groups (wipe/highlight/sweep).
 Group_Reveal :: struct {
-	groups:   Char_Groups,
+	groups:   Particle_Groups,
 	ease:     ease.Ease,
 	duration: int,
 	tick:     int,
@@ -40,14 +40,8 @@ group_reveal_complete :: proc(r: Group_Reveal) -> bool {
 	return r.tick >= r.duration
 }
 
-frame_all :: proc(e: ^Engine) {
+frame :: proc(e: ^Engine, selected: Maybe([]Particle_Id) = nil) {
 	enforce_framerate(e)
-	frame_build_all(e)
-	free_all(context.temp_allocator)
-}
-
-frame :: proc(e: ^Engine, render_ids: []Char_Id) {
-	enforce_framerate(e)
-	frame_build_selected(e, render_ids)
+	frame_build(e, selected)
 	free_all(context.temp_allocator)
 }

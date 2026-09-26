@@ -57,7 +57,7 @@ expand_parse :: proc(cfg: ^Expand_Config, args: []string) -> bool {
 
 Expand_State :: struct {
 	config:         Expand_Config,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	final_colors:   [dynamic]engine.Color,
 	max_steps:      [dynamic]int,
 	step_limit:     int,
@@ -80,9 +80,13 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
@@ -91,9 +95,9 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	s.max_steps = make([dynamic]int, n)
 
 	for id, i in s.characters {
-		c := e.chars.input_coord[id]
+		c := e.particles.initial_coord[id]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		e.chars.current_coord[id] = e.canvas.center
+		e.particles.current_coord[id] = e.canvas.center
 		s.max_steps[i] = max(
 			engine.round_half_even(
 				engine.line_length(e.canvas.center, c, true) / s.config.movement_speed,
@@ -101,26 +105,26 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 			1,
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
-		e.chars.is_visible[id] = true
-		e.chars.layer[id] = 1
+		e.particles.is_visible[id] = true
+		e.particles.layer[id] = 1
 	}
 }
 
-expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.tick == s.step_limit do return nil, false
 	for id, i in s.characters {
 		maximum := s.max_steps[i]
 		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
 		factor := ease.ease(s.config.expand_easing, progress)
 		visual := engine.get_visual(e, id)
-		layer := e.chars.layer[id]
-		position := engine.coord_on_line(e.canvas.center, e.chars.input_coord[id], factor)
+		layer := e.particles.layer[id]
+		position := engine.coord_on_line(e.canvas.center, e.particles.initial_coord[id], factor)
 		step := min(engine.round_half_even(factor * 10), 10)
 		if s.color_handling == .Dynamic {
 			engine.dynamic_gradient_to_input(
 				&visual,
 				s.config.final_gradient_stops[0],
-				e.chars.input_style[id],
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
 				10,
 				step,
 			)
@@ -133,16 +137,16 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 			)
 		}
 		if s.tick + 1 >= maximum {
-			position = e.chars.input_coord[id]
+			position = e.particles.initial_coord[id]
 			if s.color_handling == .Dynamic {
-				visual.fg = e.chars.input_style[id].fg
-				visual.bg = e.chars.input_style[id].bg
+				visual.fg = engine.get_initial_visual(e, engine.Particle_Id(id)).fg
+				visual.bg = engine.get_initial_visual(e, engine.Particle_Id(id)).bg
 			} else {
 				visual.fg = s.final_colors[i]
 			}
 			layer = 0
 		}
-		engine.set_character(e, id, coord = position, layer = layer, visual = visual)
+		engine.set_particle(e, id, coord = position, layer = layer, visual = visual)
 	}
 	s.tick += 1
 	return nil, true

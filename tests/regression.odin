@@ -20,8 +20,8 @@ cropped_anchors :: proc(t: ^testing.T) {
 		cfg.anchor_text = anchor
 		e, err := engine.engine_make("hello\nworld", cfg, context.allocator)
 		testing.expect(t, err == .None)
-		testing.expect_value(t, len(e.character_sets.input), 2)
-		for id in e.character_sets.input do testing.expect(t, engine.canvas_in(e.canvas, e.chars.input_coord[id]))
+		testing.expect_value(t, len(e.particle_sets.input), 2)
+		for id in e.particle_sets.input do testing.expect(t, engine.canvas_in(e.canvas, e.particles.initial_coord[id]))
 	}
 }
 
@@ -40,17 +40,17 @@ wrapped_cells_and_storage :: proc(t: ^testing.T) {
 	e, err := engine.engine_make("\x1b[31mABCD\n\nEFG", cfg, context.allocator)
 	testing.expect(t, err == .None)
 	expected := []engine.Coord{{1, 5}, {2, 5}, {1, 4}, {2, 4}, {1, 2}, {2, 2}, {1, 1}}
-	testing.expect_value(t, len(e.character_sets.input), len(expected))
-	for id, i in e.character_sets.input {
-		testing.expect_value(t, e.chars.input_coord[id], expected[i])
-		testing.expect(t, e.chars.input_style[id].fg != nil)
+	testing.expect_value(t, len(e.particle_sets.input), len(expected))
+	for id, i in e.particle_sets.input {
+		testing.expect_value(t, e.particles.initial_coord[id], expected[i])
+		testing.expect(t, engine.get_initial_visual(&e, engine.Particle_Id(id)).fg != nil)
 	}
 	cfg.canvas_width, cfg.canvas_height = 80, 24
 	input := strings.repeat("x", 64_000)
 	before := track.total_memory_allocated
 	large, large_err := engine.engine_make(input, cfg, context.allocator)
 	testing.expect(t, large_err == .None)
-	testing.expect_value(t, len(large.character_sets.input), 80 * 24)
+	testing.expect_value(t, len(large.particle_sets.input), 80 * 24)
 	testing.expect(
 		t,
 		track.total_memory_allocated - before < 64 * 1024 * 1024,
@@ -69,24 +69,21 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		cfg.ignore_terminal_dimensions, cfg.no_color = true, no_color
 		e, err := engine.engine_make("hello", cfg, context.allocator)
 		testing.expect(t, err == .None)
-		for id in e.character_sets.input do e.chars.is_visible[id] = true
-		engine.frame_build_all(&e)
-		testing.expect_value(t, string(e.out_buf[:]), "hello")
-		engine.frame_build_all(&e)
-		testing.expect_value(t, len(e.out_buf), 0)
-		id := e.character_sets.input[0]
-		engine.set_foreground(&e, engine.Char_Id(id), engine.Color{255, 0, 0})
-		engine.mark_character_dirty(&e, id)
-		engine.frame_build_all(&e)
-		testing.expect_value(t, len(e.out_buf) == 0, no_color)
-		engine.set_symbol(&e, engine.Char_Id(id), "X")
-		engine.mark_character_dirty(&e, id)
-		engine.frame_build_all(&e)
-		testing.expect(t, strings.contains(string(e.out_buf[:]), "X"))
-		e.chars.is_visible[id] = false
-		engine.mark_character_dirty(&e, id)
-		engine.frame_build_all(&e)
-		testing.expect_value(t, string(e.out_buf[:]), " ")
+		for id in e.particle_sets.input do e.particles.is_visible[id] = true
+		engine.frame_build(&e)
+		testing.expect_value(t, string(engine.frame_bytes(&e)), "hello")
+		engine.frame_build(&e)
+		testing.expect_value(t, string(engine.frame_bytes(&e)), "hello")
+		id := e.particle_sets.input[0]
+		engine.set_foreground(&e, engine.Particle_Id(id), engine.Color{255, 0, 0})
+		engine.frame_build(&e)
+		expect_visible_draws(t, &e)
+		engine.set_symbol(&e, engine.Particle_Id(id), "X")
+		engine.frame_build(&e)
+		testing.expect(t, strings.contains(string(engine.frame_bytes(&e)), "X"))
+		e.particles.is_visible[id] = false
+		engine.frame_build(&e)
+		testing.expect_value(t, string(engine.frame_bytes(&e)), " ello")
 	}
 }
 
@@ -140,34 +137,31 @@ render_painter_creation_order :: proc(t: ^testing.T) {
 	cfg.ignore_terminal_dimensions = true
 	e, err := engine.engine_make("A  B", cfg, context.allocator)
 	testing.expect(t, err == .None)
-	a, b := e.character_sets.input[0], e.character_sets.input[1]
-	fill := e.character_sets.inner_fill[0]
-	added := engine.add_character(&e, "X", {1, 1})
-	ids := []engine.Char_Id{added, fill, b, a}
+	a, b := e.particle_sets.input[0], e.particle_sets.input[1]
+	fill := e.particle_sets.inner_fill[0]
+	added := engine.add_particle(&e, "X", {1, 1})
+	ids := []engine.Particle_Id{added, fill, b, a}
 	for id in ids {
-		e.chars.is_visible[id] = true
-		e.chars.current_coord[id] = {1, 1}
+		e.particles.is_visible[id] = true
+		e.particles.current_coord[id] = {1, 1}
 	}
 	// Selection order must not decide equal-layer collisions. Spaces between
 	// input glyphs, fills and added glyphs all retain creation-order priority.
-	engine.update_render_cells_selected(&e, ids)
-	testing.expect_value(t, e.render_cells[0], i32(added))
-	engine.update_render_cells_all(&e)
-	testing.expect_value(t, e.render_cells[0], i32(added))
-	e.chars.is_visible[added] = false
-	engine.mark_character_dirty(&e, added)
-	engine.update_render_cells_selected(&e, ids)
-	testing.expect_value(t, e.render_cells[0], i32(fill))
-	e.chars.is_visible[fill] = false
-	engine.mark_character_dirty(&e, fill)
-	engine.update_render_cells_selected(&e, ids)
-	testing.expect_value(t, e.render_cells[0], i32(b))
-	e.chars.layer[a] = 1
-	engine.mark_character_dirty(&e, a)
-	engine.update_render_cells_selected(&e, ids)
-	testing.expect_value(t, e.render_cells[0], i32(a))
-	engine.update_render_cells_all(&e)
-	testing.expect_value(t, e.render_cells[0], i32(a))
+	engine.build_draws(&e, ids)
+	testing.expect_value(t, draw_at(&e, 0), i32(added))
+	engine.build_draws(&e)
+	testing.expect_value(t, draw_at(&e, 0), i32(added))
+	e.particles.is_visible[added] = false
+	engine.build_draws(&e, ids)
+	testing.expect_value(t, draw_at(&e, 0), i32(fill))
+	e.particles.is_visible[fill] = false
+	engine.build_draws(&e, ids)
+	testing.expect_value(t, draw_at(&e, 0), i32(b))
+	e.particles.layer[a] = 1
+	engine.build_draws(&e, ids)
+	testing.expect_value(t, draw_at(&e, 0), i32(a))
+	engine.build_draws(&e)
+	testing.expect_value(t, draw_at(&e, 0), i32(a))
 }
 
 @(test)
@@ -310,7 +304,7 @@ overshooting_wipe_completes :: proc(t: ^testing.T) {
 			free_all(context.temp_allocator)
 		}
 		testing.expect(t, frames < 2000)
-		for id in run.engine_state.character_sets.input do testing.expect(t, run.engine_state.chars.is_visible[id])
+		for id in run.engine_state.particle_sets.input do testing.expect(t, run.engine_state.particles.is_visible[id])
 	}
 }
 

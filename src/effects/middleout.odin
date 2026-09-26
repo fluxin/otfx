@@ -88,7 +88,7 @@ middleout_parse :: proc(cfg: ^Middleout_Config, args: []string) -> bool {
 
 Middleout_State :: struct {
 	config:           Middleout_Config,
-	characters:       [dynamic]engine.Char_Id,
+	characters:       [dynamic]engine.Particle_Id,
 	final_colors:     [dynamic]engine.Color,
 	center_targets:   [dynamic]engine.Coord,
 	center_max_steps: [dynamic]int,
@@ -115,9 +115,13 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
@@ -127,10 +131,10 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 	s.center_max_steps = make([dynamic]int, n)
 	s.full_max_steps = make([dynamic]int, n)
 	for id, i in s.characters {
-		c := e.chars.input_coord[id]
+		c := e.particles.initial_coord[id]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
 
-		e.chars.current_coord[id] = e.canvas.center
+		e.particles.current_coord[id] = e.canvas.center
 		mid := engine.coord(c.column, e.canvas.center_row)
 		if s.config.expand_direction == .Horizontal do mid = engine.coord(e.canvas.center_column, c.row)
 		s.center_targets[i] = mid
@@ -148,19 +152,22 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		)
 		s.center_limit = max(s.center_limit, s.center_max_steps[i])
 		s.full_limit = max(s.full_limit, s.full_max_steps[i])
-		style := e.chars.input_style[id]
+		style := engine.get_initial_visual(e, engine.Particle_Id(id))
 		fade_ticks := s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 6 : 66
 		s.full_limit = max(s.full_limit, fade_ticks)
 		engine.set_visual(
 			e,
 			id,
-			engine.Visual{symbol = e.chars.input_symbol[id], fg = s.config.starting_color},
+			engine.Visual {
+				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				fg = s.config.starting_color,
+			},
 		)
-		e.chars.is_visible[id] = true
+		e.particles.is_visible[id] = true
 	}
 }
 
-middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if len(s.characters) == 0 do return nil, false
 	if s.phase_full && s.phase_tick >= s.full_limit do return nil, false
 	if !s.phase_full && s.phase_tick >= s.center_limit {
@@ -168,14 +175,14 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 		s.phase_tick = 0
 	}
 	for id, i in s.characters {
-		position := e.chars.current_coord[id]
+		position := e.particles.current_coord[id]
 		visual := engine.get_visual(e, id)
 		if s.phase_full {
 			if s.phase_tick < s.full_max_steps[i] {
 				progress := f64(s.phase_tick + 1) / f64(s.full_max_steps[i])
 				position = engine.coord_on_line(
 					s.center_targets[i],
-					e.chars.input_coord[id],
+					e.particles.initial_coord[id],
 					ease.ease(s.config.full_easing, progress),
 				)
 			}
@@ -184,7 +191,7 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 				engine.dynamic_gradient_to_input(
 					&visual,
 					s.config.starting_color,
-					e.chars.input_style[id],
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
 					10,
 					gradient_step,
 				)
@@ -204,7 +211,7 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Char
 				ease.ease(s.config.center_easing, progress),
 			)
 		}
-		engine.set_character(e, id, coord = position, visual = visual)
+		engine.set_particle(e, id, coord = position, visual = visual)
 	}
 	s.phase_tick += 1
 	return nil, true

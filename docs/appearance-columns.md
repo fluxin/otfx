@@ -1,5 +1,9 @@
 # Appearance columns and character construction
 
+Historical checkpoint notes. The current simplification experiment is described
+in [bare-renderer.md](bare-renderer.md); the retained renderer below is preserved
+at revision `495602e6`.
+
 This working-tree change separates prepared-code IDs from membership links in
 the engine's Odin `#soa` character store. Logical appearance stays in one current
 `Visual` record for both prepared and dynamic publication. `get_visual`,

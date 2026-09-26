@@ -2,7 +2,6 @@ package engine
 
 import "base:intrinsics"
 import "core:c/libc"
-import "core:container/bit_array"
 import "core:fmt"
 import "core:math"
 import "core:math/rand"
@@ -202,18 +201,10 @@ Visual :: struct {
 	bold:   bool,
 }
 
-// Captured once while the input mini-terminal is built. It is immutable after
-// construction, so the renderer and direct effect lanes can read it without
-// any animation bookkeeping.
-Input_Style :: struct {
-	fg, bg: Maybe(Color),
-	bold:   bool,
-}
-
 // Dynamic color handling is an input-style data transform, not a timeline.
 // Effects own when they call these helpers; they simply avoid repeating the
 // same nullable FG/BG writes in every direct next loop.
-dynamic_apply_input_colors :: #force_inline proc(visual: ^Visual, input: Input_Style) {
+dynamic_apply_input_colors :: #force_inline proc(visual: ^Visual, input: Visual) {
 	visual.fg = input.fg
 	visual.bg = input.bg
 }
@@ -223,7 +214,7 @@ dynamic_apply_input_colors :: #force_inline proc(visual: ^Visual, input: Input_S
 dynamic_gradient_to_input :: #force_inline proc(
 	visual: ^Visual,
 	start: Color,
-	input: Input_Style,
+	input: Visual,
 	steps, step: int,
 ) {
 	if fg, ok := input.fg.?; ok {
@@ -243,7 +234,7 @@ dynamic_gradient_to_input :: #force_inline proc(
 dynamic_gradient_to_dimmed_input :: #force_inline proc(
 	visual: ^Visual,
 	start: Color,
-	input: Input_Style,
+	input: Visual,
 	brightness: f64,
 	steps, step: int,
 ) {
@@ -322,62 +313,44 @@ create_timeline :: proc {
 	create_gradient_timeline,
 }
 
-Render_Code_Capacity :: 64
-
-// Membership consumes these links together. Zero means no cell or no link.
-Character_Render_State :: struct {
-	cell, next, previous: i32,
-}
-#assert(size_of(Character_Render_State) == 12)
-
-Character :: struct {
-	input_symbol:                  string,
-	input_coord:                   Coord,
-	is_visible:                    bool,
-	is_fill:                       bool,
-	layer:                         int,
-	current_coord:                 Coord,
+Particle :: struct {
+	initial_visual_id:       Visual_Id,
+	initial_coord:           Coord,
+	is_visible:              bool,
+	is_fill:                 bool,
+	layer:                   int,
+	current_coord:           Coord,
 	// One logical appearance for both prepared and dynamic publication.
-	visual:                        Visual,
-	code:                          Visual_Code_Id,
-	input_style:                   Input_Style,
-	uses_input_preexisting_colors: bool,
-	// Logical appearance and last emitted effective appearance remain separate.
-	// Raw emitted appearances are consumed as whole snapshots. Prepared output
-	// retains only its immutable ID; cached is read only when cached_code is 0.
-	cached:                        Visual,
-	cached_code:                   Visual_Code_Id,
-	render:                        Character_Render_State,
-	// Derived color fragments; no duplicated symbols or ANSI control bytes.
-	encoded_colors:                Encoded_Colors,
+	visual_id:               Visual_Id,
+	mutable_visual_id:       Visual_Id,
+	preserve_initial_colors: bool,
 }
 
-Character_Storage :: #soa[dynamic]Character
+Particle_Storage :: #soa[dynamic]Particle
 
 // ---------------------------------------------------------------------------
 // engine world
 // ---------------------------------------------------------------------------
 
-Char_Id :: distinct int
+Particle_Id :: distinct int
 
-Character_Kind :: enum {
+Particle_Kind :: enum {
 	Input,
 	Inner_Fill,
 	Outer_Fill,
-	Added,
 }
 
-Character_Filter :: bit_set[Character_Kind;u8]
+Particle_Filter :: bit_set[Particle_Kind;u8]
 
-CHAR_FILTER_INPUT :: Character_Filter{.Input}
-CHAR_FILTER_ALL_FILLS :: Character_Filter{.Input, .Inner_Fill, .Outer_Fill}
+PARTICLE_FILTER_INPUT :: Particle_Filter{.Input}
+PARTICLE_FILTER_ALL_FILLS :: Particle_Filter{.Input, .Inner_Fill, .Outer_Fill}
 
-Character_Sort :: enum {
+Particle_Sort :: enum {
 	Top_Bottom_Left_Right,
 	Random,
 }
 
-Character_Group :: enum {
+Particle_Group :: enum {
 	Column_L2R,
 	Column_R2L,
 	Row_T2B,
@@ -390,7 +363,7 @@ Character_Group :: enum {
 	Outside_Center,
 }
 
-group_parse :: proc(s: string) -> (Character_Group, bool) {
+group_parse :: proc(s: string) -> (Particle_Group, bool) {
 	switch s {
 	case "column_left_to_right":
 		return .Column_L2R, true
@@ -423,33 +396,24 @@ Render_Layout :: struct {
 }
 
 Engine :: struct {
-	cfg:                  Terminal_Config,
-	canvas:               Canvas,
-	terminal_width:       int,
-	terminal_height:      int,
-	input_line_widths:    [dynamic]int,
-	resize_seen_at:       Maybe(time.Tick),
-	chars:                Character_Storage, // struct-of-arrays arena
-	mono_start:           time.Tick,
-	character_sets:       Character_Sets,
-	layout:               Render_Layout,
-	move_to_top:          string,
-	raster_storage:       [dynamic]i32, // current + previous raster in one allocation
-	render_cells:         []i32,
-	previous_cells:       []i32,
-	raster_heads:         []i32,
-	dirty_cells:          bit_array.Bit_Array,
-	raster_dirty_cells:   bit_array.Bit_Array,
-	raster_selected:      bit_array.Bit_Array,
-	raster_next_selected: bit_array.Bit_Array,
-	dirty_characters:     bit_array.Bit_Array,
-	raster_all:           bool,
-	code_ids:             map[Visual]Visual_Code_Id,
-	code_entries:         [dynamic]Code_Entry,
-	code_bytes:           [dynamic]byte,
-	out_buf:              [dynamic]byte,
-	last_print:           time.Tick,
-	logical_frame:        int,
+	cfg:               Terminal_Config,
+	canvas:            Canvas,
+	terminal_width:    int,
+	terminal_height:   int,
+	input_line_widths: [dynamic]int,
+	resize_seen_at:    Maybe(time.Tick),
+	particles:         Particle_Storage, // struct-of-arrays arena
+	mono_start:        time.Tick,
+	particle_sets:     Particle_Sets,
+	layout:            Render_Layout,
+	draws:             [dynamic]Draw,
+	blank_row:         []byte,
+	visual_ids:        map[Visual]Visual_Id,
+	visuals:           [dynamic]Visual_Entry,
+	output_parts:      [dynamic][]byte,
+	capture_buf:       [dynamic]byte,
+	last_print:        time.Tick,
+	logical_frame:     int,
 }
 
 // Frames per second that logical time advances at when the clock is virtual and
@@ -520,61 +484,32 @@ engine_make :: proc(
 	term_w, term_h := terminal_dimensions()
 	e.terminal_width, e.terminal_height = term_w, term_h
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
-	// A cell emits at most Render_Code_Capacity bytes (four for an unstyled
-	// UTF-8 rune). Cursor-forward costs at most four bytes per skipped cell;
-	// line moves cost at most four per skipped row. Recompute on every rebuild.
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
-	if width > 0 && height > 0 {
-		cell_bytes := cfg.no_color ? 4 : Render_Code_Capacity
-		reserve(&e.out_buf, height * (width * cell_bytes + 4))
-	}
-	e.move_to_top = fmt.aprintf(
-		"%s%s%s",
-		ansi.DECRC,
-		ansi.DECSC,
-		move_cursor_up(max(e.layout.visible_top, 0)),
-		allocator = formatted_allocator,
-	)
-
-	setup_input_characters(&e, lines)
+	e.blank_row = make([]byte, width)
+	for &b in e.blank_row do b = ' '
+	reserve(&e.output_parts, width * height * 4 + height)
+	visual_pool_init(&e)
+	setup_input_particles(&e, lines)
 	// drop characters that landed outside the canvas (same as upstream)
 	write := 0
-	for id in e.character_sets.input {
-		p := e.chars.input_coord[id]
+	for id in e.particle_sets.input {
+		p := e.particles.initial_coord[id]
 		if canvas_in(e.canvas, p) {
-			e.character_sets.input[write] = id
+			e.particle_sets.input[write] = id
 			write += 1
 		}
 	}
-	resize(&e.character_sets.input, write)
-	raster_cells := max(
-		e.canvas.top * e.canvas.right,
-		max(e.layout.visible_top, 0) * max(e.layout.visible_right, 0),
-	)
-	e.raster_storage = make([dynamic]i32, raster_cells * 2)
-	e.render_cells = e.raster_storage[:raster_cells]
-	e.previous_cells = e.raster_storage[raster_cells:]
-	for i in 0 ..< raster_cells {
-		e.render_cells[i] = EMPTY_CELL
-		e.previous_cells[i] = EMPTY_CELL
+	resize(&e.particle_sets.input, write)
+	// A construction-only occupancy bitmap identifies fill cells. It is not
+	// retained renderer state and is released before playback.
+	occupied := make([]bool, e.canvas.top * e.canvas.right)
+	for id in e.particle_sets.input {
+		c := e.particles.initial_coord[id]
+		occupied[(c.row - 1) * e.canvas.right + c.column - 1] = true
 	}
-	for id in e.character_sets.input {
-		c := e.chars.input_coord[id]
-		e.render_cells[(c.row - 1) * e.canvas.right + (c.column - 1)] = i32(id)
-	}
-	make_fill_characters(&e)
-	code_pool_init(&e)
-	// The construction raster above only identified spaces needing fill glyphs.
-	// Playback starts with an empty retained raster, matching the blank terminal.
-	for &cell in e.render_cells do cell = EMPTY_CELL
-	e.raster_heads = make([]i32, raster_cells)
-	bit_array.init(&e.dirty_cells, raster_cells)
-	bit_array.init(&e.raster_dirty_cells, raster_cells)
-	bit_array.init(&e.raster_selected, len(e.chars))
-	bit_array.init(&e.raster_next_selected, len(e.chars))
-	bit_array.init(&e.dirty_characters, len(e.chars))
-	e.raster_all = true
-	for id in 0 ..< len(e.chars) do raster_mark_character(&e, Char_Id(id))
+	make_fill_particles(&e, occupied)
+	delete(occupied)
+	reserve(&e.draws, len(e.particles))
 	return e, .None
 }
 
@@ -695,7 +630,7 @@ canvas_offsets :: proc(cfg: Terminal_Config, canvas: Canvas, term_w, term_h: int
 
 Input_Cell :: struct {
 	symbol: rune,
-	style:  Input_Style,
+	style:  Visual,
 }
 
 Line :: struct {
@@ -703,7 +638,7 @@ Line :: struct {
 	width: int,
 }
 
-input_style_has_color :: #force_inline proc(style: Input_Style) -> bool {
+input_style_has_color :: #force_inline proc(style: Visual) -> bool {
 	return style.fg != nil || style.bg != nil
 }
 
@@ -712,7 +647,7 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 	lines: [dynamic]Line
 	append(&lines, Line{})
 	row, col := 0, 0
-	active: Input_Style
+	active: Visual
 	standard_fg: Maybe(int)
 
 	ensure :: proc(lines: ^[dynamic]Line, row, col: int) {
@@ -843,7 +778,7 @@ input_apply_cursor :: proc(params, intermediates: []rune, final: rune, row, col:
 	return true
 }
 
-input_apply_sgr :: proc(params: []rune, active: ^Input_Style, standard_fg: ^Maybe(int)) -> bool {
+input_apply_sgr :: proc(params: []rune, active: ^Visual, standard_fg: ^Maybe(int)) -> bool {
 	values: [dynamic]int
 	defer delete(values[:])
 	if len(params) == 0 {
@@ -949,7 +884,7 @@ csi_default_param :: proc(params: []rune) -> int {
 // character setup
 // ---------------------------------------------------------------------------
 
-setup_input_characters :: proc(e: ^Engine, lines: []Line) {
+setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 	// The decoded input already gives the population. Allocate/zero the SoA
 	// columns once instead of growing and scattering a complete row per glyph.
 	count := 0
@@ -958,10 +893,10 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			if cell.symbol != ' ' || input_style_has_color(cell.style) do count += 1
 		}
 	}
-	first := len(e.chars)
-	set_first := len(e.character_sets.input)
-	resize(&e.chars, first + count)
-	resize(&e.character_sets.input, set_first + count)
+	first := len(e.particles)
+	set_first := len(e.particle_sets.input)
+	resize(&e.particles, first + count)
+	resize(&e.particle_sets.input, set_first + count)
 	written := 0
 	// Wrap by walking the original cells. No copied lines or retained suffixes.
 	wrap_width := max(e.canvas.right, 1)
@@ -982,18 +917,18 @@ setup_input_characters :: proc(e: ^Engine, lines: []Line) {
 			}
 			sym := rune_to_string(cell.symbol)
 			id := first + written
-			e.chars.input_symbol[id] = sym
-			e.chars.input_coord[id] = coord(column, input_height - row_index)
-			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.visual[id].symbol = sym
-			e.chars.input_style[id] = cell.style
-			e.chars.uses_input_preexisting_colors[id] = true
-			e.character_sets.input[set_first + written] = Char_Id(id)
+			e.particles.initial_coord[id] = coord(column, input_height - row_index)
+			e.particles.current_coord[id] = e.particles.initial_coord[id]
+			initial := cell.style
+			initial.symbol = sym
+			e.particles.preserve_initial_colors[id] = e.cfg.existing_color_handling == .Always
+			init_particle_visual(e, Particle_Id(id), initial)
+			e.particle_sets.input[set_first + written] = Particle_Id(id)
 			written += 1
 		}
 		row_index += 1
 	}
-	anchor_text(e, e.character_sets.input[:], e.cfg.anchor_text)
+	anchor_text(e, e.particle_sets.input[:], e.cfg.anchor_text)
 }
 
 rune_to_string :: proc(r: rune) -> string {
@@ -1004,11 +939,11 @@ rune_to_string :: proc(r: rune) -> string {
 	return string(out)
 }
 
-anchor_text :: proc(e: ^Engine, characters: []Char_Id, anchor: Anchor) {
+anchor_text :: proc(e: ^Engine, characters: []Particle_Id, anchor: Anchor) {
 	if len(characters) == 0 do return
 	input_width, input_height := 0, 0
 	for id in characters {
-		p := e.chars.input_coord[id]
+		p := e.particles.initial_coord[id]
 		input_width = max(input_width, p.column)
 		input_height = max(input_height, p.row)
 	}
@@ -1034,15 +969,15 @@ anchor_text :: proc(e: ^Engine, characters: []Char_Id, anchor: Anchor) {
 		}
 	}
 	for id in characters {
-		p := e.chars.input_coord[id]
+		p := e.particles.initial_coord[id]
 		p.column += col_delta
 		p.row += row_delta
-		e.chars.input_coord[id] = p
-		e.chars.current_coord[id] = p
+		e.particles.initial_coord[id] = p
+		e.particles.current_coord[id] = p
 	}
 	first := true
 	for id in characters {
-		p := e.chars.input_coord[id]
+		p := e.particles.initial_coord[id]
 		if !canvas_in(e.canvas, p) do continue
 		if first {
 			e.canvas.text_left, e.canvas.text_right = p.column, p.column
@@ -1064,28 +999,27 @@ anchor_text :: proc(e: ^Engine, characters: []Char_Id, anchor: Anchor) {
 	e.canvas.text_center = coord(e.canvas.text_center_column, e.canvas.text_center_row)
 }
 
-make_fill_characters :: proc(e: ^Engine) {
+make_fill_particles :: proc(e: ^Engine, occupied: []bool) {
 	count := 0
-	for cell in e.render_cells[:e.canvas.top * e.canvas.right] {
-		if cell < 0 do count += 1
+	for cell in occupied {
+		if !cell do count += 1
 	}
-	first := len(e.chars)
-	resize(&e.chars, first + count)
+	first := len(e.particles)
+	resize(&e.particles, first + count)
 	written := 0
 	for row in 1 ..= e.canvas.top {
 		for column in 1 ..= e.canvas.right {
-			if e.render_cells[(row - 1) * e.canvas.right + (column - 1)] >= 0 do continue
+			if occupied[(row - 1) * e.canvas.right + column - 1] do continue
 			id := first + written
-			e.chars.input_symbol[id] = " "
-			e.chars.input_coord[id] = coord(column, row)
-			e.chars.current_coord[id] = e.chars.input_coord[id]
-			e.chars.is_fill[id] = true
-			e.chars.visual[id].symbol = " "
+			e.particles.initial_coord[id] = coord(column, row)
+			e.particles.current_coord[id] = e.particles.initial_coord[id]
+			e.particles.is_fill[id] = true
+			init_particle_visual(e, Particle_Id(id), Visual{symbol = " "})
 			written += 1
 			if canvas_in_text(e.canvas, coord(column, row)) {
-				append(&e.character_sets.inner_fill, Char_Id(id))
+				append(&e.particle_sets.inner_fill, Particle_Id(id))
 			} else {
-				append(&e.character_sets.outer_fill, Char_Id(id))
+				append(&e.particle_sets.outer_fill, Particle_Id(id))
 			}
 		}
 	}
@@ -1093,60 +1027,44 @@ make_fill_characters :: proc(e: ^Engine) {
 
 // A build-time batch owns capacity planning. Callers specify the number of
 // characters they will create, without reading or sizing engine storage.
-Character_Batch :: struct {
+Particle_Batch :: struct {
 	engine:    ^Engine,
 	remaining: int,
 }
 
-character_batch :: proc(e: ^Engine, count: int) -> Character_Batch {
+particle_batch :: proc(e: ^Engine, count: int) -> Particle_Batch {
 	assert(count >= 0)
-	reserve(&e.chars, len(e.chars) + count)
-	reserve(&e.character_sets.added, len(e.character_sets.added) + count)
-	word_capacity := (cap(e.chars) + 63) / 64
-	for bits in ([]^bit_array.Bit_Array{&e.raster_selected, &e.raster_next_selected, &e.dirty_characters}) {
-		reserve(&bits.bits, word_capacity)
-	}
+	reserve(&e.particles, len(e.particles) + count)
+	reserve(&e.visuals, len(e.visuals) + count * 2)
+	reserve(&e.draws, len(e.particles) + count)
 	return {e, count}
 }
 
-add_character :: proc {
-	add_character_single,
-	add_character_batched,
+add_particle :: proc {
+	add_particle_single,
+	add_particle_batched,
 }
 
 @(private = "file")
-add_character_batched :: #force_inline proc(
-	batch: ^Character_Batch,
+add_particle_batched :: #force_inline proc(
+	batch: ^Particle_Batch,
 	symbol: string,
 	position: Coord,
-) -> Char_Id {
+) -> Particle_Id {
 	assert(batch.remaining > 0)
 	batch.remaining -= 1
-	return add_character_single(batch.engine, symbol, position)
+	return add_particle_single(batch.engine, symbol, position)
 }
 
 @(private = "file")
-add_character_single :: proc(e: ^Engine, symbol: string, position: Coord) -> Char_Id {
-	c: Character
-	c.input_symbol = symbol
-	c.input_coord = position
+add_particle_single :: proc(e: ^Engine, symbol: string, position: Coord) -> Particle_Id {
+	c: Particle
+	c.initial_coord = position
 	c.current_coord = position
-	c.visual.symbol = symbol
-	append(&e.chars, c)
-	id := Char_Id(len(e.chars) - 1)
-	append(&e.character_sets.added, id)
-	// Grow all character-indexed sets with the character pool, outside playback
-	// marking. The unchecked bit-array operations below then never allocate.
-	words := (len(e.chars) + 63) / 64
-	word_capacity := (cap(e.chars) + 63) / 64
-	for bits in ([]^bit_array.Bit_Array{&e.raster_selected, &e.raster_next_selected, &e.dirty_characters}) {
-		if words > len(bits.bits) {
-			reserve(&bits.bits, word_capacity)
-			resize(&bits.bits, words)
-		}
-		bits.length = len(e.chars)
-	}
-	raster_mark_character(e, id)
+	append(&e.particles, c)
+	reserve(&e.draws, cap(e.particles))
+	id := Particle_Id(len(e.particles) - 1)
+	init_particle_visual(e, id, Visual{symbol = symbol})
 	return id
 }
 
@@ -1154,37 +1072,35 @@ add_character_single :: proc(e: ^Engine, symbol: string, position: Coord) -> Cha
 // queries — shape sortable rows once, sort them in place, then consume ids.
 // ---------------------------------------------------------------------------
 
-Character_Sets :: struct {
-	input:      [dynamic]Char_Id,
-	inner_fill: [dynamic]Char_Id,
-	outer_fill: [dynamic]Char_Id,
-	added:      [dynamic]Char_Id,
+Particle_Sets :: struct {
+	input:      [dynamic]Particle_Id,
+	inner_fill: [dynamic]Particle_Id,
+	outer_fill: [dynamic]Particle_Id,
 }
 
-Character_Query :: struct {
-	sets:         Character_Sets,
-	input_coords: [^]Coord,
-	canvas:       Canvas,
+Particle_Query :: struct {
+	sets:           Particle_Sets,
+	initial_coords: []Coord,
+	canvas:         Canvas,
 }
 
-collect_characters :: proc(q: Character_Query, filter: Character_Filter) -> [dynamic]Char_Id {
-	all: [dynamic]Char_Id
+collect_particles :: proc(q: Particle_Query, filter: Particle_Filter) -> [dynamic]Particle_Id {
+	all: [dynamic]Particle_Id
 	if .Input in filter do append(&all, ..q.sets.input[:])
 	if .Inner_Fill in filter do append(&all, ..q.sets.inner_fill[:])
 	if .Outer_Fill in filter do append(&all, ..q.sets.outer_fill[:])
-	if .Added in filter do append(&all, ..q.sets.added[:])
 	return all
 }
 
 // Canonical order: (-row, column) — packed into a single non-negative key.
-get_characters :: proc(
-	q: Character_Query,
-	filter: Character_Filter,
-	srt: Character_Sort,
-) -> [dynamic]Char_Id {
-	all := collect_characters(q, filter)
+get_particles :: proc(
+	q: Particle_Query,
+	filter: Particle_Filter,
+	srt: Particle_Sort,
+) -> [dynamic]Particle_Id {
+	all := collect_particles(q, filter)
 	Sort_Row :: struct {
-		id:  Char_Id,
+		id:  Particle_Id,
 		key: int,
 	}
 	rows := make([]Sort_Row, len(all))
@@ -1193,7 +1109,7 @@ get_characters :: proc(
 	width := q.canvas.right + 1
 	top := q.canvas.top
 	for id, i in all {
-		p := q.input_coords[id]
+		p := q.initial_coords[id]
 		rows[i] = {id, (top - p.row) * width + p.column}
 	}
 	slice.sort_by(rows, proc(a, b: Sort_Row) -> bool {return a.key < b.key})
@@ -1213,30 +1129,30 @@ span_slice :: proc(pool: []$T, sp: Span) -> []T {
 }
 
 // Groups are one flat character pool with explicit spans into that pool.
-Char_Groups :: struct {
-	members: [dynamic]Char_Id,
+Particle_Groups :: struct {
+	members: [dynamic]Particle_Id,
 	spans:   [dynamic]Span,
 }
 
-group_members :: proc(g: Char_Groups, i: int) -> []Char_Id {
+group_members :: proc(g: Particle_Groups, i: int) -> []Particle_Id {
 	return span_slice(g.members[:], g.spans[i])
 }
 
-groups_delete :: proc(g: ^Char_Groups) {
+groups_delete :: proc(g: ^Particle_Groups) {
 	delete(g.members[:])
 	delete(g.spans[:])
 }
 
-get_characters_grouped :: proc(
-	q: Character_Query,
-	filter: Character_Filter,
-	grouping: Character_Group,
-) -> Char_Groups {
-	all := collect_characters(q, filter)
+get_particles_grouped :: proc(
+	q: Particle_Query,
+	filter: Particle_Filter,
+	grouping: Particle_Group,
+) -> Particle_Groups {
+	all := collect_particles(q, filter)
 	defer delete(all[:])
 
 	Group_Row :: struct {
-		id:         Char_Id,
+		id:         Particle_Id,
 		group_key:  int,
 		within_key: int,
 	}
@@ -1251,7 +1167,7 @@ get_characters_grouped :: proc(
 		grouping == .Outside_Center
 	width := q.canvas.right + 1
 	for id, i in all {
-		p := q.input_coords[id]
+		p := q.initial_coords[id]
 		k: int
 		switch grouping {
 		case .Column_L2R, .Column_R2L:
@@ -1273,7 +1189,7 @@ get_characters_grouped :: proc(
 		return a.within_key < b.within_key
 	})
 
-	out: Char_Groups
+	out: Particle_Groups
 	reserve(&out.members, len(rows))
 	reserve(&out.spans, len(rows))
 	group_start := 0
@@ -1292,264 +1208,37 @@ get_characters_grouped :: proc(
 // rendering & tty
 // ---------------------------------------------------------------------------
 
-EMPTY_CELL :: i32(-1)
-
-
-effective_visual_into :: #force_inline proc(
-	out, raw: ^Visual,
-	input_style: Input_Style,
-	uses_input_preexisting_colors: bool,
-	handling: Existing_Color_Handling,
-) {
-	// Copy the contiguous record without scalarizing its optional-color fields.
-	mem.copy_non_overlapping(out, raw, size_of(Visual))
-	if handling == .Always && uses_input_preexisting_colors {
-		out.fg = input_style.fg
-		out.bg = input_style.bg
-		out.bold = input_style.bold
-	}
-}
-
-effective_visual :: #force_inline proc(
-	visual: Visual,
-	input_style: Input_Style,
-	uses_input_preexisting_colors: bool,
-	handling: Existing_Color_Handling,
-) -> Visual {
-	value := visual
-	out: Visual
-	effective_visual_into(&out, &value, input_style, uses_input_preexisting_colors, handling)
-	return out
-}
-
 symbol_equal :: #force_inline proc(a, b: string) -> bool {
 	return len(a) == len(b) && (raw_data(a) == raw_data(b) || a == b)
 }
 
-// A stable character can still change its terminal bytes: color effects and
-// scene playback commonly update a visual in place. The cell id alone is not
-// a sufficient dirty key, so compare its effective renderer visual with the
-// last emitted appearance.
-visual_equal :: #force_inline proc(a, b: ^Visual) -> bool {
-	// Color is three bytes and Maybe adds its presence byte, with no padding.
-	// Compare those four bytes together instead of generated bytewise branches.
-	#assert(size_of(Maybe(Color)) == size_of(u32))
-	#assert(align_of(Visual) >= align_of(u32))
-	#assert(offset_of(Visual, fg) % align_of(u32) == 0)
-	#assert(offset_of(Visual, bg) % align_of(u32) == 0)
-	// Retained symbols usually share storage. Keep that case inline, but
-	// preserve content equality for independently allocated equal strings.
-	return(
-		transmute(u32)a.fg == transmute(u32)b.fg &&
-		transmute(u32)a.bg == transmute(u32)b.bg &&
-		a.bold == b.bold &&
-		len(a.symbol) == len(b.symbol) &&
-		(raw_data(a.symbol) == raw_data(b.symbol) || a.symbol == b.symbol) \
-	)
-}
+Frame_Origin :: string(ansi.DECRC + ansi.DECSC)
 
-// Effective appearance check for an already-winning cell.
-cell_visual_changed :: #force_inline proc(
-	e: ^Engine,
-	id: int,
-	handling: Existing_Color_Handling,
-	no_color: bool,
-) -> bool {
-	code, prior := e.chars.code[id], e.chars.cached_code[id]
-	if !no_color &&
-	   (handling != .Always || !e.chars.uses_input_preexisting_colors[id]) &&
-	   code != NO_CODE &&
-	   prior != NO_CODE {
-		return code != prior
-	}
-	visual := &e.chars.visual[id]
-	cached := &e.chars.cached[id]
-	if prior != NO_CODE do cached = &e.code_entries[prior - 1].visual
-	if no_color do return !symbol_equal(visual.symbol, cached.symbol)
-	if handling != .Always || !e.chars.uses_input_preexisting_colors[id] {
-		return !visual_equal(visual, cached)
-	}
-	// Input style is immutable. A prepared snapshot used that same override;
-	// a dynamic snapshot already contains the effective style.
-	if !symbol_equal(visual.symbol, cached.symbol) do return true
-	if prior != NO_CODE do return false
-	style := e.chars.input_style[id]
-	return style.fg != cached.fg || style.bg != cached.bg || style.bold != cached.bold
-}
-
-get_emitted_visual :: #force_inline proc(e: ^Engine, id: Char_Id) -> Visual {
-	code := e.chars.cached_code[id]
-	if code != NO_CODE {
-		return effective_visual(
-			e.code_entries[code - 1].visual,
-			e.chars.input_style[id],
-			e.chars.uses_input_preexisting_colors[id],
-			e.cfg.existing_color_handling,
-		)
-	}
-	return e.chars.cached[id]
-}
-
-// Cursor movement for a changed cell.
-emit_seek :: #force_inline proc(buf: ^[dynamic]byte, screen_row, column: int, cursor: ^Coord) {
-	if screen_row > cursor.row {
-		append(buf, ansi.CSI)
-		buf_append_decimal(buf, screen_row - cursor.row)
-		append(buf, ansi.CNL)
-		cursor.row, cursor.column = screen_row, 0
-	}
-	if column > cursor.column {
-		append(buf, ansi.CSI)
-		buf_append_decimal(buf, column - cursor.column)
-		append(buf, ansi.CUF)
-		cursor.column = column
-	}
-}
-
-// Placement and appearance caching have independent lifetimes.
-emit_changed_cell :: #force_no_inline proc(
-	e: ^Engine,
-	builder: ^strings.Builder,
-	cell: i32,
-	screen_row, column: int,
-	cursor: ^Coord,
-	$handling: Existing_Color_Handling,
-	$no_color: bool,
-) {
-	buf := &builder.buf
-	emit_seek(buf, screen_row, column, cursor)
-	if cell == EMPTY_CELL {
-		append(buf, ' ')
-	} else {
-		write_character_mode(e, Char_Id(cell), builder, handling, no_color, true)
-	}
-	cursor.column += 1
-}
-
-// Emit the already-rasterized frame top row first.
-frame_emit :: proc(e: ^Engine, width, height: int) {
-	if e.cfg.no_color {
-		frame_emit_mode(e, width, height, .Ignore, true)
-	} else if e.cfg.existing_color_handling == .Always {
-		frame_emit_mode(e, width, height, .Always, false)
-	} else {
-		frame_emit_mode(e, width, height, .Ignore, false)
-	}
-}
-
-// Select the fixed renderer policy once per frame, not once per cell.
-frame_emit_mode :: proc(
-	e: ^Engine,
-	width, height: int,
-	$handling: Existing_Color_Handling,
-	$no_color: bool,
-) {
-	buf := &e.out_buf
-	clear(buf)
-	// One writer owns the buffer for the entire frame. All appearances append
-	// through it; per-cell emission never copies the dynamic-array descriptor.
-	builder := strings.Builder {
-		buf = buf^,
-	}
-	defer buf^ = builder.buf
-	previous := e.previous_cells[:width * height]
-	cursor: Coord
-	if width == 0 do return
-	for screen_row in 0 ..< height {
-		row_start := (height - 1 - screen_row) * width
-		row_end := row_start + width
-		for word_index in (row_start >> 6) ..= ((row_end - 1) >> 6) {
-			// Rows may share a bitmap word. Clear only this row's bits.
-			first_bit := max(row_start - word_index * 64, 0)
-			end_bit := min(row_end - word_index * 64, 64)
-			mask := (~u64(0) << uint(first_bit)) & (~u64(0) >> uint(64 - end_bit))
-			remaining := e.dirty_cells.bits[word_index] & mask
-			e.dirty_cells.bits[word_index] &= ~remaining
-			for remaining != 0 {
-				bit := int(intrinsics.count_trailing_zeros(remaining))
-				remaining &= remaining - 1
-				index := word_index * 64 + bit
-				cell := e.render_cells[index]
-				column := index - row_start
-				winner_changed := cell != previous[index]
-				if cell == EMPTY_CELL {
-					if !winner_changed do continue
-					previous[index] = cell
-					emit_changed_cell(
-						e,
-						&builder,
-						cell,
-						screen_row,
-						column,
-						&cursor,
-						handling,
-						no_color,
-					)
-					continue
-				}
-				id := int(cell)
-
-				if !winner_changed && !cell_visual_changed(e, id, handling, no_color) {
-					continue
-				}
-				previous[index] = cell
-				emit_changed_cell(
-					e,
-					&builder,
-					cell,
-					screen_row,
-					column,
-					&cursor,
-					handling,
-					no_color,
-				)
-			}
-		}
-	}
-}
-
-frame_build_all :: proc(e: ^Engine) {
-	width, height := update_render_cells_all(e)
-	frame_emit(e, width, height)
-}
-
-frame_build_selected :: proc(e: ^Engine, selected: []Char_Id) {
-	width, height := update_render_cells_selected(e, selected)
-	frame_emit(e, width, height)
-}
-
-prep_canvas :: proc(reuse_canvas: bool, move_to_top: string, visible_right, visible_top: int) {
+prep_canvas :: proc(reuse_canvas: bool, visible_right, visible_top: int) {
 	os.write_string(os.stdout, ansi.CSI + ansi.DECTCEM_HIDE)
-	if reuse_canvas do os.write_string(os.stdout, move_to_top)
+	if reuse_canvas do os.write_string(os.stdout, Frame_Origin)
 	blank := strings.repeat(" ", max(visible_right, 0))
 	defer delete(blank)
 	for _ in 0 ..< visible_top {
 		os.write_string(os.stdout, blank)
 		os.write_string(os.stdout, "\n")
 	}
+	if visible_top > 0 do os.write_string(os.stdout, move_cursor_up(visible_top))
 	os.write_string(os.stdout, ansi.DECSC)
-}
-
-print_frame :: proc(move_to_top: string, output: []byte) {
-	os.write_string(os.stdout, move_to_top)
-	os.write(os.stdout, output)
-	os.flush(os.stdout)
 }
 
 // A settled resize ends the current run. Keep the cursor hidden and return to
 // the top of the old drawing area so the replacement engine draws in place.
-reset_canvas_area :: proc(visible_top: int) {
+reset_canvas_area :: proc() {
 	os.write_string(os.stdout, ansi.DECRC)
-	if visible_top > 0 do os.write_string(os.stdout, move_cursor_up(visible_top))
 	os.write_string(os.stdout, ansi.CSI + "0" + ansi.ED)
 	os.flush(os.stdout)
 }
 
-restore_cursor :: proc(no_restore_cursor, no_eol: bool) {
-	// Delta frames can leave the terminal at any dirty cell. The saved DEC
-	// position is the canvas bottom established by prep_canvas, so return there
-	// before completing just as a full-frame renderer naturally would.
+restore_cursor :: proc(visible_top: int, no_restore_cursor, no_eol: bool) {
+	// The saved position is the canvas top; cleanup moves below the canvas.
 	os.write_string(os.stdout, ansi.DECRC)
+	if visible_top > 0 do os.write_string(os.stdout, fmt.tprintf("%s%d%s", ansi.CSI, visible_top, ansi.CNL))
 	if !no_restore_cursor do os.write_string(os.stdout, ansi.CSI + ansi.DECTCEM_SHOW)
 	if !no_eol do os.write_string(os.stdout, "\n")
 	os.flush(os.stdout)

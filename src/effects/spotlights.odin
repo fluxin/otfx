@@ -74,7 +74,7 @@ Spotlights_Phase :: enum {
 
 Spotlights_State :: struct {
 	config:           Spotlights_Config,
-	characters:       [dynamic]engine.Char_Id,
+	characters:       [dynamic]engine.Particle_Id,
 	bright_colors:    [dynamic]engine.Color,
 	dark_colors:      [dynamic]engine.Color,
 	bright_bg:        [dynamic]Maybe(engine.Color),
@@ -128,20 +128,28 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
 	n := len(s.characters)
 	s.bright_colors = make([dynamic]engine.Color, n)
 	s.dark_colors = make([dynamic]engine.Color, n)
 	s.bright_bg = make([dynamic]Maybe(engine.Color), n)
 	s.dark_bg = make([dynamic]Maybe(engine.Color), n)
-	input_coords := e.chars.input_coord
-	visible := e.chars.is_visible
+	initial_coords := e.particles.initial_coord
+	visible := e.particles.is_visible
 
 	for id, i in s.characters {
-		bright := engine.gradient_sample(sampler, spectrum[:], input_coords[id])
+		bright := engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			bright = engine.Color{0x80, 0x80, 0x80}
 			if fg, ok := style.fg.?; ok do bright = fg
 			s.bright_bg[i] = style.bg
@@ -196,7 +204,7 @@ spotlights_update_positions :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> 
 	return all_arrived
 }
 
-spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.phase == .Search {
 		spotlights_update_positions(s, e)
 		s.phase_tick += 1
@@ -225,24 +233,24 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 		if s.illuminate_range > s.expand_limit do return nil, false
 	}
 
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 	for id, i in s.characters {
 		visual := engine.get_visual(e, id)
-		p := input_coords[id]
+		p := initial_coords[id]
 		nearest := engine.line_length(s.spot_positions[0], p, true)
 		for j in 1 ..< len(s.spot_positions) do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
 		if s.color_handling == .Dynamic &&
 		   s.phase == .Expand &&
-		   e.chars.input_style[id].fg == nil {
+		   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil {
 			visual.fg = nil
-			visual.bg = e.chars.input_style[id].bg
-			engine.set_character(e, id, visual = visual)
+			visual.bg = engine.get_initial_visual(e, engine.Particle_Id(id)).bg
+			engine.set_particle(e, id, visual = visual)
 			continue
 		}
 		if nearest > f64(s.illuminate_range) {
 			visual.fg = s.dark_colors[i]
 			visual.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
-			engine.set_character(e, id, visual = visual)
+			engine.set_particle(e, id, visual = visual)
 			continue
 		}
 		bright := s.bright_colors[i]
@@ -263,7 +271,7 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Ch
 			visual.fg = bright
 			visual.bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
 		}
-		engine.set_character(e, id, visual = visual)
+		engine.set_particle(e, id, visual = visual)
 	}
 	if s.phase == .Expand do s.illuminate_range += 1
 	return nil, true

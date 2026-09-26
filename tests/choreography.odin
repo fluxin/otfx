@@ -77,14 +77,18 @@ smoke_symbols_span_the_gradient :: proc(t: ^testing.T) {
 			for _ in 0 ..< 3 {
 				_, alive := effects.smoke_next(&s, &e)
 				testing.expect(t, alive)
-				testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).symbol, symbol)
+				testing.expect_value(
+					t,
+					engine.get_visual(&e, engine.Particle_Id(id)).symbol,
+					symbol,
+				)
 			}
 		}
 		for s.tick < s.last_tick do effects.smoke_next(&s, &e)
-		testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).symbol, "X")
+		testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).symbol, "X")
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Char_Id(id)).fg,
+			engine.get_visual(&e, engine.Particle_Id(id)).fg,
 			Maybe(engine.Color)(engine.Color{255, 255, 255}),
 		)
 		_, alive := effects.smoke_next(&s, &e)
@@ -109,14 +113,14 @@ laseretch_order_is_spatial :: proc(t: ^testing.T) {
 		rand.reset_u64(42)
 		effects.laseretch_build(&s, &e)
 		free_all(context.temp_allocator)
-		seen := make([]bool, len(e.chars))
-		testing.expect_value(t, len(s.pending), len(e.character_sets.input))
+		seen := make([]bool, len(e.particles))
+		testing.expect_value(t, len(s.pending), len(e.particle_sets.input))
 		adjacent := 0
 		for id, i in s.pending {
-			testing.expect(t, !seen[id] && !e.chars.is_fill[id])
+			testing.expect(t, !seen[id] && !e.particles.is_fill[id])
 			seen[id] = true
 			if i == 0 do continue
-			p, prev := e.chars.input_coord[id], e.chars.input_coord[s.pending[i - 1]]
+			p, prev := e.particles.initial_coord[id], e.particles.initial_coord[s.pending[i - 1]]
 			adjacent += int(abs(p.column - prev.column) + abs(p.row - prev.row) == 1)
 		}
 		if len(s.pending) == 100 do testing.expect(t, adjacent > 80, "depth-first etching must follow neighboring cells, not a shuffled population")
@@ -129,7 +133,11 @@ laseretch_order_is_spatial :: proc(t: ^testing.T) {
 	s.config.etch_pattern = .Row_T2B
 	effects.laseretch_build(&s, &e)
 	for expected, i in ([]string{"A", "B", "C", "F", "E", "D"}) {
-		testing.expect_value(t, e.chars.input_symbol[s.pending[i]], expected)
+		testing.expect_value(
+			t,
+			engine.get_initial_visual(&e, engine.Particle_Id(s.pending[i])).symbol,
+			expected,
+		)
 	}
 	free_all(context.temp_allocator)
 }
@@ -163,9 +171,9 @@ burn_grows_a_connected_front :: proc(t: ^testing.T) {
 		}
 		for head := 0; head < len(queue); head += 1 {
 			i := queue[head]
-			p := e.chars.input_coord[s.characters[i]]
+			p := e.particles.initial_coord[s.characters[i]]
 			for id, j in s.characters {
-				q := e.chars.input_coord[id]
+				q := e.particles.initial_coord[id]
 				if !seen[j] &&
 				   s.start_ticks[j] <= tick &&
 				   abs(p.column - q.column) + abs(p.row - q.row) == 1 {
@@ -210,11 +218,11 @@ laseretch_sparks_cool_during_flight :: proc(t: ^testing.T) {
 	testing.expect(t, s.spark_steps[0] > 3)
 	testing.expect_value(
 		t,
-		engine.get_visual(&e, engine.Char_Id(id)).fg,
+		engine.get_visual(&e, engine.Particle_Id(id)).fg,
 		Maybe(engine.Color)(s.spark_spectrum[1]),
 	)
 	// Reclaim on color-scene completion even if the movement path is longer.
 	for s.tick <= len(s.spark_spectrum) * 2 do effects.laseretch_next(&s, &e)
-	testing.expect(t, !e.chars.is_visible[id])
+	testing.expect(t, !e.particles.is_visible[id])
 	testing.expect_value(t, len(s.active_sparks), 0)
 }

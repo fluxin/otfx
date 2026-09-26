@@ -68,17 +68,12 @@ main :: proc() {
 						tick = tick,
 					}
 					e := &run.engine_state
-					for id, cell in e.render_cells[:width * height] {
-						if id < 0 do continue
-						v := engine.effective_visual(
-							engine.get_visual(e, engine.Char_Id(id)),
-							e.chars.input_style[id],
-							e.chars.uses_input_preexisting_colors[id],
-							cfg.existing_color_handling,
-						)
+					for draw in e.draws {
+						id, cell := draw.particle, draw.cell
+						v := engine.get_render_visual(e, engine.Particle_Id(id))
 						c := Cell {
 							x      = cell % width,
-							y      = height - 1 - cell / width,
+							y      = cell / width,
 							symbol = v.symbol,
 						}
 						// Copy symbols: the run arena is released after this pass.

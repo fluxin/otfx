@@ -8,7 +8,7 @@ import "core:math/ease"
 // wipe — reveal characters along a grouped direction, eased.
 
 Wipe_Config :: struct {
-	wipe_direction:           engine.Character_Group,
+	wipe_direction:           engine.Particle_Group,
 	wipe_delay:               int,
 	wipe_ease:                ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
@@ -67,7 +67,7 @@ Wipe_State :: struct {
 	frames:         engine.Frame_Timeline,
 	frame_spans:    [dynamic]engine.Span,
 	start_ticks:    [dynamic]int,
-	active:         [dynamic]engine.Char_Id,
+	active:         [dynamic]engine.Particle_Id,
 	active_by_id:   [dynamic]u8,
 	reveal:         engine.Group_Reveal,
 	wipe_delay:     int,
@@ -76,9 +76,13 @@ Wipe_State :: struct {
 }
 
 wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
-	groups := engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	groups := engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		s.config.wipe_direction,
 	)
 	s.reveal = engine.Group_Reveal {
@@ -101,18 +105,22 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	chars := engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
 	reserve(&s.active, len(chars))
 	s.color_handling = e.cfg.existing_color_handling
-	s.frame_spans = make([dynamic]engine.Span, len(e.chars))
-	s.start_ticks = make([dynamic]int, len(e.chars))
+	s.frame_spans = make([dynamic]engine.Span, len(e.particles))
+	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
-	s.active_by_id = make([dynamic]u8, len(e.chars))
+	s.active_by_id = make([dynamic]u8, len(e.particles))
 	gradient_steps := s.config.final_gradient_steps[0]
 	reserve(&s.frames, len(chars) * (gradient_steps + 1))
 
@@ -122,19 +130,19 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 			s.frame_spans[id] = engine.create_timeline(
 				&s.frames,
 				{
-					e.chars.input_symbol[id],
-					e.chars.input_style[id].fg,
-					e.chars.input_style[id].bg,
+					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+					engine.get_initial_visual(e, engine.Particle_Id(id)).fg,
+					engine.get_initial_visual(e, engine.Particle_Id(id)).bg,
 					false,
 				},
 				s.config.final_gradient_frames,
 				gradient_steps + 1,
 			)
 		case .Ignore, .Always:
-			final := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+			final := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
 			s.frame_spans[id] = engine.create_timeline(
 				&s.frames,
-				e.chars.input_symbol[id],
+				engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
 				s.config.final_gradient_frames,
 				spectrum[0],
 				final,
@@ -145,7 +153,7 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 	s.wipe_delay = s.config.wipe_delay
 }
 
-wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if len(s.active) == 0 && engine.group_reveal_complete(s.reveal) {
 		return nil, false
 	}
@@ -153,7 +161,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		change := engine.group_reveal_step(&s.reveal)
 		for gi in change.added.start ..< change.added.start + change.added.len {
 			for id in engine.group_members(s.reveal.groups, gi) {
-				engine.set_character(e, id, visible = true)
+				engine.set_particle(e, id, visible = true)
 				s.start_ticks[id] = s.tick
 				if s.active_by_id[id] == 0 {
 					s.active_by_id[id] = 1
@@ -165,7 +173,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 			for id in engine.group_members(s.reveal.groups, gi) {
 				s.active_by_id[id] = 0
 				s.start_ticks[id] = -1
-				engine.set_character(e, id, visible = false)
+				engine.set_particle(e, id, visible = false)
 			}
 		}
 		s.wipe_delay = s.config.wipe_delay

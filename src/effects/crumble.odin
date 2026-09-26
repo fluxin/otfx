@@ -53,7 +53,7 @@ Crumble_Phase :: enum {
 
 Crumble_State :: struct {
 	config:          Crumble_Config,
-	characters:      [dynamic]engine.Char_Id,
+	characters:      [dynamic]engine.Particle_Id,
 	final_colors:    [dynamic]engine.Color,
 	weak_colors:     [dynamic]engine.Color,
 	dust_colors:     [dynamic]engine.Color,
@@ -97,8 +97,16 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
 	n := len(s.characters)
 	reserve(&s.fall_active, n)
 	reserve(&s.vacuum_active, n)
@@ -117,16 +125,16 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	s.fall_order = make([dynamic]int, n)
 	s.vacuum_order = make([dynamic]int, n)
 
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 
-	visible := e.chars.is_visible
+	visible := e.particles.is_visible
 	dust_choices := Crumble_Dust_Symbols
 	for id, i in s.characters {
-		input := input_coords[id]
+		input := initial_coords[id]
 		final_color := engine.gradient_sample(sampler, spectrum[:], input)
 		s.final_colors[i] = final_color
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			if fg, ok := style.fg.?; ok {
 				s.weak_colors[i] = engine.adjust_color_brightness(fg, 0.65)
 				s.dust_colors[i] = engine.adjust_color_brightness(fg, 0.55)
@@ -175,8 +183,8 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		)
 		reset_tail := 68
 		if s.color_handling == .Dynamic &&
-		   e.chars.input_style[id].fg == nil &&
-		   e.chars.input_style[id].bg == nil {
+		   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil &&
+		   engine.get_initial_visual(e, engine.Particle_Id(id)).bg == nil {
 			reset_tail = 32
 		}
 		s.reset_max_ticks = max(s.reset_max_ticks, s.reset_steps[i] + reset_tail)
@@ -213,9 +221,8 @@ crumble_vacuum_active :: proc(s: Crumble_State) -> bool {
 	return false
 }
 
-crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
-	input_coords := e.chars.input_coord
-	input_symbols := e.chars.input_symbol
+crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+	initial_coords := e.particles.initial_coord
 
 
 	for {
@@ -253,7 +260,11 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				age := s.phase_tick - start
 				if age >= 40 + s.fall_steps[i] do continue
 				if age < 40 {
-					engine.set_symbol(e, id, input_symbols[id])
+					engine.set_symbol(
+						e,
+						id,
+						engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+					)
 					if s.has_dim_fg[i] != 0 {
 						engine.set_foreground(
 							e,
@@ -283,8 +294,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				}
 				fall_age := age - 40
 				progress := f64(min(fall_age + 1, s.fall_steps[i])) / f64(s.fall_steps[i])
-				input := input_coords[id]
-				engine.set_character(
+				input := initial_coords[id]
+				engine.set_particle(
 					e,
 					id,
 					coord = engine.coord_on_line(
@@ -325,8 +336,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 				steps := s.vacuum_steps[i]
 				if age >= steps do continue
 				progress := f64(min(age + 1, steps)) / f64(steps)
-				input := input_coords[id]
-				engine.set_character(
+				input := initial_coords[id]
+				engine.set_particle(
 					e,
 					id,
 					coord = engine.coord_on_quadratic_bezier(
@@ -346,10 +357,10 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 		case .Resetting:
 			if s.phase_tick == s.reset_max_ticks do return nil, false
 			for id, i in s.characters {
-				input := input_coords[id]
+				input := initial_coords[id]
 				steps := s.reset_steps[i]
 				if s.phase_tick < steps {
-					engine.set_character(
+					engine.set_particle(
 						e,
 						id,
 						coord = engine.coord_on_line(
@@ -358,16 +369,24 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 							f64(s.phase_tick + 1) / f64(steps),
 						),
 					)
-					engine.set_symbol(e, id, input_symbols[id])
+					engine.set_symbol(
+						e,
+						id,
+						engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+					)
 					engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
 					engine.set_background(e, id, s.dust_bg[i])
 					continue
 				}
 				flash_age := s.phase_tick - steps
-				engine.set_symbol(e, id, input_symbols[id])
+				engine.set_symbol(
+					e,
+					id,
+					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				)
 				if flash_age < 28 {
 					if s.color_handling == .Dynamic {
-						style := e.chars.input_style[id]
+						style := engine.get_initial_visual(e, engine.Particle_Id(id))
 						if s.has_dim_fg[i] != 0 {
 							start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
 							engine.set_foreground(
@@ -411,7 +430,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Char_Id,
 					}
 				} else {
 					if s.color_handling == .Dynamic {
-						style := e.chars.input_style[id]
+						style := engine.get_initial_visual(e, engine.Particle_Id(id))
 						if style.fg == nil && style.bg == nil {
 							engine.set_foreground(e, id, nil)
 							engine.set_background(e, id, nil)

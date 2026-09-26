@@ -33,16 +33,16 @@ middleout_finishes_color_and_motion :: proc(t: ^testing.T) {
 			if frames > 1000 {testing.expect(t, false, "failed to complete"); break}
 		}
 		id := s.characters[0]
-		testing.expect_value(t, e.chars.current_coord[id], e.chars.input_coord[id])
+		testing.expect_value(t, e.particles.current_coord[id], e.particles.initial_coord[id])
 		if mode == .Ignore {
 			testing.expect_value(
 				t,
-				engine.get_visual(&e, engine.Char_Id(id)).fg,
+				engine.get_visual(&e, engine.Particle_Id(id)).fg,
 				Maybe(engine.Color)(s.final_colors[0]),
 			)
 			testing.expect_value(t, s.full_limit, 66)
 		} else {
-			testing.expect(t, engine.get_visual(&e, engine.Char_Id(id)).fg == nil)
+			testing.expect(t, engine.get_visual(&e, engine.Particle_Id(id)).fg == nil)
 			testing.expect_value(t, s.full_limit, 6)
 		}
 	}
@@ -77,7 +77,7 @@ waves_stretch_each_wave :: proc(t: ^testing.T) {
 			frame :=
 				engine.eased_timeline_index(age, s.wave_ticks, s.config.wave_easing) /
 				s.config.wave_length
-			visual := e.code_entries[code - 1].visual
+			visual := e.visuals[code - 1].visual
 			testing.expect_value(t, visual.symbol, expected[frame % len(expected)])
 		}
 		testing.expect_value(t, s.last_wave, engine.Color{255, 255, 255})
@@ -128,13 +128,13 @@ spotlights_render_before_radius_increment :: proc(t: ^testing.T) {
 	s.phase = .Expand
 	s.illuminate_range, s.expand_limit = 2, 2
 	id := s.characters[0]
-	p := e.chars.input_coord[id]
+	p := e.particles.initial_coord[id]
 	for &spot in s.spot_positions do spot = engine.coord(p.column + 3, p.row)
 	_, alive := effects.spotlights_next(&s, &e)
 	testing.expect(t, alive)
 	testing.expect_value(
 		t,
-		engine.get_visual(&e, engine.Char_Id(id)).fg,
+		engine.get_visual(&e, engine.Particle_Id(id)).fg,
 		Maybe(engine.Color)(s.dark_colors[0]),
 	)
 	_, alive = effects.spotlights_next(&s, &e)
@@ -164,7 +164,7 @@ bubbles_pop_motion_and_color_are_independent :: proc(t: ^testing.T) {
 		effects.bubbles_next(&s, &e)
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Char_Id(id)).fg,
+			engine.get_visual(&e, engine.Particle_Id(id)).fg,
 			Maybe(engine.Color)(s.rainbow_palette[s.color_offsets[id] + tick / 4]),
 		)
 	}
@@ -181,16 +181,16 @@ bubbles_pop_motion_and_color_are_independent :: proc(t: ^testing.T) {
 	for tick in 0 ..< 19 {
 		effects.bubbles_next(&s, &e)
 		if tick == 0 {
-			testing.expect(t, e.chars.current_coord[id] != s.pop_targets[id])
-			testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).symbol, "*")
+			testing.expect(t, e.particles.current_coord[id] != s.pop_targets[id])
+			testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).symbol, "*")
 		}
 	}
 	testing.expect_value(
 		t,
-		engine.get_visual(&e, engine.Char_Id(id)).symbol,
-		e.chars.input_symbol[id],
+		engine.get_visual(&e, engine.Particle_Id(id)).symbol,
+		engine.get_initial_visual(&e, engine.Particle_Id(id)).symbol,
 	)
-	testing.expect(t, e.chars.current_coord[id] != e.chars.input_coord[id])
+	testing.expect(t, e.particles.current_coord[id] != e.particles.initial_coord[id])
 	testing.expect_value(t, s.bubble_states[0], effects.Bubbles_Bubble_State.Pop)
 }
 
@@ -216,22 +216,22 @@ blackhole_pulses_before_explosion :: proc(t: ^testing.T) {
 		if !alive do break
 		frames += 1
 		if frames > 5000 {testing.expect(t, false, "failed to complete"); break}
-		if s.phase == .Collapsing && e.chars.layer[id] == 3 && pulses < 63 {
+		if s.phase == .Collapsing && e.particles.layer[id] == 3 && pulses < 63 {
 			testing.expect_value(
 				t,
-				engine.get_visual(&e, engine.Char_Id(id)).symbol,
+				engine.get_visual(&e, engine.Particle_Id(id)).symbol,
 				symbols[(pulses / 3) % 7],
 			)
-			testing.expect_value(t, e.chars.current_coord[id], e.canvas.center)
+			testing.expect_value(t, e.particles.current_coord[id], e.canvas.center)
 			pulses += 1
 		}
 	}
 	testing.expect_value(t, pulses, 63)
 	for char, i in s.characters {
-		testing.expect_value(t, e.chars.current_coord[char], e.chars.input_coord[char])
+		testing.expect_value(t, e.particles.current_coord[char], e.particles.initial_coord[char])
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Char_Id(char)).fg,
+			engine.get_visual(&e, engine.Particle_Id(char)).fg,
 			Maybe(engine.Color)(s.final_colors[i]),
 		)
 	}
@@ -255,7 +255,8 @@ bubbles_mixed_styles_finish_the_longest_scene :: proc(t: ^testing.T) {
 	s.next_bubble = len(s.bubbles.spans)
 	s.bubble_states[0] = .Pop
 	for id in s.characters {
-		s.pop_origins[id], s.pop_targets[id] = e.chars.input_coord[id], e.chars.input_coord[id]
+		s.pop_origins[id], s.pop_targets[id] =
+			e.particles.initial_coord[id], e.particles.initial_coord[id]
 		s.expand_steps[id], s.pop_steps[id] = 1, 1
 	}
 	for tick in 0 ..< 72 {
@@ -265,7 +266,7 @@ bubbles_mixed_styles_finish_the_longest_scene :: proc(t: ^testing.T) {
 	}
 	_, alive := effects.bubbles_next(&s, &e)
 	testing.expect(t, !alive)
-	for id in s.characters do testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).fg, e.chars.input_style[id].fg)
+	for id in s.characters do testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).fg, engine.get_initial_visual(&e, engine.Particle_Id(id)).fg)
 }
 
 @(test)
@@ -321,7 +322,7 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 				saw_inner_motion = true
 				testing.expect_value(
 					t,
-					engine.get_visual(&e, engine.Char_Id(s.characters[i])).fg,
+					engine.get_visual(&e, engine.Particle_Id(s.characters[i])).fg,
 					Maybe(engine.Color)(s.flash_colors[s.group_by_index[i] * 26]),
 				)
 			}
@@ -330,11 +331,11 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, saw_inner_motion)
 	for id, i in s.characters {
-		testing.expect(t, e.chars.is_visible[id])
-		testing.expect_value(t, e.chars.current_coord[id], e.chars.input_coord[id])
+		testing.expect(t, e.particles.is_visible[id])
+		testing.expect_value(t, e.particles.current_coord[id], e.particles.initial_coord[id])
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Char_Id(id)).fg,
+			engine.get_visual(&e, engine.Particle_Id(id)).fg,
 			Maybe(engine.Color)(s.final_colors[i]),
 		)
 	}
@@ -365,7 +366,7 @@ waves_support_long_timelines :: proc(t: ^testing.T) {
 	testing.expect(t, len(s.wave_codes) > 65536)
 	for age in 65534 ..< len(s.wave_codes) {
 		frame := engine.eased_timeline_index(age, s.wave_ticks, .Linear)
-		visual := e.code_entries[s.wave_codes[age] - 1].visual
+		visual := e.visuals[s.wave_codes[age] - 1].visual
 		testing.expect_value(t, visual.symbol, s.config.wave_symbols[frame % 3])
 	}
 }
@@ -394,7 +395,7 @@ decrypt_supports_large_color_palettes :: proc(t: ^testing.T) {
 	for id, row in s.characters {
 		index := s.color_index[row]
 		used_large_index ||= index > 255
-		color, ok := engine.get_visual(&e, engine.Char_Id(id)).fg.?
+		color, ok := engine.get_visual(&e, engine.Particle_Id(id)).fg.?
 		testing.expect(t, ok)
 		testing.expect_value(t, color, s.config.ciphertext_colors[index])
 	}

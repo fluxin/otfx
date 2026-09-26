@@ -100,7 +100,7 @@ Rings_Mode :: enum u8 {
 // heap-owned waypoint chain.
 Rings_State :: struct {
 	config:             Rings_Config,
-	ids:                [dynamic]engine.Char_Id,
+	ids:                [dynamic]engine.Particle_Id,
 	final_colors:       [dynamic]engine.Color,
 	ring_by_slot:       [dynamic]int, // -1 for external glyphs
 	clockwise:          [dynamic]u8,
@@ -136,7 +136,7 @@ rings_begin_line :: proc(
 	speed: f64,
 ) {
 	id := s.ids[slot]
-	origin := e.chars.current_coord[id]
+	origin := e.particles.current_coord[id]
 	s.origins[slot], s.targets[slot] = origin, target
 	s.steps[slot] = 0
 	s.max_steps[slot] = max(
@@ -160,8 +160,12 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	chars := engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	chars := engine.get_particles(query, engine.PARTICLE_FILTER_INPUT, .Top_Bottom_Left_Right)
 	defer delete(chars[:])
 	n := len(chars)
 	append(&s.ids, ..chars[:])
@@ -177,15 +181,22 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	s.max_steps = make([dynamic]int, n)
 	s.modes = make([dynamic]Rings_Mode, n)
 
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 
-	visible := e.chars.is_visible
+	visible := e.particles.is_visible
 	for id, slot in chars {
-		s.final_colors[slot] = engine.gradient_sample(sampler, final_spectrum[:], input_coords[id])
+		s.final_colors[slot] = engine.gradient_sample(
+			sampler,
+			final_spectrum[:],
+			initial_coords[id],
+		)
 		s.ring_by_slot[slot] = -1
 		if s.color_handling == .Dynamic {
 			visual := engine.get_visual(e, id)
-			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.dynamic_apply_input_colors(
+				&visual,
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
+			)
 			engine.set_visual(e, id, visual)
 		} else {
 			engine.set_foreground(e, id, s.final_colors[slot])
@@ -261,7 +272,8 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 			continue
 		}
 		ring := &s.rings[ring_index]
-		center := initial ? rings_coords(s, slot)[s.target_slots[slot]] : e.chars.current_coord[id]
+		center :=
+			initial ? rings_coords(s, slot)[s.target_slots[slot]] : e.particles.current_coord[id]
 		// Sample the rectangle's column-major index without materializing it.
 		// Keep the same five draws and coordinate ordering as the old pool.
 		side := 2 * ring.ring_gap + 1
@@ -297,9 +309,9 @@ rings_begin_spin :: proc(s: ^Rings_State, e: ^engine.Engine) {
 rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	for slot in 0 ..< len(s.ids) {
 		id := s.ids[slot]
-		engine.set_character(e, id, visible = true)
+		engine.set_particle(e, id, visible = true)
 		s.modes[slot] = .Home
-		rings_begin_line(s, e, slot, e.chars.input_coord[id], 0.8)
+		rings_begin_line(s, e, slot, e.particles.initial_coord[id], 0.8)
 	}
 }
 
@@ -308,8 +320,11 @@ rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		id := s.ids[slot]
 		visual := engine.get_visual(e, id)
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
-			engine.set_character(e, id, visual = visual)
+			engine.dynamic_apply_input_colors(
+				&visual,
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
+			)
+			engine.set_particle(e, id, visual = visual)
 			continue
 		}
 		ring_index := s.ring_by_slot[slot]
@@ -317,7 +332,7 @@ rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			if s.phase == .Final {
 				visual.fg = s.final_colors[slot]
 			}
-			engine.set_character(e, id, visual = visual)
+			engine.set_particle(e, id, visual = visual)
 			continue
 		}
 		ring_color := s.rings[ring_index].color
@@ -340,7 +355,7 @@ rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			visual.fg = s.final_colors[slot]
 		case .Start, .Complete:
 		}
-		engine.set_character(e, id, visual = visual)
+		engine.set_particle(e, id, visual = visual)
 	}
 }
 
@@ -361,7 +376,7 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			factor = ease.ease(.Quadratic_Out, factor)
 		case .Disperse_Loop, .Condense, .Rotate, .Idle, .Complete:
 		}
-		engine.set_character(
+		engine.set_particle(
 			e,
 			id,
 			coord = engine.coord_on_line(s.origins[slot], s.targets[slot], factor),
@@ -403,7 +418,7 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 				s.rings[s.ring_by_slot[slot]].rotation_speed,
 			)
 		case .External:
-			engine.set_character(e, id, visible = false)
+			engine.set_particle(e, id, visible = false)
 			s.modes[slot] = .Complete
 		case .Home:
 			s.modes[slot] = .Complete
@@ -412,7 +427,7 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	}
 }
 
-rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.phase == .Complete do return nil, false
 	switch s.phase {
 	case .Start:

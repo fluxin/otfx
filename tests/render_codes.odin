@@ -16,7 +16,7 @@ prepared_edits_preserve_unedited_fields :: proc(t: ^testing.T) {
 	cfg.ignore_terminal_dimensions = true
 	e, err := engine.engine_make("A", cfg, context.allocator)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	id := e.character_sets.input[0]
+	id := e.particle_sets.input[0]
 	visual := engine.Visual {
 		symbol = "▉",
 		fg     = engine.Color{1, 2, 3},
@@ -24,33 +24,28 @@ prepared_edits_preserve_unedited_fields :: proc(t: ^testing.T) {
 		bold   = true,
 	}
 	code := engine.prepare_visual(&e, visual)
-	engine.set_character(&e, id, visible = true, visual = code)
+	engine.set_particle(&e, id, visible = true, visual = code)
 	testing.expect_value(t, engine.get_visual(&e, id), visual)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, engine.get_emitted_visual(&e, id), visual)
+	engine.frame_build(&e)
+	testing.expect_value(t, engine.get_render_visual(&e, id), visual)
 	// Invalidating prepared bytes cannot lose fields or emit unchanged output.
-	engine.mark_character_dirty(&e, id)
-	testing.expect_value(t, e.chars.code[id], engine.NO_CODE)
 	testing.expect_value(t, engine.get_visual(&e, id), visual)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, len(e.out_buf), 0)
+	engine.frame_build(&e)
+	expect_visible_draws(t, &e)
 	engine.set_visual(&e, id, code)
 	engine.set_foreground(&e, id, visual.fg)
-	testing.expect_value(t, e.chars.code[id], code)
 	engine.set_symbol(&e, id, "B")
 	visual.symbol = "B"
 	testing.expect_value(t, engine.get_visual(&e, id), visual)
-	testing.expect_value(t, e.chars.code[id], engine.NO_CODE)
 	// Returning to the last emitted appearance before emission produces no diff.
 	engine.set_visual(&e, id, code)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, len(e.out_buf), 0)
-	e.chars.visual[id].symbol = "C"
-	engine.mark_character_dirty(&e, id)
+	engine.frame_build(&e)
+	expect_visible_draws(t, &e)
+	engine.set_symbol(&e, id, "C")
 	visual.symbol = "C"
 	testing.expect_value(t, engine.get_visual(&e, id), visual)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, engine.get_emitted_visual(&e, id), visual)
+	engine.frame_build(&e)
+	testing.expect_value(t, engine.get_render_visual(&e, id), visual)
 }
 
 @(test)
@@ -77,31 +72,35 @@ bulk_visual_codes_match_ordered_scalar_updates :: proc(t: ^testing.T) {
 			)
 			testing.expect_value(t, err_a, engine.Input_Error.None)
 			testing.expect_value(t, err_b, engine.Input_Error.None)
-			palette: [3]engine.Visual_Code_Id
+			palette: [3]engine.Visual_Id
 			for visual, i in ([]engine.Visual{{symbol = "A", fg = engine.Color{1, 2, 3}}, {symbol = "▉", bg = engine.Color{255, 128, 0}, bold = true}, {symbol = "A", fg = engine.Color{9, 8, 7}}}) {
 				palette[i] = engine.prepare_visual(&a, visual)
 				testing.expect_value(t, palette[i], engine.prepare_visual(&b, visual))
 			}
-			for id in a.character_sets.input {
-				engine.set_character(&a, id, visible = true)
-				engine.set_character(&b, id, visible = true)
+			for id in a.particle_sets.input {
+				engine.set_particle(&a, id, visible = true)
+				engine.set_particle(&b, id, visible = true)
 			}
-			ids: [65]engine.Char_Id
-			codes: [65]engine.Visual_Code_Id
+			ids: [65]engine.Particle_Id
+			codes: [65]engine.Visual_Id
 			for count in ([]int{0, 1, 7, 8, 9, 65}) {
 				for phase in 0 ..< 3 {
 					for i in 0 ..< count {
 						// Sparse order and repeated IDs exercise ordered overwrites,
 						// including a later lane restoring a prior appearance.
-						ids[i] = a.character_sets.input[((i * 7) % 5) * 3]
+						ids[i] = a.particle_sets.input[((i * 7) % 5) * 3]
 						codes[i] = palette[(i + phase) % 3]
 					}
-					engine.set_visual_codes(&a, ids[:count], codes[:count])
+					engine.set_visuals(&a, ids[:count], codes[:count])
 					for i in 0 ..< count do engine.set_visual(&b, ids[i], codes[i])
-					engine.frame_build_all(&a)
-					engine.frame_build_all(&b)
-					testing.expect_value(t, string(a.out_buf[:]), string(b.out_buf[:]))
-					for id in a.character_sets.input {
+					engine.frame_build(&a)
+					engine.frame_build(&b)
+					testing.expect_value(
+						t,
+						string(engine.frame_bytes(&a)),
+						string(engine.frame_bytes(&b)),
+					)
+					for id in a.particle_sets.input {
 						testing.expect_value(
 							t,
 							engine.get_visual(&a, id),
@@ -125,52 +124,51 @@ render_codes_preserve_logical_appearance_and_transitions :: proc(t: ^testing.T) 
 	cfg.ignore_terminal_dimensions = true
 	e, err := engine.engine_make("A", cfg, context.allocator)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	id := e.character_sets.input[0]
-	engine.set_character(&e, id, visible = true)
+	id := e.particle_sets.input[0]
+	engine.set_particle(&e, id, visible = true)
 	code := engine.prepare_visual(&e, engine.Visual{symbol = "B"})
 	engine.set_visual(&e, id, code)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "B")
-	testing.expect_value(t, engine.get_visual(&e, engine.Char_Id(id)).symbol, "B")
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
+	testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).symbol, "B")
 	// This equals the original raw visual, but differs from the current code.
 	engine.set_visual(&e, id, engine.Visual{symbol = "A"})
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "A")
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "A")
 	engine.set_visual(&e, id, code)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "B")
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
 	// A different raw visual, then re-enter the same encoded appearance.
-	engine.set_character(&e, id, visual = engine.Visual{symbol = "C"})
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "C")
+	engine.set_particle(&e, id, visual = engine.Visual{symbol = "C"})
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "C")
 	engine.set_visual(&e, id, code)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "B")
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
 	// Direct writers obey the same invalidation contract.
-	e.chars.visual[id].symbol = "D"
-	engine.mark_character_dirty(&e, id)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "D")
+	engine.set_symbol(&e, id, "D")
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "D")
 	engine.set_visual(&e, id, code)
 	engine.set_symbol(&e, id, "E")
 	engine.set_foreground(&e, id, engine.Color{1, 2, 3})
 	engine.set_background(&e, id, engine.Color{4, 5, 6})
 	engine.set_bold(&e, id, true)
-	engine.frame_build_all(&e)
+	engine.frame_build(&e)
 	testing.expect_value(
 		t,
-		string(e.out_buf[:]),
-		"\x1b[1m\x1b[38;2;1;2;3m\x1b[48;2;4;5;6mE\x1b[0m",
+		string(engine.frame_bytes(&e)),
+		"\x1b[01m\x1b[38;2;001;002;003m\x1b[48;2;004;005;006mE\x1b[0m",
 	)
 	engine.set_symbol(&e, id, "E")
 	engine.set_foreground(&e, id, engine.Color{1, 2, 3})
-	engine.frame_build_all(&e)
-	testing.expect_value(t, len(e.out_buf), 0)
+	engine.frame_build(&e)
+	expect_visible_draws(t, &e)
 	engine.set_foreground(&e, id, nil)
 	engine.set_background(&e, id, nil)
 	engine.set_bold(&e, id, false)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, string(e.out_buf[:]), "E")
+	engine.frame_build(&e)
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "E")
 }
 
 @(test)
@@ -194,16 +192,20 @@ render_codes_preserve_input_color_policy :: proc(t: ^testing.T) {
 				symbol = "▉",
 				fg     = engine.Color{1, 90, 255},
 			}
-			code_id, raw_id := coded.character_sets.input[0], raw.character_sets.input[0]
-			engine.set_character(&coded, code_id, visible = true)
-			engine.set_character(&raw, raw_id, visible = true, visual = visual)
+			code_id, raw_id := coded.particle_sets.input[0], raw.particle_sets.input[0]
+			engine.set_particle(&coded, code_id, visible = true)
+			engine.set_particle(&raw, raw_id, visible = true, visual = visual)
 			engine.set_visual(&coded, code_id, engine.prepare_visual(&coded, visual))
-			engine.frame_build_all(&coded)
-			engine.frame_build_all(&raw)
-			testing.expect_value(t, string(coded.out_buf[:]), string(raw.out_buf[:]))
+			engine.frame_build(&coded)
+			engine.frame_build(&raw)
 			testing.expect_value(
 				t,
-				engine.get_visual(&coded, engine.Char_Id(code_id)).symbol,
+				string(engine.frame_bytes(&coded)),
+				string(engine.frame_bytes(&raw)),
+			)
+			testing.expect_value(
+				t,
+				engine.get_visual(&coded, engine.Particle_Id(code_id)).symbol,
 				visual.symbol,
 			)
 		}
@@ -211,7 +213,7 @@ render_codes_preserve_input_color_policy :: proc(t: ^testing.T) {
 }
 
 @(test)
-appearance_cache_survives_raster_changes :: proc(t: ^testing.T) {
+appearance_packet_survives_placement_changes :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -227,7 +229,7 @@ appearance_cache_survives_raster_changes :: proc(t: ^testing.T) {
 			cfg.existing_color_handling = handling
 			e, err := engine.engine_make("\x1b[1;31mA", cfg, context.allocator)
 			testing.expect_value(t, err, engine.Input_Error.None)
-			id := e.character_sets.input[0]
+			id := e.particle_sets.input[0]
 			visual := engine.Visual {
 				symbol = "B",
 				fg     = engine.Color{1, 2, 3},
@@ -235,53 +237,52 @@ appearance_cache_survives_raster_changes :: proc(t: ^testing.T) {
 			if prepared {
 				code := engine.prepare_visual(&e, visual)
 				testing.expect_value(t, engine.prepare_visual(&e, visual), code)
-				engine.set_character(&e, id, visual = code, visible = true)
+				engine.set_particle(&e, id, visual = code, visible = true)
 			} else {
-				engine.set_character(&e, id, visual = visual, visible = true)
+				engine.set_particle(&e, id, visual = visual, visible = true)
 			}
 			builder := strings.builder_make(0, 64)
-			engine.write_character(&e, id, &builder)
+			engine.write_particle(&e, id, &builder)
 			expected := strings.clone(strings.to_string(builder))
 			// Writing a preview must not claim the bytes reached the terminal.
-			testing.expect_value(t, engine.get_emitted_visual(&e, id).symbol, "")
-			engine.frame_build_all(&e)
-			testing.expect_value(t, string(e.out_buf[:]), expected)
-			cached_colors := e.chars.encoded_colors[id]
-			cached_code := e.chars.code[id]
-			if !prepared || handling == .Always {
-				testing.expect(t, cached_colors.valid)
-			} else {
-				testing.expect(t, !cached_colors.valid)
-			}
+			testing.expect_value(t, engine.get_render_visual(&e, id).symbol, visual.symbol)
+			engine.frame_build(&e)
+			bytes := engine.frame_bytes(&e)
+			testing.expect_value(t, string(bytes[:len(expected)]), expected)
+			testing.expect_value(t, string(bytes[len(expected):]), " ")
+			cached_packet := e.visuals[e.particles.visual_id[id] - 1].packet
 			allocations := track.total_allocation_count
-			pool_size, entries := len(e.code_bytes), len(e.code_entries)
+			entries := len(e.visuals)
 			for tick in 0 ..< 20 {
-				engine.set_character(
+				engine.set_particle(
 					&e,
 					id,
 					coord = engine.Coord{1 + tick % 2, 1},
 					layer = tick,
 					visible = tick % 3 != 0,
 				)
-				testing.expect_value(t, e.chars.encoded_colors[id], cached_colors)
-				testing.expect_value(t, e.chars.code[id], cached_code)
-				engine.frame_build_all(&e)
+				testing.expect_value(
+					t,
+					e.visuals[e.particles.visual_id[id] - 1].packet,
+					cached_packet,
+				)
+				engine.frame_build(&e)
 				strings.builder_reset(&builder)
-				engine.write_character(&e, id, &builder)
+				engine.write_particle(&e, id, &builder)
 				testing.expect_value(t, strings.to_string(builder), expected)
 			}
 			engine.set_symbol(&e, id, "C")
-			testing.expect_value(t, e.chars.encoded_colors[id], cached_colors)
-			testing.expect_value(t, e.chars.code[id], engine.NO_CODE)
+			testing.expect_value(
+				t,
+				string(e.visuals[e.particles.visual_id[id] - 1].packet.bytes[:43]),
+				string(cached_packet.bytes[:43]),
+			)
 			strings.builder_reset(&builder)
-			engine.write_character(&e, id, &builder)
+			engine.write_particle(&e, id, &builder)
 			testing.expect(t, strings.contains(strings.to_string(builder), "C"))
-			testing.expect(t, e.chars.encoded_colors[id].valid)
 			engine.set_symbol(&e, id, "C")
-			testing.expect(t, e.chars.encoded_colors[id].valid)
 			// Dynamic appearances use bounded character storage, not runtime interning.
-			testing.expect_value(t, len(e.code_bytes), pool_size)
-			testing.expect_value(t, len(e.code_entries), entries)
+			testing.expect_value(t, len(e.visuals), entries)
 			testing.expect_value(t, track.total_allocation_count, allocations)
 		}
 	}

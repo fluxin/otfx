@@ -71,7 +71,7 @@ bouncyballs_parse :: proc(cfg: ^Bouncyballs_Config, args: []string) -> bool {
 
 Bouncyballs_State :: struct {
 	config:         Bouncyballs_Config,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	ball_colors:    [dynamic]engine.Color,
@@ -79,9 +79,9 @@ Bouncyballs_State :: struct {
 	origins:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
-	row_groups:     engine.Char_Groups,
+	row_groups:     engine.Particle_Groups,
 	next_group:     int,
-	pending:        [dynamic]engine.Char_Id,
+	pending:        [dynamic]engine.Particle_Id,
 	active_slots:   [dynamic]int,
 	ball_delay:     int,
 	tick:           int,
@@ -102,16 +102,24 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
-	s.row_groups = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
+	s.row_groups = engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_B2T)
 	n := len(s.characters)
 	reserve(&s.active_slots, n)
 	pending_capacity := 0
 	for span in s.row_groups.spans do pending_capacity = max(pending_capacity, span.len)
 	reserve(&s.pending, pending_capacity)
 	s.color_handling = e.cfg.existing_color_handling
-	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.ball_colors = make([dynamic]engine.Color, n)
 	s.ball_symbols = make([dynamic]string, n)
@@ -121,16 +129,16 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 
 	for id, i in s.characters {
 		s.index_by_id[id] = i
-		input_coord := e.chars.input_coord[id]
+		initial_coord := e.particles.initial_coord[id]
 		s.ball_colors[i] = s.config.ball_colors[rand.int_max(len(s.config.ball_colors))]
 		s.ball_symbols[i] = s.config.ball_symbols[rand.int_max(len(s.config.ball_symbols))]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], input_coord)
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coord)
 		drop_row := int(f64(e.canvas.top) * rand.float64_range(1, 1.5))
-		s.origins[i] = engine.coord(input_coord.column, drop_row)
-		e.chars.current_coord[id] = s.origins[i]
+		s.origins[i] = engine.coord(initial_coord.column, drop_row)
+		e.particles.current_coord[id] = s.origins[i]
 		s.max_steps[i] = max(
 			engine.round_half_even(
-				engine.line_length(s.origins[i], input_coord, true) / s.config.movement_speed,
+				engine.line_length(s.origins[i], initial_coord, true) / s.config.movement_speed,
 			),
 			1,
 		)
@@ -138,7 +146,13 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	}
 }
 
-bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+bouncyballs_next :: proc(
+	s: ^Bouncyballs_State,
+	e: ^engine.Engine,
+) -> (
+	[]engine.Particle_Id,
+	bool,
+) {
 	active :=
 		s.next_group < len(s.row_groups.spans) || len(s.pending) > 0 || len(s.active_slots) > 0
 	if !active do return nil, false
@@ -156,7 +170,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.
 				slot := s.index_by_id[id]
 				s.start_ticks[slot] = s.tick
 				append(&s.active_slots, slot)
-				engine.set_character(e, id, visible = true)
+				engine.set_particle(e, id, visible = true)
 			}
 			s.ball_delay = s.config.ball_delay
 		} else {
@@ -170,20 +184,20 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.
 		if age >= s.max_steps[slot] + 65 do continue
 		if age < s.max_steps[slot] - 1 {
 			progress := f64(age + 1) / f64(s.max_steps[slot])
-			engine.set_character(
+			engine.set_particle(
 				e,
 				id,
 				coord = engine.coord_on_line(
 					s.origins[slot],
-					e.chars.input_coord[id],
+					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
 			engine.set_symbol(e, id, s.ball_symbols[slot])
 			engine.set_foreground(e, id, s.ball_colors[slot])
 		} else {
-			engine.set_character(e, id, coord = e.chars.input_coord[id])
-			engine.set_symbol(e, id, e.chars.input_symbol[id])
+			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
+			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 			fade_tick := age - (s.max_steps[slot] - 1)
 			fade_step := min(fade_tick / 6, 10)
 			if s.color_handling == .Dynamic {
@@ -191,7 +205,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> ([]engine.
 				engine.dynamic_gradient_to_input(
 					&visual,
 					s.ball_colors[slot],
-					e.chars.input_style[id],
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
 					10,
 					fade_step,
 				)

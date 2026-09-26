@@ -1,5 +1,8 @@
 # Flat composition and resolved row experiments
 
+Historical experiments preceding checkpoint `495602e6`. The current working
+implementation is the [bare renderer experiment](bare-renderer.md).
+
 Neither prototype is retained. Both preserve deterministic output but regress
 the representative eight-effect screen. The existing retained compositor and
 direct writer are restored; earlier working-tree changes are preserved.

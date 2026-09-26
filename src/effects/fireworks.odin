@@ -83,7 +83,7 @@ fireworks_parse :: proc(cfg: ^Fireworks_Config, args: []string) -> bool {
 // holds its own trajectory columns; shells only own launch time and color.
 Fireworks_State :: struct {
 	config:             Fireworks_Config,
-	characters:         [dynamic]engine.Char_Id,
+	characters:         [dynamic]engine.Particle_Id,
 	final_colors:       [dynamic]engine.Color,
 	shell_index:        [dynamic]int,
 	shell_offsets:      [dynamic]int,
@@ -144,8 +144,16 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.shell_index = make([dynamic]int, n)
@@ -175,12 +183,12 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 		1,
 		15,
 	)
-	input_coords := e.chars.input_coord
-	visible := e.chars.is_visible
+	initial_coords := e.particles.initial_coord
+	visible := e.particles.is_visible
 	for shell in 0 ..< shell_count {
 		first := s.shell_offsets[shell]
 		min_row :=
-			s.config.explode_anywhere ? e.canvas.bottom : input_coords[s.characters[first]].row
+			s.config.explode_anywhere ? e.canvas.bottom : initial_coords[s.characters[first]].row
 		origin := engine.coord(
 			rand.int_range(e.canvas.left, e.canvas.right + 1),
 			rand.int_range(min_row, e.canvas.top + 1),
@@ -190,7 +198,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 			s.config.firework_colors[rand.int_max(len(s.config.firework_colors))]
 		for i in s.shell_offsets[shell] ..< s.shell_offsets[shell + 1] {
 			id := s.characters[i]
-			input := input_coords[id]
+			input := initial_coords[id]
 			s.shell_index[i] = shell
 			s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], input)
 			visible[id] = false
@@ -233,7 +241,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 	s.next_shell = shell_count - 1
 }
 
-fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	active := s.next_shell >= 0
 	if !active {
 		for _, i in s.characters {
@@ -243,7 +251,8 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 			fall_color_ticks := 160
 			if s.color_handling == .Dynamic {
 				id := s.characters[i]
-				if e.chars.input_style[id].fg == nil && e.chars.input_style[id].bg == nil {
+				if engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil &&
+				   engine.get_initial_visual(e, engine.Particle_Id(id)).bg == nil {
 					fall_color_ticks = 10
 				}
 			}
@@ -268,8 +277,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 	}
 	s.launch_delay -= 1
 
-	input_coords := e.chars.input_coord
-	input_symbols := e.chars.input_symbol
+	initial_coords := e.particles.initial_coord
 	launch_phases := s.shell_launch_phase
 	for id, i in s.characters {
 		shell := s.shell_index[i]
@@ -284,7 +292,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 		bloom_steps := s.bloom_steps[i]
 		explode_end := apex_end + explode_steps
 		bloom_end := explode_end + bloom_steps
-		position := e.chars.current_coord[id]
+		position := e.particles.current_coord[id]
 		visual := engine.get_visual(e, id)
 		if age < apex_end {
 			position = engine.coord_on_line(
@@ -314,7 +322,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				gradient_frames - 1,
 			)
 			gradient_step := math.floor_div(frame_index, 2)
-			visual.symbol = input_symbols[id]
+			visual.symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 			if gradient_step <= 5 {
 				visual.fg = engine.gradient_between_step(
 					color,
@@ -348,7 +356,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				gradient_frames - 1,
 			)
 			entry := math.floor_div(frame_index, 2)
-			visual.symbol = input_symbols[id]
+			visual.symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 			if entry <= 5 {
 				visual.fg = engine.gradient_between_step(
 					color,
@@ -366,7 +374,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 			}
 		} else {
 			fall_age := age - bloom_end
-			input := input_coords[id]
+			input := initial_coords[id]
 			if fall_age < s.fall_steps[i] {
 				position = engine.coord_on_quadratic_bezier(
 					s.bloom_targets[i],
@@ -375,12 +383,12 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 					ease.ease(.Quartic_In_Out, f64(fall_age + 1) / f64(s.fall_steps[i])),
 				)
 			}
-			visual.symbol = input_symbols[id]
+			visual.symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
 					&visual,
 					color,
-					e.chars.input_style[id],
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
 					15,
 					min(fall_age / 10, 15),
 				)
@@ -393,7 +401,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Char
 				)
 			}
 		}
-		engine.set_character(e, id, coord = position, visible = true, layer = 2, visual = visual)
+		engine.set_particle(e, id, coord = position, visible = true, layer = 2, visual = visual)
 	}
 	for shell in 0 ..< len(launch_phases) {
 		if s.shell_start_ticks[shell] < 0 do continue

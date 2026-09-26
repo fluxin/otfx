@@ -199,44 +199,32 @@ raster_render_cells :: proc(
 	width, height: int,
 ) {
 	raster_fill(r, Background)
-	cells := e.render_cells[:width * height]
-	input_styles := e.chars.input_style[:]
-	uses_input_preexisting_colors := e.chars.uses_input_preexisting_colors[:]
-	for screen_row in 0 ..< height {
-		row_index := height - 1 - screen_row
-		for column in 0 ..< width {
-			cell := cells[row_index * width + column]
-			if cell == engine.EMPTY_CELL do continue
-			id := int(cell)
-			visual := engine.effective_visual(
-				engine.get_visual(e, engine.Char_Id(id)),
-				input_styles[id],
-				uses_input_preexisting_colors[id],
-				e.cfg.existing_color_handling,
+	for draw in e.draws {
+		screen_row, column := draw.cell / width, draw.cell % width
+		id := draw.particle
+		visual := engine.get_render_visual(e, engine.Particle_Id(id))
+		cell_background := Background
+		if bg, ok := visual.bg.?; ok {
+			cell_background = color_pixel(bg)
+			raster_fill_rect(
+				r,
+				column * Cell_Width,
+				screen_row * Cell_Height,
+				Cell_Width,
+				Cell_Height,
+				cell_background,
 			)
-			cell_background := Background
-			if bg, ok := visual.bg.?; ok {
-				cell_background = color_pixel(bg)
-				raster_fill_rect(
-					r,
-					column * Cell_Width,
-					screen_row * Cell_Height,
-					Cell_Width,
-					Cell_Height,
-					cell_background,
-				)
-			}
-			if visual.symbol == "" do continue
-			fg := Foreground
-			if color, ok := visual.fg.?; ok do fg = color_pixel(color)
-			ch, _ := utf8.decode_rune(visual.symbol)
-			if shape, is_shape := block_for(ch); is_shape {
-				raster_shape(r, column, screen_row, shape, fg, cell_background)
-			} else if shape, is_shape := box_for(ch); is_shape {
-				raster_shape(r, column, screen_row, shape, fg, cell_background)
-			} else {
-				raster_glyph(r, chain, column, screen_row, ch, fg, cell_background)
-			}
+		}
+		if visual.symbol == "" do continue
+		fg := Foreground
+		if color, ok := visual.fg.?; ok do fg = color_pixel(color)
+		ch, _ := utf8.decode_rune(visual.symbol)
+		if shape, is_shape := block_for(ch); is_shape {
+			raster_shape(r, column, screen_row, shape, fg, cell_background)
+		} else if shape, is_shape := box_for(ch); is_shape {
+			raster_shape(r, column, screen_row, shape, fg, cell_background)
+		} else {
+			raster_glyph(r, chain, column, screen_row, ch, fg, cell_background)
 		}
 	}
 }

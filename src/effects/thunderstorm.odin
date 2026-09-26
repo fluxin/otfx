@@ -129,7 +129,7 @@ Thunderstorm_Strike_Work :: struct {
 
 Thunderstorm_State :: struct {
 	config:              Thunderstorm_Config,
-	characters:          [dynamic]engine.Char_Id,
+	characters:          [dynamic]engine.Particle_Id,
 	final_colors:        [dynamic]engine.Color,
 	storm_colors:        [dynamic]engine.Color,
 	visible_bg:          [dynamic]Maybe(engine.Color),
@@ -138,13 +138,13 @@ Thunderstorm_State :: struct {
 	input_at_cell:       [dynamic]i32,
 	glow_starts:         [dynamic]int,
 	glow_active:         [dynamic]int,
-	render_ids:          [dynamic]engine.Char_Id,
+	render_ids:          [dynamic]engine.Particle_Id,
 
 	// Rain has a strict geometric maximum: at most six drops every two ticks;
 	// with minimum speed 0.5 and horizontal drift at most height + 1, a drop
 	// lives for <= 3*(height+1) ticks.  9*(height+1)+6 rows covers every live
 	// batch with no test-sized cap or per-frame allocation.
-	rain_ids:            [dynamic]engine.Char_Id,
+	rain_ids:            [dynamic]engine.Particle_Id,
 	rain_starts:         [dynamic]int,
 	rain_origins:        [dynamic]engine.Coord,
 	rain_targets:        [dynamic]engine.Coord,
@@ -155,13 +155,13 @@ Thunderstorm_State :: struct {
 
 	// Strike storage grows at generation boundaries and is reused thereafter.
 	// Recursive branches have no quadratic height-only capacity bound.
-	strike_ids:          [dynamic]engine.Char_Id,
-	strike_pending:      [dynamic]engine.Char_Id,
+	strike_ids:          [dynamic]engine.Particle_Id,
+	strike_pending:      [dynamic]engine.Particle_Id,
 	strike_pending_head: int,
 	strike_delay:        int,
 	strike_flash_age:    int,
 	strike_live:         bool,
-	spark_ids:           [dynamic]engine.Char_Id,
+	spark_ids:           [dynamic]engine.Particle_Id,
 	spark_starts:        [dynamic]int,
 	spark_origins:       [dynamic]engine.Coord,
 	spark_controls:      [dynamic]engine.Coord,
@@ -197,9 +197,9 @@ thunderstorm_take_spark :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> in
 	}
 	// Eighteen is a natural one-impact batch, not a ceiling. Additional rows
 	// are created only when separate strikes overlap before earlier sparks cool.
-	id := engine.add_character(e, "*", engine.coord(0, 0))
-	engine.set_character(e, id, layer = 2)
-	engine.set_character(e, id, visible = false)
+	id := engine.add_particle(e, "*", engine.coord(0, 0))
+	engine.set_particle(e, id, layer = 2)
+	engine.set_particle(e, id, visible = false)
 	append(&s.spark_ids, id)
 	append(&s.spark_starts, -1)
 	append(&s.spark_origins, engine.coord(0, 0))
@@ -224,27 +224,35 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.storm_colors = make([dynamic]engine.Color, n)
 	s.visible_bg = make([dynamic]Maybe(engine.Color), n)
 	s.storm_bg = make([dynamic]Maybe(engine.Color), n)
 	s.glow_starts = make([dynamic]int, n)
-	s.input_slot_by_id = make([dynamic]int, len(e.chars))
+	s.input_slot_by_id = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.input_slot_by_id) do s.input_slot_by_id[i] = -1
 	s.input_at_cell = make([dynamic]i32, e.canvas.width * e.canvas.height)
 	for i in 0 ..< len(s.input_at_cell) do s.input_at_cell[i] = -1
 
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 
-	visible := e.chars.is_visible
+	visible := e.particles.is_visible
 	for id, i in s.characters {
-		p := input_coords[id]
+		p := initial_coords[id]
 		final := engine.gradient_sample(sampler, spectrum[:], p)
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			final = engine.Color{0x80, 0x80, 0x80}
 			if fg, ok := style.fg.?; ok do final = fg
 			s.visible_bg[i] = style.bg
@@ -276,9 +284,9 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.rain_active, rain_capacity)
 	reserve(&s.glow_active, n)
 	for slot in 0 ..< rain_capacity {
-		id := engine.add_character(e, ".", engine.coord(0, 0))
-		e.chars.layer[id] = 1
-		e.chars.is_visible[id] = false
+		id := engine.add_particle(e, ".", engine.coord(0, 0))
+		e.particles.layer[id] = 1
+		e.particles.is_visible[id] = false
 		append(&s.rain_ids, id)
 		append(&s.rain_starts, -1)
 		append(&s.rain_origins, engine.coord(0, 0))
@@ -290,9 +298,9 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	strike_capacity := e.canvas.height
 	reserve(&s.strike_ids, strike_capacity)
 	for _ in 0 ..< strike_capacity {
-		id := engine.add_character(e, "|", engine.coord(0, 0))
-		e.chars.layer[id] = 2
-		e.chars.is_visible[id] = false
+		id := engine.add_particle(e, "|", engine.coord(0, 0))
+		e.particles.layer[id] = 2
+		e.particles.is_visible[id] = false
 		append(&s.strike_ids, id)
 	}
 	// One natural spark burst is reserved. It remains growable for live overlap.
@@ -328,14 +336,14 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canva
 			1,
 		)
 		id := s.rain_ids[slot]
-		engine.set_character(e, id, coord = origin)
+		engine.set_particle(e, id, coord = origin)
 		engine.set_symbol(
 			e,
 			id,
 			s.config.raindrop_symbols[rand.int_max(len(s.config.raindrop_symbols))],
 		)
 		engine.set_foreground(e, id, engine.Color{0xAA, 0xAA, 0xFF})
-		engine.set_character(e, id, visible = true)
+		engine.set_particle(e, id, visible = true)
 		append(&s.rain_active, slot)
 	}
 	s.rain_delay = rand.int_range(1, 8)
@@ -461,11 +469,11 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.strike_ids, count)
 	reserve(&s.strike_pending, count)
 	new_count := max(0, count - len(s.strike_ids))
-	characters := engine.character_batch(e, new_count)
+	characters := engine.particle_batch(e, new_count)
 	for len(s.strike_ids) < count {
-		id := engine.add_character(&characters, "|", engine.coord(0, 0))
-		engine.set_character(e, id, layer = 2)
-		engine.set_character(e, id, visible = false)
+		id := engine.add_particle(&characters, "|", engine.coord(0, 0))
+		engine.set_particle(e, id, layer = 2)
+		engine.set_particle(e, id, visible = false)
 		append(&s.strike_ids, id)
 	}
 	resize(&s.strike_pending, count)
@@ -473,10 +481,10 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	for index, i in work.order {
 		segment := work.segments[index]
 		id := s.strike_ids[i]
-		engine.set_character(e, id, coord = engine.coord(segment.column, segment.row))
+		engine.set_particle(e, id, coord = engine.coord(segment.column, segment.row))
 		engine.set_symbol(e, id, segment.symbol == 0 ? "\\" : segment.symbol == 1 ? "/" : "|")
 		engine.set_foreground(e, id, s.config.lightning_color)
-		engine.set_character(e, id, visible = false)
+		engine.set_particle(e, id, visible = false)
 		s.strike_pending[i] = id
 	}
 	s.strike_pending_head, s.strike_delay, s.strike_flash_age = 0, 0, -1
@@ -509,10 +517,10 @@ thunderstorm_spawn_sparks :: proc(
 			1,
 		)
 		id := s.spark_ids[slot]
-		engine.set_character(e, id, coord = impact)
+		engine.set_particle(e, id, coord = impact)
 		engine.set_symbol(e, id, s.config.spark_symbols[rand.int_max(len(s.config.spark_symbols))])
 		engine.set_foreground(e, id, s.config.spark_glow_color)
-		engine.set_character(e, id, visible = true)
+		engine.set_particle(e, id, visible = true)
 		append(&s.spark_active, slot)
 	}
 }
@@ -529,12 +537,12 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			if s.strike_pending_head == len(s.strike_pending) do break
 			id := s.strike_pending[s.strike_pending_head]
 			s.strike_pending_head += 1
-			engine.set_character(e, id, visible = true)
+			engine.set_particle(e, id, visible = true)
 		}
 		s.strike_delay = 1
 		if s.strike_pending_head != len(s.strike_pending) do return
 		s.strike_flash_age = 0
-		impact := e.chars.current_coord[s.strike_pending[len(s.strike_pending) - 1]]
+		impact := e.particles.current_coord[s.strike_pending[len(s.strike_pending) - 1]]
 		thunderstorm_spawn_sparks(s, e, impact)
 		return
 	}
@@ -565,8 +573,8 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		}
 	} else {
 		for id in s.strike_pending {
-			engine.set_character(e, id, visible = false)
-			p := e.chars.current_coord[id]
+			engine.set_particle(e, id, visible = false)
+			p := e.particles.current_coord[id]
 			if !engine.canvas_in(e.canvas, p) do continue
 			input_id := s.input_at_cell[thunderstorm_cell_index(e.canvas, p)]
 			if input_id >= 0 {
@@ -593,11 +601,11 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		age := s.tick - s.rain_starts[slot]
 		id := s.rain_ids[slot]
 		if age >= s.rain_steps[slot] {
-			engine.set_character(e, id, visible = false)
+			engine.set_particle(e, id, visible = false)
 			append(&s.rain_free, slot)
 			continue
 		}
-		engine.set_character(
+		engine.set_particle(
 			e,
 			id,
 			coord = engine.coord_on_line(
@@ -624,7 +632,7 @@ thunderstorm_update_sparks :: proc(
 		age := s.tick - s.spark_starts[slot]
 		id := s.spark_ids[slot]
 		if age < s.spark_steps[slot] {
-			engine.set_character(
+			engine.set_particle(
 				e,
 				id,
 				coord = engine.coord_on_quadratic_bezier(
@@ -637,7 +645,7 @@ thunderstorm_update_sparks :: proc(
 		} else {
 			cool_step := (age - s.spark_steps[slot]) / s.config.spark_glow_time
 			if cool_step > 7 {
-				engine.set_character(e, id, visible = false)
+				engine.set_particle(e, id, visible = false)
 				s.spark_starts[slot] = -1
 				append(&s.spark_free, slot)
 				continue
@@ -678,7 +686,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	resize(&s.glow_active, write)
 }
 
-thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Char_Id {
+thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Particle_Id {
 	resize(&s.render_ids, len(s.characters))
 	for slot in s.rain_active do append(&s.render_ids, s.rain_ids[slot])
 	append(&s.render_ids, ..s.strike_pending[:s.strike_pending_head])
@@ -686,7 +694,13 @@ thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Char_
 	return s.render_ids[:]
 }
 
-thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+thunderstorm_next :: proc(
+	s: ^Thunderstorm_State,
+	e: ^engine.Engine,
+) -> (
+	[]engine.Particle_Id,
+	bool,
+) {
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
@@ -724,10 +738,10 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 		if engine.elapsed_seconds(e) - s.storm_started >= f64(s.config.storm_time) &&
 		   !s.strike_live {
 			for id in s.rain_ids {
-				engine.set_character(e, id, visible = false)
+				engine.set_particle(e, id, visible = false)
 			}
 			for id in s.spark_ids {
-				engine.set_character(e, id, visible = false)
+				engine.set_particle(e, id, visible = false)
 			}
 			clear(&s.rain_active)
 			clear(&s.spark_active)
@@ -759,7 +773,10 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> ([]engin
 			if s.color_handling == .Dynamic {
 				for id in s.characters {
 					visual := engine.get_visual(e, id)
-					engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+					engine.dynamic_apply_input_colors(
+						&visual,
+						engine.get_initial_visual(e, engine.Particle_Id(id)),
+					)
 					engine.set_visual(e, id, visual)
 				}
 			}

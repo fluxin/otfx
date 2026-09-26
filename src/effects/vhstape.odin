@@ -126,10 +126,10 @@ VHSTAPE_LANE_COORD_CAPACITY :: 50
 
 Vhstape_State :: struct {
 	config:                Vhstape_Config,
-	characters:            [dynamic]engine.Char_Id,
+	characters:            [dynamic]engine.Particle_Id,
 	index_by_id:           []int,
 	final_colors:          []engine.Color,
-	rows:                  engine.Char_Groups,
+	rows:                  engine.Particle_Groups,
 	row_offsets:           []int,
 	row_is_wave:           []u8,
 	row_is_glitch:         []u8,
@@ -146,7 +146,7 @@ Vhstape_State :: struct {
 	return_steps:          []int,
 	scenes:                []Vhstape_Scene,
 	scene_ticks:           []int,
-	active_characters:     [dynamic]engine.Char_Id,
+	active_characters:     [dynamic]engine.Particle_Id,
 	active_character_bits: []u8,
 	phase:                 Vhstape_Phase,
 	tick:                  int,
@@ -170,21 +170,29 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
 	n := len(s.characters)
-	storage_len := len(e.chars)
+	storage_len := len(e.particles)
 	s.index_by_id = make([]int, storage_len)
 	for i in 0 ..< storage_len do s.index_by_id[i] = -1
 	s.final_colors = make([]engine.Color, storage_len)
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 
-	visible := e.chars.is_visible
+	visible := e.particles.is_visible
 	for id, i in s.characters {
 		s.index_by_id[id] = i
-		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], input_coords[id])
+		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			engine.set_foreground(
 				e,
 				id,
@@ -196,7 +204,7 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 		}
 		visible[id] = true
 	}
-	s.rows = engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
+	s.rows = engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_B2T)
 	row_count := len(s.rows.spans)
 	s.row_offsets = make([]int, row_count)
 	s.row_is_wave = make([]u8, row_count)
@@ -244,10 +252,10 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.redraw_row = row_count - 1
 }
 
-vhstape_set_stable_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
-	engine.set_symbol(e, id, e.chars.input_symbol[id])
+vhstape_set_stable_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
+	engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 	if s.color_handling == .Dynamic {
-		style := e.chars.input_style[id]
+		style := engine.get_initial_visual(e, engine.Particle_Id(id))
 		engine.set_foreground(e, id, style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80})
 		engine.set_background(e, id, style.bg)
 	} else {
@@ -256,11 +264,14 @@ vhstape_set_stable_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engi
 	}
 }
 
-vhstape_set_final_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
-	engine.set_symbol(e, id, e.chars.input_symbol[id])
+vhstape_set_final_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
+	engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 	if s.color_handling == .Dynamic {
 		visual := engine.get_visual(e, id)
-		engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+		engine.dynamic_apply_input_colors(
+			&visual,
+			engine.get_initial_visual(e, engine.Particle_Id(id)),
+		)
 		engine.set_visual(e, id, visual)
 	} else {
 		engine.set_foreground(e, id, s.final_colors[id])
@@ -269,7 +280,7 @@ vhstape_set_final_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engin
 }
 
 
-vhstape_activate_character :: proc(s: ^Vhstape_State, id: engine.Char_Id) {
+vhstape_activate_character :: proc(s: ^Vhstape_State, id: engine.Particle_Id) {
 	if s.active_character_bits[id] != 0 do return
 	s.active_character_bits[id] = 1
 	append(&s.active_characters, id)
@@ -279,7 +290,7 @@ vhstape_noise_visual :: proc(
 	s: ^Vhstape_State,
 	frames: []Vhstape_Noise_Frame,
 	frame_count: int,
-	id: engine.Char_Id,
+	id: engine.Particle_Id,
 	frame: int,
 ) -> engine.Visual {
 	i := s.index_by_id[id]
@@ -291,11 +302,11 @@ vhstape_noise_visual :: proc(
 vhstape_start_scene :: proc(
 	s: ^Vhstape_State,
 	e: ^engine.Engine,
-	id: engine.Char_Id,
+	id: engine.Particle_Id,
 	scene: Vhstape_Scene,
 ) {
 	s.scenes[id] = scene
-	symbol := e.chars.input_symbol[id]
+	symbol := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 	switch scene {
 	case .Forward:
 		engine.set_visual(
@@ -347,7 +358,7 @@ vhstape_start_scene :: proc(
 vhstape_start_motion :: proc(
 	s: ^Vhstape_State,
 	e: ^engine.Engine,
-	id: engine.Char_Id,
+	id: engine.Particle_Id,
 	kind: Vhstape_Motion,
 	target: engine.Coord,
 	max_steps, hold: int,
@@ -360,7 +371,7 @@ vhstape_start_motion :: proc(
 	base := int(id) * VHSTAPE_LANE_COORD_CAPACITY
 	for frame in 1 ..= max_steps {
 		s.motion_coords[base + frame - 1] = engine.coord_on_line(
-			e.chars.current_coord[id],
+			e.particles.current_coord[id],
 			target,
 			f64(frame) / f64(max_steps),
 		)
@@ -378,17 +389,17 @@ vhstape_steps :: proc(origin, target: engine.Coord, denominator: int) -> int {
 vhstape_start_restore :: proc(
 	s: ^Vhstape_State,
 	e: ^engine.Engine,
-	id: engine.Char_Id,
+	id: engine.Particle_Id,
 	steps: int,
 ) {
-	vhstape_start_motion(s, e, id, .Restore, e.chars.input_coord[id], steps, 0)
+	vhstape_start_motion(s, e, id, .Restore, e.particles.initial_coord[id], steps, 0)
 }
 
 vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 	for id in engine.group_members(s.rows, row) {
 		steps := vhstape_steps(
-			e.chars.current_coord[id],
-			e.chars.input_coord[id],
+			e.particles.current_coord[id],
+			e.particles.initial_coord[id],
 			rand.int_range(20, 41),
 		)
 		vhstape_start_restore(s, e, id, steps)
@@ -397,9 +408,9 @@ vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 
 vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold: int) {
 	for id in engine.group_members(s.rows, row) {
-		p := e.chars.input_coord[id]
+		p := e.particles.initial_coord[id]
 		target := engine.coord(p.column + s.row_offsets[row], p.row)
-		out_steps := vhstape_steps(e.chars.current_coord[id], target, rand.int_range(20, 41))
+		out_steps := vhstape_steps(e.particles.current_coord[id], target, rand.int_range(20, 41))
 		s.return_steps[id] = vhstape_steps(target, p, rand.int_range(20, 41))
 		vhstape_start_motion(s, e, id, .Glitch, target, out_steps, hold)
 	}
@@ -407,7 +418,7 @@ vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold
 
 vhstape_start_wave_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, offset: int) {
 	for id in engine.group_members(s.rows, row) {
-		p := e.chars.input_coord[id]
+		p := e.particles.initial_coord[id]
 		target := engine.coord(p.column + offset, p.row)
 		vhstape_start_motion(
 			s,
@@ -415,7 +426,7 @@ vhstape_start_wave_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, offset
 			id,
 			.Wave,
 			target,
-			vhstape_steps(e.chars.current_coord[id], target, 20),
+			vhstape_steps(e.particles.current_coord[id], target, 20),
 			0,
 		)
 	}
@@ -485,12 +496,12 @@ vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine
 	for row, i in s.active_wave_rows do vhstape_start_wave_row(s, e, row, offsets[i])
 }
 
-vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
+vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
 	kind := s.motions[id]
 	if kind == .Idle do return
 	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
 	if frame < frame_count {
-		engine.set_character(
+		engine.set_particle(
 			e,
 			id,
 			coord = s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame],
@@ -521,10 +532,10 @@ vhstape_synced_color :: proc(
 	return palette[i]
 }
 
-vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Char_Id) {
+vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
 	scene := s.scenes[id]
 	if scene == .Idle do return
-	symbol := e.chars.input_symbol[id]
+	symbol := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 	switch scene {
 	case .Forward:
 		if s.motions[id] == .Idle {
@@ -649,7 +660,7 @@ vhstape_start_redraw_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int)
 	}
 }
 
-vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.phase == .Complete && len(s.active_characters) == 0 do return nil, false
 	switch s.phase {
 	case .Glitching:

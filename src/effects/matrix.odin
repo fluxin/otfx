@@ -177,14 +177,14 @@ Matrix_Column_Queue :: struct {
 Matrix_State :: struct {
 	config:               Matrix_Config,
 	columns:              [dynamic]Matrix_Rain_Column,
-	column_characters:    [dynamic]engine.Char_Id,
-	visible_characters:   [dynamic]engine.Char_Id,
+	column_characters:    [dynamic]engine.Particle_Id,
+	visible_characters:   [dynamic]engine.Particle_Id,
 	pending_columns:      Matrix_Column_Queue,
 	active_columns:       [dynamic]int,
 	full_columns:         [dynamic]int,
 	resolve_final_colors: []engine.Color,
 	resolve_ticks:        []int,
-	resolve_active:       [dynamic]engine.Char_Id,
+	resolve_active:       [dynamic]engine.Particle_Id,
 	resolve_active_ids:   []u8,
 	rain_colors:          [dynamic]engine.Color,
 	column_delay:         int,
@@ -197,9 +197,9 @@ Matrix_State :: struct {
 }
 
 matrix_column_visible :: proc(
-	visible_characters: []engine.Char_Id,
+	visible_characters: []engine.Particle_Id,
 	c: Matrix_Rain_Column,
-) -> []engine.Char_Id {
+) -> []engine.Particle_Id {
 	start := c.characters.start + c.visible_head
 	return visible_characters[start:start + c.visible_count]
 }
@@ -224,7 +224,7 @@ matrix_pending_column_pop :: proc(queue: ^Matrix_Column_Queue) -> int {
 matrix_setup_column :: proc(
 	e: ^engine.Engine,
 	c: ^Matrix_Rain_Column,
-	characters: []engine.Char_Id,
+	characters: []engine.Particle_Id,
 	fall_delay_range: Int_Range_Value,
 	phase: Matrix_Column_Phase,
 ) {
@@ -234,7 +234,7 @@ matrix_setup_column :: proc(
 	c.full = false
 	c.phase = phase
 	for id in characters {
-		engine.set_character(e, id, visible = false, coord = e.chars.input_coord[id])
+		engine.set_particle(e, id, visible = false, coord = e.particles.initial_coord[id])
 	}
 	if phase == .Fill {
 		c.base_delay = rand.int_range(
@@ -258,7 +258,7 @@ matrix_setup_column :: proc(
 
 matrix_trim :: proc(
 	c: ^Matrix_Rain_Column,
-	visible_characters: []engine.Char_Id,
+	visible_characters: []engine.Particle_Id,
 	rain_colors: []engine.Color,
 	e: ^engine.Engine,
 ) {
@@ -267,7 +267,7 @@ matrix_trim :: proc(
 	popped := visible_characters[c.characters.start + c.visible_head]
 	c.visible_head += 1
 	c.visible_count -= 1
-	engine.set_character(e, popped, visible = false)
+	engine.set_particle(e, popped, visible = false)
 	if c.visible_count > 1 {
 		// fade the new head to a darker tail color
 		tail := rain_colors[max(len(rain_colors) - 3, 0):]
@@ -284,17 +284,17 @@ matrix_trim :: proc(
 matrix_drop_column :: proc(
 	e: ^engine.Engine,
 	c: ^Matrix_Rain_Column,
-	visible_characters: []engine.Char_Id,
+	visible_characters: []engine.Particle_Id,
 	canvas_bottom: int,
 ) {
 	visible := matrix_column_visible(visible_characters, c^)
 	write := 0
 	for id in visible {
-		p := e.chars.current_coord[id]
+		p := e.particles.current_coord[id]
 		p.row -= 1
-		engine.set_character(e, id, coord = p)
+		engine.set_particle(e, id, coord = p)
 		if p.row < canvas_bottom {
-			engine.set_character(e, id, visible = false)
+			engine.set_particle(e, id, visible = false)
 		} else {
 			visible[write] = id
 			write += 1
@@ -305,8 +305,8 @@ matrix_drop_column :: proc(
 
 matrix_tick_column :: proc(
 	c: ^Matrix_Rain_Column,
-	characters: []engine.Char_Id,
-	visible_characters: []engine.Char_Id,
+	characters: []engine.Particle_Id,
+	visible_characters: []engine.Particle_Id,
 	rain_symbols: []string,
 	rain_colors: []engine.Color,
 	highlight_color: engine.Color,
@@ -334,7 +334,7 @@ matrix_tick_column :: proc(
 					engine.Visual{symbol = engine.get_visual(e, prev).symbol, fg = col},
 				)
 			}
-			engine.set_character(e, next, visible = true)
+			engine.set_particle(e, next, visible = true)
 			visible_characters[c.characters.start + c.visible_head + c.visible_count] = next
 			c.visible_count += 1
 		} else if c.visible_count > 0 {
@@ -403,26 +403,34 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	characters := engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	characters := engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(characters[:])
-	s.resolve_final_colors = make([]engine.Color, len(e.chars))
+	s.resolve_final_colors = make([]engine.Color, len(e.particles))
 	s.color_handling = e.cfg.existing_color_handling
-	s.resolve_ticks = make([]int, len(e.chars))
-	s.resolve_active_ids = make([]u8, len(e.chars))
+	s.resolve_ticks = make([]int, len(e.particles))
+	s.resolve_active_ids = make([]u8, len(e.particles))
 
 	for id in characters {
-		c := e.chars.input_coord[id]
+		c := e.particles.initial_coord[id]
 		final := engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		s.resolve_final_colors[id] = final
 	}
 
-	col_groups := engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	col_groups := engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Column_L2R,
 	)
 	reserve(&s.columns, len(col_groups.spans))
@@ -443,7 +451,7 @@ matrix_build :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		append(&s.columns, column)
 	}
 	engine.groups_delete(&col_groups)
-	s.visible_characters = make([dynamic]engine.Char_Id, len(s.column_characters))
+	s.visible_characters = make([dynamic]engine.Particle_Id, len(s.column_characters))
 	s.pending_columns.items = make([dynamic]int, len(s.columns))
 	for ci in 0 ..< len(s.columns) do s.pending_columns.items[ci] = ci
 	s.pending_columns.count = len(s.pending_columns.items)
@@ -460,13 +468,13 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	for id in s.resolve_active {
 		tick := s.resolve_ticks[id]
 		step := min(tick / s.config.final_gradient_frames, 8)
-		engine.set_symbol(e, id, e.chars.input_symbol[id])
+		engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 		if s.color_handling == .Dynamic {
 			visual := engine.get_visual(e, id)
 			engine.dynamic_gradient_to_input(
 				&visual,
 				s.config.highlight_color,
-				e.chars.input_style[id],
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
 				8,
 				step,
 			)
@@ -486,8 +494,8 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		tick += 1
 		limit := 9 * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic &&
-		   e.chars.input_style[id].fg == nil &&
-		   e.chars.input_style[id].bg == nil {
+		   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil &&
+		   engine.get_initial_visual(e, engine.Particle_Id(id)).bg == nil {
 			limit = s.config.final_gradient_frames
 		}
 		if tick == limit {
@@ -501,13 +509,12 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	resize(&s.resolve_active, write)
 }
 
-matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	column_characters := s.column_characters[:]
 	visible_characters := s.visible_characters[:]
 	columns := s.columns[:]
 	rain_symbols := s.config.rain_symbols[:]
 	rain_colors := s.rain_colors[:]
-	input_symbols := e.chars.input_symbol
 	canvas_bottom := e.canvas.bottom
 	if s.phase == .Rain || s.phase == .Fill {
 		if s.column_delay == 0 {
@@ -630,9 +637,9 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 						next := visible[idx]
 						visible[idx] = visible[len(visible) - 1]
 						column.visible_count -= 1
-						if input_symbols[next] != " " ||
-						   e.chars.input_style[next].fg != nil ||
-						   e.chars.input_style[next].bg != nil {
+						if engine.get_initial_visual(e, engine.Particle_Id(next)).symbol != " " ||
+						   engine.get_initial_visual(e, engine.Particle_Id(next)).fg != nil ||
+						   engine.get_initial_visual(e, engine.Particle_Id(next)).bg != nil {
 							if s.resolve_active_ids[next] == 0 {
 								s.resolve_active_ids[next] = 1
 								s.resolve_ticks[next] = 0
@@ -640,14 +647,14 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Char_Id, b
 									e,
 									next,
 									engine.Visual {
-										symbol = input_symbols[next],
+										symbol = engine.get_initial_visual(e, engine.Particle_Id(next)).symbol,
 										fg = s.config.highlight_color,
 									},
 								)
 								append(&s.resolve_active, next)
 							}
 						} else {
-							engine.set_character(e, next, visible = false)
+							engine.set_particle(e, next, visible = false)
 						}
 					}
 					s.resolve_delay = s.config.resolve_delay

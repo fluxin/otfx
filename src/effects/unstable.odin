@@ -78,7 +78,7 @@ Unstable_Phase :: enum {
 // and color ramps directly from these dense columns.
 Unstable_State :: struct {
 	config:               Unstable_Config,
-	characters:           [dynamic]engine.Char_Id,
+	characters:           [dynamic]engine.Particle_Id,
 	jumbled_coords:       [dynamic]engine.Coord,
 	explosion_targets:    [dynamic]engine.Coord,
 	final_colors:         [dynamic]engine.Color,
@@ -107,9 +107,13 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
@@ -123,11 +127,11 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 	// This is a bounded temporary permutation of input locations. Its order has
 	// no semantic meaning, so unordered removal keeps the shuffle O(n).
 	available := make([dynamic]engine.Coord, n, context.temp_allocator)
-	input_coords := e.chars.input_coord
-	for id, i in s.characters do available[i] = input_coords[id]
+	initial_coords := e.particles.initial_coord
+	for id, i in s.characters do available[i] = initial_coords[id]
 
-	current_coords := e.chars.current_coord
-	visible := e.chars.is_visible
+	current_coords := e.particles.current_coord
+	visible := e.particles.is_visible
 
 	for id, i in s.characters {
 		edge := rand.int_max(4)
@@ -146,7 +150,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		jumbled := available[coord_index]
 		unordered_remove(&available, coord_index)
 
-		final_color := engine.gradient_sample(sampler, spectrum[:], input_coords[id])
+		final_color := engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		s.jumbled_coords[i] = jumbled
 		s.explosion_targets[i] = target
 		s.final_colors[i] = final_color
@@ -158,7 +162,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		)
 		s.reassembly_steps[i] = max(
 			engine.round_half_even(
-				engine.line_length(target, input_coords[id], true) / s.config.reassembly_speed,
+				engine.line_length(target, initial_coords[id], true) / s.config.reassembly_speed,
 			),
 			1,
 		)
@@ -166,7 +170,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		s.reassembly_max_steps = max(s.reassembly_max_steps, s.reassembly_steps[i])
 		current_coords[id] = jumbled
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			engine.set_foreground(
 				e,
 				id,
@@ -182,8 +186,8 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 	s.rumble_delay = 18
 }
 
-unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
-	input_coords := e.chars.input_coord
+unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+	initial_coords := e.particles.initial_coord
 
 	for {
 		switch s.phase {
@@ -204,7 +208,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 			for id, i in s.characters {
 				visual := engine.get_visual(e, id)
 				if s.color_handling == .Dynamic {
-					style := e.chars.input_style[id]
+					style := engine.get_initial_visual(e, engine.Particle_Id(id))
 					start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
 					visual.fg = engine.gradient_between_step(
 						start,
@@ -231,7 +235,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 					)
 				}
 				p := s.jumbled_coords[i]
-				engine.set_character(
+				engine.set_particle(
 					e,
 					id,
 					coord = engine.coord(p.column + column_offset, p.row + row_offset),
@@ -258,7 +262,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 					s.explosion_targets[i],
 					ease.ease(s.config.explosion_ease, progress),
 				)
-				engine.set_character(e, id, coord = position)
+				engine.set_particle(e, id, coord = position)
 			}
 			s.phase_tick += 1
 			return nil, true
@@ -278,7 +282,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 			final_ticks := max(s.reassembly_max_steps, 39)
 			if s.color_handling == .Dynamic {
 				for id in s.characters {
-					if e.chars.input_style[id].fg == nil {
+					if engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil {
 						final_ticks = max(final_ticks, 42)
 						break
 					}
@@ -292,11 +296,11 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 				progress := f64(min(s.phase_tick + 1, steps)) / f64(steps)
 				position := engine.coord_on_line(
 					s.explosion_targets[i],
-					input_coords[id],
+					initial_coords[id],
 					ease.ease(s.config.reassembly_ease, progress),
 				)
 				if s.color_handling == .Dynamic {
-					style := e.chars.input_style[id]
+					style := engine.get_initial_visual(e, engine.Particle_Id(id))
 					if style.fg == nil && s.phase_tick >= 39 {
 						visual.fg = nil
 					} else if fg, ok := style.fg.?; ok {
@@ -332,7 +336,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Char_I
 						color_step,
 					)
 				}
-				engine.set_character(e, id, coord = position, visual = visual)
+				engine.set_particle(e, id, coord = position, visual = visual)
 			}
 			s.phase_tick += 1
 			return nil, true

@@ -69,7 +69,7 @@ smoke_parse :: proc(cfg: ^Smoke_Config, args: []string) -> bool {
 // through the final palette. There are no per-character scenes or graph maps.
 Smoke_State :: struct {
 	config:         Smoke_Config,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	arrivals:       [dynamic]int,
 	previous:       [dynamic]int,
 	changes:        [dynamic]engine.Sample_Change,
@@ -200,23 +200,27 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	s.smoke_palette = engine.sequence_expand(palette[:], entries)
 	s.smoke_symbols = engine.sequence_expand(s.config.smoke_symbols[:], entries)
 
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
 	// Smoke always needs the text rectangle, including its spaces. The
 	// whole-canvas option expands that population with outer fill cells.
-	filter := engine.Character_Filter{.Input, .Inner_Fill}
+	filter := engine.Particle_Filter{.Input, .Inner_Fill}
 	if s.config.use_whole_canvas do filter += {.Outer_Fill}
-	s.characters = engine.get_characters(query, filter, .Top_Bottom_Left_Right)
+	s.characters = engine.get_particles(query, filter, .Top_Bottom_Left_Right)
 	n := len(s.characters)
 	s.arrivals = make([dynamic]int, n)
 	s.final_colors = make([dynamic]engine.Color, n)
 
 	width := s.config.use_whole_canvas ? e.canvas.width : e.canvas.text_width
 	smoke_arrivals(s.arrivals[:], width)
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 
-	visible := e.chars.is_visible
+	visible := e.particles.is_visible
 	for id, i in s.characters {
-		p := input_coords[id]
+		p := initial_coords[id]
 		s.last_tick = max(s.last_tick, s.arrivals[i])
 		s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
 		if s.color_handling == .Dynamic {
@@ -249,7 +253,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 		s.last_tick += len(s.smoke_palette) * 3 + paint_entries * 5
 	}
 	// Store one shared clock across smoke and paint, including their different
-	// hold durations. Character-specific colors are computed only on changes.
+	// hold durations. Particle-specific colors are computed only on changes.
 	s.previous = make([dynamic]int, n)
 	s.changes = make([dynamic]engine.Sample_Change, n)
 	for &sample in s.previous do sample = -1
@@ -276,7 +280,7 @@ smoke_paint_color :: proc(
 	return engine.gradient_between_step(start, finish, 5, step)
 }
 
-smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.tick == s.last_tick do return nil, false
 	smoke_count :=
 		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
@@ -294,17 +298,23 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			if s.color_handling == .Dynamic {
 				engine.set_symbol(e, id, s.config.smoke_symbols[sample])
 				visual := engine.get_visual(e, id)
-				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.dynamic_apply_input_colors(
+					&visual,
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
+				)
 				engine.set_visual(e, id, visual)
 			} else {
 				engine.set_symbol(e, id, s.smoke_symbols[sample])
 				engine.set_foreground(e, id, s.smoke_palette[sample])
 			}
 		} else {
-			engine.set_symbol(e, id, e.chars.input_symbol[id])
+			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 			if s.color_handling == .Dynamic {
 				visual := engine.get_visual(e, id)
-				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.dynamic_apply_input_colors(
+					&visual,
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
+				)
 				engine.set_visual(e, id, visual)
 			} else {
 				paint_entry := sample - smoke_count

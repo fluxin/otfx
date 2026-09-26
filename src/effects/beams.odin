@@ -118,7 +118,7 @@ Beams_Phase :: enum {
 
 Beams_State :: struct {
 	config:            Beams_Config,
-	characters:        [dynamic]engine.Char_Id,
+	characters:        [dynamic]engine.Particle_Id,
 	final_colors:      [dynamic]engine.Color,
 	faded_colors:      [dynamic]engine.Color,
 	beam_start_ticks:  [dynamic]int,
@@ -127,12 +127,12 @@ Beams_State :: struct {
 	beam_palette:      [dynamic]engine.Color,
 	row_symbols:       [dynamic]string,
 	column_symbols:    [dynamic]string,
-	group_chars:       [dynamic]engine.Char_Id,
+	group_chars:       [dynamic]engine.Particle_Id,
 	groups:            [dynamic]Beam_Group,
 	pending:           [dynamic]int, // group handles
 	pending_head:      int,
 	active:            [dynamic]int,
-	final_wipe_groups: engine.Char_Groups,
+	final_wipe_groups: engine.Particle_Groups,
 	final_wipe_idx:    int,
 	delay:             int,
 	tick:              int,
@@ -170,13 +170,13 @@ beams_expand_symbols :: proc(symbols: []string, count: int) -> [dynamic]string {
 }
 
 beams_make_group :: proc(
-	group_chars: ^[dynamic]engine.Char_Id,
-	g: []engine.Char_Id,
+	group_chars: ^[dynamic]engine.Particle_Id,
+	g: []engine.Particle_Id,
 	direction: Beam_Direction,
 	rng: Int_Range_Value,
 ) -> Beam_Group {
 	speed := f64(rand.int_range(rng.lo, rng.hi + 1)) * 0.1
-	// get_characters_grouped already orders row groups by column and column
+	// get_particles_grouped already orders row groups by column and column
 	// groups by row. Consume that producer contract instead of sorting again.
 	if rand.int_max(2) == 0 do slice.reverse(g)
 	span := engine.Span {
@@ -188,9 +188,13 @@ beams_make_group :: proc(
 }
 
 beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
-	s.final_wipe_groups = engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	s.final_wipe_groups = engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Diagonal_TL2BR,
 	)
 
@@ -214,9 +218,13 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	)
 	defer delete(beam_spectrum[:])
 
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
 	s.color_handling = e.cfg.existing_color_handling
@@ -231,20 +239,24 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 
 	black := engine.Color{0x00, 0x00, 0x00}
 	for id in s.characters {
-		if e.chars.is_fill[id] {
+		if e.particles.is_fill[id] {
 			s.final_colors[id] = black
 			s.faded_colors[id] = black
 			continue
 		}
-		c := e.chars.input_coord[id]
+		c := e.particles.initial_coord[id]
 		s.final_colors[id] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		s.faded_colors[id] = engine.adjust_color_brightness(s.final_colors[id], 0.3)
 	}
 
 	// scenes on the row pass only (rows and columns share characters)
-	row_groups := engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	row_groups := engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Row_B2T,
 	)
 	for gi in 0 ..< len(row_groups.spans) {
@@ -252,9 +264,13 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 		append(&s.groups, beams_make_group(&s.group_chars, g, .Row, s.config.beam_row_speed_range))
 	}
 	engine.groups_delete(&row_groups)
-	col_groups := engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	col_groups := engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Column_L2R,
 	)
 	for gi in 0 ..< len(col_groups.spans) {
@@ -282,7 +298,7 @@ beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Grou
 	group.head += 1
 	s.beam_start_ticks[next] = s.tick
 	s.beam_modes[next] = group.direction
-	engine.set_character(e, next, visible = true)
+	engine.set_particle(e, next, visible = true)
 }
 
 beams_beam_active :: proc(s: Beams_State) -> bool {
@@ -316,13 +332,17 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 					engine.set_symbol(e, id, symbols[palette_index])
 					engine.set_foreground(e, id, s.beam_palette[palette_index])
 				} else {
-					engine.set_symbol(e, id, e.chars.input_symbol[id])
+					engine.set_symbol(
+						e,
+						id,
+						engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+					)
 					step := min(
 						(age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2,
 						10,
 					)
-					if s.color_handling == .Dynamic && !e.chars.is_fill[id] {
-						style := e.chars.input_style[id]
+					if s.color_handling == .Dynamic && !e.particles.is_fill[id] {
+						style := engine.get_initial_visual(e, engine.Particle_Id(id))
 						if fg, ok := style.fg.?; ok {
 							engine.set_foreground(
 								e,
@@ -371,10 +391,14 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 		if wipe_start >= 0 {
 			age := s.tick - wipe_start
 			if age < 11 * s.config.final_gradient_frames {
-				engine.set_symbol(e, id, e.chars.input_symbol[id])
+				engine.set_symbol(
+					e,
+					id,
+					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				)
 				step := min(age / s.config.final_gradient_frames, 10)
-				if s.color_handling == .Dynamic && !e.chars.is_fill[id] {
-					style := e.chars.input_style[id]
+				if s.color_handling == .Dynamic && !e.particles.is_fill[id] {
+					style := engine.get_initial_visual(e, engine.Particle_Id(id))
 					if fg, ok := style.fg.?; ok {
 						engine.set_foreground(
 							e,
@@ -420,7 +444,7 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 	}
 }
 
-beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.phase == .Complete && !beams_wipe_active(s^) {
 		return nil, false
 	}
@@ -471,7 +495,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 				s.final_wipe_idx += 1
 				for id in g {
 					s.wipe_start_ticks[id] = s.tick
-					engine.set_character(e, id, visible = true)
+					engine.set_particle(e, id, visible = true)
 				}
 			}
 		} else {

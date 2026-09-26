@@ -86,10 +86,10 @@ colorshift_parse :: proc(cfg: ^Colorshift_Config, args: []string) -> bool {
 Colorshift_State :: struct {
 	config:            Colorshift_Config,
 	gradient:          [dynamic]engine.Color, // one shared palette
-	shifts:            [dynamic]int, // indexed like character_sets.input
-	final_colors:      [dynamic]engine.Color, // indexed like character_sets.input
-	symbol_codes:      [dynamic]engine.Visual_Code_Id, // [distinct input symbol][gradient index]
-	symbol_index:      [dynamic]int, // Char_Id -> distinct symbol row
+	shifts:            [dynamic]int, // indexed like particle_sets.input
+	final_colors:      [dynamic]engine.Color, // indexed like particle_sets.input
+	symbol_codes:      [dynamic]engine.Visual_Id, // [distinct input symbol][gradient index]
+	symbol_index:      [dynamic]int, // Particle_Id -> distinct symbol row
 	tick:              int,
 	palette_index:     int,
 	palette_tick:      int,
@@ -118,19 +118,19 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		!s.config.no_loop,
 	)
 	assert(s.config.gradient_frames >= 1)
-	ids := e.character_sets.input[:]
+	ids := e.particle_sets.input[:]
 	s.color_handling = e.cfg.existing_color_handling
 	s.shifts = make([dynamic]int, len(ids))
 	if s.config.cycles != 0 && !s.config.skip_final_gradient {
 		s.final_colors = make([dynamic]engine.Color, len(ids))
 	}
-	input_coords := e.chars.input_coord
-	visible := e.chars.is_visible
+	initial_coords := e.particles.initial_coord
+	visible := e.particles.is_visible
 
 	n := len(s.gradient)
 
 	for id, i in ids {
-		c := input_coords[id]
+		c := initial_coords[id]
 		visible[id] = true
 
 		// A rotation is two contiguous slices of the shared gradient. Keep the
@@ -166,7 +166,8 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 			s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		}
 		if s.color_handling == .Dynamic &&
-		   (e.chars.input_style[id].fg != nil || e.chars.input_style[id].bg != nil) {
+		   (engine.get_initial_visual(e, engine.Particle_Id(id)).fg != nil ||
+				   engine.get_initial_visual(e, engine.Particle_Id(id)).bg != nil) {
 			s.dynamic_has_color = true
 		}
 	}
@@ -176,11 +177,11 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	// ids instead of rebuilding SGR bytes for every cell.
 	symbols: [dynamic]string
 	defer delete(symbols)
-	s.symbol_index = make([dynamic]int, len(e.chars))
+	s.symbol_index = make([dynamic]int, len(e.particles))
 	rows := make(map[string]int)
 	defer delete(rows)
 	for id in ids {
-		sym := e.chars.input_symbol[id]
+		sym := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 		row, ok := rows[sym]
 		if !ok {
 			row = len(symbols)
@@ -200,15 +201,15 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	}
 }
 
-colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
-	ids := e.character_sets.input[:]
+colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+	ids := e.particle_sets.input[:]
 	n := len(s.gradient)
 	frames := s.config.gradient_frames
 	cycle_ticks := s.config.cycles * n * frames
 	if s.config.cycles == 0 || s.tick < cycle_ticks {
 		for base := 0; base < len(ids); base += 8 {
 			count := min(8, len(ids) - base)
-			codes: [8]engine.Visual_Code_Id
+			codes: [8]engine.Visual_Id
 			for lane in 0 ..< count {
 				i := base + lane
 				id := ids[i]
@@ -217,7 +218,7 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Ch
 				if index >= n do index -= n
 				codes[lane] = s.symbol_codes[row * n + index]
 			}
-			engine.set_visual_codes(e, ids[base:base + count], codes[:count])
+			engine.set_visuals(e, ids[base:base + count], codes[:count])
 		}
 		s.palette_tick += 1
 		if s.palette_tick == frames {
@@ -234,7 +235,7 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Ch
 		if transition_step > transition_steps do return nil, false
 		for id, i in ids {
 			visual := engine.Visual {
-				symbol = e.chars.input_symbol[id],
+				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
 			}
 			start_index := s.shifts[i] - 1
 			if start_index < 0 do start_index += n
@@ -243,7 +244,7 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Ch
 				engine.dynamic_gradient_to_input(
 					&visual,
 					start,
-					e.chars.input_style[id],
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
 					transition_steps,
 					transition_step,
 				)

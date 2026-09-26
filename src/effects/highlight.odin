@@ -9,7 +9,7 @@ import "core:math/ease"
 
 Highlight_Config :: struct {
 	highlight_brightness:     f64,
-	highlight_direction:      engine.Character_Group,
+	highlight_direction:      engine.Particle_Group,
 	highlight_width:          int,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
@@ -62,7 +62,7 @@ highlight_parse :: proc(cfg: ^Highlight_Config, args: []string) -> bool {
 Highlight_State :: struct {
 	config:         Highlight_Config,
 	reveal:         engine.Group_Reveal,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
 	palette:        [dynamic]engine.Color,
 	start_ticks:    [dynamic]int,
@@ -73,9 +73,13 @@ Highlight_State :: struct {
 }
 
 highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
-	groups := engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	groups := engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		s.config.highlight_direction,
 	)
 	s.reveal = engine.Group_Reveal {
@@ -98,22 +102,26 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	s.color_handling = e.cfg.existing_color_handling
 	reserve(&s.active_slots, len(s.characters))
-	s.index_by_id = make([dynamic]int, len(e.chars))
-	s.start_ticks = make([dynamic]int, len(e.chars))
+	s.index_by_id = make([dynamic]int, len(e.particles))
+	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	for id, i in s.characters {
 		s.index_by_id[id] = i
-		c := e.chars.input_coord[id]
+		c := e.particles.initial_coord[id]
 		base := engine.gradient_sample(sampler, spectrum[:], c)
 		if s.color_handling == .Dynamic {
-			if fg, ok := e.chars.input_style[id].fg.?; ok do base = fg
+			if fg, ok := engine.get_initial_visual(e, engine.Particle_Id(id)).fg.?; ok do base = fg
 		}
 		// base -> bright -> bright -> base with widths 3/width/3
 		bright := engine.adjust_color_brightness(base, s.config.highlight_brightness)
@@ -129,16 +137,16 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 			e,
 			id,
 			engine.Visual {
-				symbol = e.chars.input_symbol[id],
-				fg = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : base,
-				bg = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
+				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				fg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).fg : base,
+				bg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).bg : nil,
 			},
 		)
-		e.chars.is_visible[id] = true
+		e.particles.is_visible[id] = true
 	}
 }
 
-highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if len(s.active_slots) == 0 && engine.group_reveal_complete(s.reveal) {
 		return nil, false
 	}
@@ -155,10 +163,10 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Char
 		age := s.tick - s.start_ticks[slot]
 		id := s.characters[slot]
 		limit := s.palette_len * 2
-		if s.color_handling == .Dynamic && e.chars.input_style[id].fg == nil do limit = 2
+		if s.color_handling == .Dynamic && engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil do limit = 2
 		if age >= limit do continue
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			if style.fg != nil {
 				engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
 			}

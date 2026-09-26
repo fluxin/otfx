@@ -75,10 +75,18 @@ otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 	if frames == Max_Frames do return frames, false
 	// Inspect the last rendered grid, including painter collisions.
 	e := &run.engine_state
-	for id in e.character_sets.input {
-		p := e.chars.input_coord[id]
-		cell := e.render_cells[(p.row - 1) * e.layout.visible_right + p.column - 1]
-		if cell < 0 || engine.get_visual(e, engine.Char_Id(cell)).symbol != e.chars.input_symbol[id] do return frames, false
+	for id in e.particle_sets.input {
+		p := e.particles.initial_coord[id]
+		wanted := (e.layout.visible_top - p.row) * e.layout.visible_right + p.column - 1
+		found := false
+		for draw in e.draws {
+			if draw.cell != wanted do continue
+			found =
+				engine.get_visual(e, draw.particle).symbol ==
+				engine.get_initial_visual(e, id).symbol
+			break
+		}
+		if !found do return frames, false
 	}
 	return frames, true
 }

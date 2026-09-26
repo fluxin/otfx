@@ -7,7 +7,7 @@ import "core:mem"
 import "core:testing"
 
 @(test)
-character_batch_crosses_dirty_words_without_allocating :: proc(t: ^testing.T) {
+particle_batch_creates_reserved_population_without_allocating :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -20,29 +20,29 @@ character_batch_crosses_dirty_words_without_allocating :: proc(t: ^testing.T) {
 	cfg.ignore_terminal_dimensions = true
 	e, err := engine.engine_make("A", cfg, context.allocator)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	first := len(e.chars)
-	batch := engine.character_batch(&e, 130)
+	first := len(e.particles)
+	batch := engine.particle_batch(&e, 130)
 	allocations := track.total_allocation_count
 	for i in 0 ..< 130 {
-		id := engine.add_character(&batch, "B", engine.coord(1, 1))
+		id := engine.add_particle(&batch, "B", engine.coord(1, 1))
 		testing.expect_value(t, int(id), first + i)
-		engine.set_character(&e, id, visible = true)
+		engine.set_particle(&e, id, visible = true)
 	}
 	testing.expect_value(t, track.total_allocation_count, allocations)
-	// The last added character wins, including across multiple dirty words.
-	engine.set_symbol(&e, engine.Char_Id(len(e.chars) - 1), "Z")
-	engine.frame_build_all(&e)
+	// The last added particle wins at equal layer priority.
+	engine.set_symbol(&e, engine.Particle_Id(len(e.particles) - 1), "Z")
+	engine.frame_build(&e)
 	testing.expect_value(
 		t,
-		engine.get_emitted_visual(&e, engine.Char_Id(len(e.chars) - 1)).symbol,
+		engine.get_render_visual(&e, engine.Particle_Id(len(e.particles) - 1)).symbol,
 		"Z",
 	)
 	// Ordinary creation remains valid after the batch is consumed.
-	id := engine.add_character(&e, "C", engine.coord(1, 1))
+	id := engine.add_particle(&e, "C", engine.coord(1, 1))
 	testing.expect_value(t, int(id), first + 130)
-	engine.set_character(&e, id, visible = true)
-	engine.frame_build_all(&e)
-	testing.expect_value(t, engine.get_emitted_visual(&e, id).symbol, "C")
+	engine.set_particle(&e, id, visible = true)
+	engine.frame_build(&e)
+	testing.expect_value(t, engine.get_render_visual(&e, id).symbol, "C")
 }
 
 @(test)
@@ -65,23 +65,22 @@ rebuilt_output_storage_does_not_grow :: proc(t: ^testing.T) {
 			cfg.ignore_terminal_dimensions, cfg.no_color = true, no_color
 			e, err := engine.engine_make("A", cfg, context.allocator)
 			testing.expect(t, err == .None)
-			capacity := cap(e.out_buf)
+			capacity := cap(e.output_parts)
 			if index > 0 do testing.expect_value(t, capacity > previous_capacity, index < 3)
 			previous_capacity = capacity
 			allocations := track.total_allocation_count
 			// Full styled output, then sparse glyphs, erased cells, and skipped
 			// rows exercise both encoded cell size and relative cursor movement.
 			for pass in 0 ..< 5 {
-				for id in 0 ..< len(e.chars) {
-					engine.mark_character_dirty(&e, engine.Char_Id(id))
-					e.chars.is_visible[id] =
+				for id in 0 ..< len(e.particles) {
+					e.particles.is_visible[id] =
 						pass == 0 ||
 						(pass == 1 && id % 2 == 0) ||
-						(pass == 3 && e.chars.current_coord[id].row % 3 == 0) ||
-						(pass == 4 && id == len(e.chars) - 1)
+						(pass == 3 && e.particles.current_coord[id].row % 3 == 0) ||
+						(pass == 4 && id == len(e.particles) - 1)
 					engine.set_visual(
 						&e,
-						engine.Char_Id(id),
+						engine.Particle_Id(id),
 						engine.Visual {
 							symbol = "𐍈",
 							fg = engine.Color{255, 254, u8(pass)},
@@ -90,9 +89,9 @@ rebuilt_output_storage_does_not_grow :: proc(t: ^testing.T) {
 						},
 					)
 				}
-				engine.frame_build_all(&e)
+				engine.frame_build(&e)
 				testing.expect_value(t, track.total_allocation_count, allocations)
-				testing.expect_value(t, cap(e.out_buf), capacity)
+				testing.expect_value(t, cap(e.output_parts), capacity)
 			}
 		}
 	}
@@ -131,7 +130,7 @@ bounded_playback_reuses_build_storage :: proc(t: ^testing.T) {
 		for frames < 50_000 {
 			ids, alive := effects.next_frame(&fx, &e)
 			if !alive do break
-			if ids == nil {engine.frame_build_all(&e)} else {engine.frame_build_selected(&e, ids)}
+			if ids == nil {engine.frame_build(&e)} else {engine.frame_build(&e, ids)}
 			free_all(context.temp_allocator)
 			frames += 1
 		}

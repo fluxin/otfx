@@ -62,7 +62,7 @@ scattered_parse :: proc(cfg: ^Scattered_Config, args: []string) -> bool {
 
 Scattered_State :: struct {
 	config:         Scattered_Config,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	final_colors:   [dynamic]engine.Color,
 	origins:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
@@ -87,9 +87,13 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
@@ -98,34 +102,34 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.origins = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
 	for id, i in s.characters {
-		c := e.chars.input_coord[id]
+		c := e.particles.initial_coord[id]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
 
 		start :=
 			e.canvas.right < 2 || e.canvas.top < 2 ? engine.coord(1, 1) : engine.canvas_random_coord(e.canvas, false, false)
-		e.chars.current_coord[id] = start
+		e.particles.current_coord[id] = start
 		s.origins[i] = start
 		s.max_steps[i] = max(
 			engine.round_half_even(engine.line_length(start, c, true) / s.config.movement_speed),
 			1,
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
-		e.chars.layer[id] = 1
+		e.particles.layer[id] = 1
 		engine.set_visual(
 			e,
 			id,
 			engine.Visual {
-				symbol = e.chars.input_symbol[id],
-				fg = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : spectrum[0],
-				bg = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
+				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				fg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).fg : spectrum[0],
+				bg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).bg : nil,
 			},
 		)
-		e.chars.is_visible[id] = true
+		e.particles.is_visible[id] = true
 	}
 	s.initial_hold = 25
 }
 
-scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if s.tick == s.step_limit do return nil, false
 	if s.initial_hold > 0 {
 		s.initial_hold -= 1
@@ -136,18 +140,21 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char
 		// The arrival tick already published the final coordinate, color, and layer.
 		if s.tick >= steps do continue
 		progress := f64(min(s.tick + 1, steps)) / f64(steps)
-		engine.set_character(
+		engine.set_particle(
 			e,
 			id,
 			coord = engine.coord_on_line(
 				s.origins[i],
-				e.chars.input_coord[id],
+				e.particles.initial_coord[id],
 				ease.ease(s.config.movement_easing, progress),
 			),
 		)
 		if s.color_handling == .Dynamic {
 			visual := engine.get_visual(e, id)
-			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.dynamic_apply_input_colors(
+				&visual,
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
+			)
 			engine.set_visual(e, id, visual)
 		} else {
 			engine.set_foreground(
@@ -162,15 +169,18 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Char
 			)
 		}
 		if s.tick + 1 >= steps {
-			engine.set_character(e, id, coord = e.chars.input_coord[id])
+			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
 			if s.color_handling == .Dynamic {
 				visual := engine.get_visual(e, id)
-				engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+				engine.dynamic_apply_input_colors(
+					&visual,
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
+				)
 				engine.set_visual(e, id, visual)
 			} else {
 				engine.set_foreground(e, id, s.final_colors[i])
 			}
-			engine.set_character(e, id, layer = 0)
+			engine.set_particle(e, id, layer = 0)
 		}
 	}
 	s.tick += 1

@@ -331,7 +331,7 @@ build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 	}
 }
 
-next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	engine.clock_advance(ctx)
 	switch &s in effect.state {
 	case Slide_State:
@@ -424,33 +424,28 @@ Run_Outcome :: enum {
 run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> Run_Outcome {
 	build_effect(effect, ctx)
 	free_all(context.temp_allocator)
-	engine.prep_canvas(
-		ctx.cfg.reuse_canvas,
-		ctx.move_to_top,
-		ctx.layout.visible_right,
-		ctx.layout.visible_top,
-	)
+	engine.prep_canvas(ctx.cfg.reuse_canvas, ctx.layout.visible_right, ctx.layout.visible_top)
 	frames := 0
 	for ctx.cfg.max_frames == nil || frames < ctx.cfg.max_frames.? {
 		if resize_aware && engine.resize_settled(ctx) {
-			engine.reset_canvas_area(ctx.layout.visible_top)
+			engine.reset_canvas_area()
 			return .Terminal_Resized
 		}
 		render_candidates, produced := next_frame(effect, ctx)
 		if !produced do break
 		if render_candidates == nil {
-			engine.frame_all(ctx)
+			engine.frame(ctx)
 		} else {
 			engine.frame(ctx, render_candidates)
 		}
 		if resize_aware && engine.resize_settled(ctx) {
-			engine.reset_canvas_area(ctx.layout.visible_top)
+			engine.reset_canvas_area()
 			return .Terminal_Resized
 		}
-		engine.print_frame(ctx.move_to_top, ctx.out_buf[:])
+		engine.print_frame(ctx)
 		frames += 1
 	}
-	engine.restore_cursor(ctx.cfg.no_restore_cursor, ctx.cfg.no_eol)
+	engine.restore_cursor(ctx.layout.visible_top, ctx.cfg.no_restore_cursor, ctx.cfg.no_eol)
 	return .Complete
 }
 
@@ -609,7 +604,7 @@ parse_gdir_flag :: proc(
 }
 
 parse_group_flag :: proc(
-	ptr: ^engine.Character_Group,
+	ptr: ^engine.Particle_Group,
 	args: []string,
 	i: ^int,
 	value: string,

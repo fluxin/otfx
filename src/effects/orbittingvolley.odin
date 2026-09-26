@@ -80,16 +80,16 @@ orbittingvolley_parse :: proc(cfg: ^Orbittingvolley_Config, args: []string) -> b
 
 Orbittingvolley_State :: struct {
 	config:             Orbittingvolley_Config,
-	characters:         [dynamic]engine.Char_Id,
+	characters:         [dynamic]engine.Particle_Id,
 	final_colors:       [dynamic]engine.Color,
 	launch_starts:      [dynamic]int,
 	launch_origins:     [dynamic]engine.Coord,
 	launch_steps:       [dynamic]int,
-	render_ids:         [dynamic]engine.Char_Id,
+	render_ids:         [dynamic]engine.Particle_Id,
 	magazines:          [dynamic]int, // character indices, four contiguous spans
 	magazine_offsets:   [5]int,
 	magazine_heads:     [4]int,
-	launcher_ids:       [4]engine.Char_Id,
+	launcher_ids:       [4]engine.Particle_Id,
 	launcher_positions: [4]engine.Coord,
 	launcher_symbols:   [4]string,
 	launcher_spectrum:  [dynamic]engine.Color,
@@ -128,17 +128,25 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		e.canvas.right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	s.characters = engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	s.characters = engine.get_particles(
+		query,
+		engine.PARTICLE_FILTER_INPUT,
+		.Top_Bottom_Left_Right,
+	)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.launch_starts = make([dynamic]int, n)
 	s.launch_origins = make([dynamic]engine.Coord, n)
 	s.launch_steps = make([dynamic]int, n)
-	input_coords := e.chars.input_coord
-	visible := e.chars.is_visible
+	initial_coords := e.particles.initial_coord
+	visible := e.particles.is_visible
 	for id, i in s.characters {
-		s.final_colors[i] = engine.gradient_sample(text_sampler, spectrum[:], input_coords[id])
+		s.final_colors[i] = engine.gradient_sample(text_sampler, spectrum[:], initial_coords[id])
 		s.launch_starts[i] = -1
 		visible[id] = false
 	}
@@ -147,9 +155,9 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 
 	// Center-to-outside source ordering, then branch-wrapped round-robin
 	// assignment into four flat magazine spans.
-	center_groups := engine.get_characters_grouped(
+	center_groups := engine.get_particles_grouped(
 		query,
-		engine.CHAR_FILTER_INPUT,
+		engine.PARTICLE_FILTER_INPUT,
 		.Center_Outside,
 	)
 	defer engine.groups_delete(&center_groups)
@@ -168,7 +176,7 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	// prefix here would corrupt the immutable span boundaries used at runtime.
 	cursors: [4]int
 	for i in 0 ..< 4 do cursors[i] = s.magazine_offsets[i]
-	index_by_id := make([dynamic]int, len(e.chars), context.temp_allocator)
+	index_by_id := make([dynamic]int, len(e.particles), context.temp_allocator)
 	for id, i in s.characters do index_by_id[id] = i
 	launcher = 0
 	for id in center_groups.members {
@@ -191,11 +199,11 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		engine.coord(e.canvas.left, e.canvas.bottom),
 	}
 	for i in 0 ..< 4 {
-		id := engine.add_character(e, s.launcher_symbols[i], starts[i])
+		id := engine.add_particle(e, s.launcher_symbols[i], starts[i])
 		s.launcher_ids[i] = id
 		s.launcher_positions[i] = starts[i]
-		e.chars.layer[id] = 2
-		e.chars.is_visible[id] = true
+		e.particles.layer[id] = 2
+		e.particles.is_visible[id] = true
 		append(&s.render_ids, id)
 	}
 }
@@ -224,7 +232,7 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	for i in 0 ..< 4 {
 		id := s.launcher_ids[i]
 		p := s.launcher_positions[i]
-		engine.set_character(e, id, coord = p)
+		engine.set_particle(e, id, coord = p)
 		engine.set_symbol(e, id, s.launcher_symbols[i])
 		engine.set_foreground(
 			e,
@@ -238,7 +246,7 @@ orbittingvolley_next :: proc(
 	s: ^Orbittingvolley_State,
 	e: ^engine.Engine,
 ) -> (
-	[]engine.Char_Id,
+	[]engine.Particle_Id,
 	bool,
 ) {
 	active := !s.launchers_hidden
@@ -271,16 +279,16 @@ orbittingvolley_next :: proc(
 						engine.round_half_even(
 							engine.line_length(
 								s.launch_origins[i],
-								e.chars.input_coord[id],
+								e.particles.initial_coord[id],
 								true,
 							) /
 							s.config.character_movement_speed,
 						),
 						1,
 					)
-					engine.set_character(e, id, coord = s.launch_origins[i])
-					engine.set_character(e, id, layer = 1)
-					engine.set_character(e, id, visible = true)
+					engine.set_particle(e, id, coord = s.launch_origins[i])
+					engine.set_particle(e, id, layer = 1)
+					engine.set_particle(e, id, visible = true)
 				}
 			}
 			s.delay = s.config.launch_delay
@@ -289,12 +297,12 @@ orbittingvolley_next :: proc(
 		}
 	} else if !s.launchers_hidden {
 		for id in s.launcher_ids {
-			engine.set_character(e, id, visible = false)
+			engine.set_particle(e, id, visible = false)
 		}
 		s.launchers_hidden = true
 	}
 
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 
 	for id, i in s.characters {
 		start := s.launch_starts[i]
@@ -304,22 +312,25 @@ orbittingvolley_next :: proc(
 		if age >= steps {
 			// Preserve the layer transition one tick after the final motion sample.
 			if age == steps {
-				engine.set_character(e, id, layer = 0)
+				engine.set_particle(e, id, layer = 0)
 			}
 			continue
 		}
-		engine.set_character(
+		engine.set_particle(
 			e,
 			id,
 			coord = engine.coord_on_line(
 				s.launch_origins[i],
-				input_coords[id],
+				initial_coords[id],
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			),
 		)
 		if s.color_handling == .Dynamic {
 			visual := engine.get_visual(e, id)
-			engine.dynamic_apply_input_colors(&visual, e.chars.input_style[id])
+			engine.dynamic_apply_input_colors(
+				&visual,
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
+			)
 			engine.set_visual(e, id, visual)
 		} else {
 			engine.set_foreground(e, id, s.final_colors[i])

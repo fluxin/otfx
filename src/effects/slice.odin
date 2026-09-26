@@ -76,11 +76,11 @@ slice_parse :: proc(cfg: ^Slice_Config, args: []string) -> bool {
 
 Slice_State :: struct {
 	config:           Slice_Config,
-	motion_ids:       [dynamic]engine.Char_Id,
+	motion_ids:       [dynamic]engine.Particle_Id,
 	motion_origins:   [dynamic]engine.Coord,
 	motion_steps:     [dynamic]int,
 	motion_max_steps: [dynamic]int,
-	render_ids:       [dynamic]engine.Char_Id,
+	render_ids:       [dynamic]engine.Particle_Id,
 	color_handling:   engine.Existing_Color_Handling,
 }
 
@@ -88,14 +88,14 @@ slice_schedule :: proc(
 	s: ^Slice_State,
 	e: ^engine.Engine,
 	slots: []int,
-	id: engine.Char_Id,
+	id: engine.Particle_Id,
 	origin: engine.Coord,
 	speed: f64,
 ) {
 	slot := slots[id]
 	assert(slot >= 0)
-	destination := e.chars.input_coord[id]
-	engine.set_character(e, id, coord = origin)
+	destination := e.particles.initial_coord[id]
+	engine.set_particle(e, id, coord = origin)
 	s.motion_origins[slot] = origin
 	s.motion_max_steps[slot] = max(
 		engine.round_half_even(engine.line_length(origin, destination, true) / speed),
@@ -117,19 +117,23 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	characters := engine.get_characters(query, engine.CHAR_FILTER_INPUT, .Top_Bottom_Left_Right)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	characters := engine.get_particles(query, engine.PARTICLE_FILTER_INPUT, .Top_Bottom_Left_Right)
 	defer delete(characters[:])
 	s.color_handling = e.cfg.existing_color_handling
 	for id in characters {
-		color := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+		color := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
 		engine.set_visual(
 			e,
 			id,
 			engine.Visual {
-				symbol = e.chars.input_symbol[id],
-				fg = s.color_handling == .Dynamic ? e.chars.input_style[id].fg : color,
-				bg = s.color_handling == .Dynamic ? e.chars.input_style[id].bg : nil,
+				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				fg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).fg : color,
+				bg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).bg : nil,
 			},
 		)
 	}
@@ -138,14 +142,14 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	// the other directions move input glyphs only. Allocate once, then keep the
 	// motion table compact as rows arrive at their destinations.
 	if s.config.slice_direction == .Horizontal {
-		all_fills := engine.get_characters(
+		all_fills := engine.get_particles(
 			query,
-			engine.CHAR_FILTER_ALL_FILLS,
+			engine.PARTICLE_FILTER_ALL_FILLS,
 			.Top_Bottom_Left_Right,
 		)
 		defer delete(all_fills[:])
 		for id in all_fills {
-			p := e.chars.input_coord[id]
+			p := e.particles.initial_coord[id]
 			if p.column >= e.canvas.text_left &&
 			   p.column <= e.canvas.text_right &&
 			   p.row >= e.canvas.text_bottom &&
@@ -162,19 +166,19 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	s.motion_max_steps = make([dynamic]int, n)
 	reserve(&s.render_ids, n)
 	append(&s.render_ids, ..s.motion_ids[:])
-	slots := make([dynamic]int, len(e.chars), context.temp_allocator)
+	slots := make([dynamic]int, len(e.particles), context.temp_allocator)
 	for i in 0 ..< len(slots) do slots[i] = -1
 	for id, i in s.motion_ids do slots[id] = i
 
 	speed := s.config.movement_speed
 	switch s.config.slice_direction {
 	case .Vertical:
-		groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Row_B2T)
+		groups := engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_B2T)
 		defer engine.groups_delete(&groups)
 		count := len(groups.spans)
 		for group_index in 0 ..< count {
 			for id in engine.group_members(groups, group_index) {
-				coord := e.chars.input_coord[id]
+				coord := e.particles.initial_coord[id]
 				if coord.column <= e.canvas.text_center.column {
 					slice_schedule(
 						s,
@@ -187,7 +191,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 				}
 			}
 			for id in engine.group_members(groups, count - group_index - 1) {
-				coord := e.chars.input_coord[id]
+				coord := e.particles.initial_coord[id]
 				if coord.column > e.canvas.text_center.column {
 					slice_schedule(
 						s,
@@ -202,12 +206,16 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		}
 	case .Horizontal:
 		speed *= 2
-		groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_ALL_FILLS, .Column_R2L)
+		groups := engine.get_particles_grouped(
+			query,
+			engine.PARTICLE_FILTER_ALL_FILLS,
+			.Column_R2L,
+		)
 		defer engine.groups_delete(&groups)
 		count := len(groups.spans)
 		for group_index in 0 ..< count {
 			for id in engine.group_members(groups, group_index) {
-				coord := e.chars.input_coord[id]
+				coord := e.particles.initial_coord[id]
 				if coord.column < e.canvas.text_left ||
 				   coord.column > e.canvas.text_right ||
 				   coord.row < e.canvas.text_bottom ||
@@ -226,7 +234,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 				}
 			}
 			for id in engine.group_members(groups, count - group_index - 1) {
-				coord := e.chars.input_coord[id]
+				coord := e.particles.initial_coord[id]
 				if coord.column < e.canvas.text_left ||
 				   coord.column > e.canvas.text_right ||
 				   coord.row < e.canvas.text_bottom ||
@@ -246,7 +254,11 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 			}
 		}
 	case .Diagonal:
-		groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, .Diagonal_BL2TR)
+		groups := engine.get_particles_grouped(
+			query,
+			engine.PARTICLE_FILTER_INPUT,
+			.Diagonal_BL2TR,
+		)
 		defer engine.groups_delete(&groups)
 		count := len(groups.spans)
 		middle := count / 2
@@ -254,14 +266,17 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		for left_index < middle || right_index < count {
 			if left_index < middle {
 				group := engine.group_members(groups, left_index)
-				origin := engine.coord(e.chars.input_coord[group[0]].column, e.canvas.bottom - 1)
+				origin := engine.coord(
+					e.particles.initial_coord[group[0]].column,
+					e.canvas.bottom - 1,
+				)
 				for id in group do slice_schedule(s, e, slots[:], id, origin, speed)
 				left_index += 1
 			}
 			if right_index < count {
 				group := engine.group_members(groups, right_index)
 				origin := engine.coord(
-					e.chars.input_coord[group[len(group) - 1]].column,
+					e.particles.initial_coord[group[len(group) - 1]].column,
 					e.canvas.top + 1,
 				)
 				for id in group do slice_schedule(s, e, slots[:], id, origin, speed)
@@ -270,27 +285,27 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		}
 	}
 	for id in s.render_ids {
-		e.chars.is_visible[id] = true
+		e.particles.is_visible[id] = true
 	}
 }
 
-slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if len(s.motion_ids) == 0 do return nil, false
 	ids := s.motion_ids[:]
 	origins := s.motion_origins[:]
 	steps := s.motion_steps[:]
 	max_steps := s.motion_max_steps[:]
-	input_coords := e.chars.input_coord
+	initial_coords := e.particles.initial_coord
 	write := 0
 	for read in 0 ..< len(ids) {
 		id := ids[read]
 		step := steps[read] + 1
 		maximum := max_steps[read]
 		factor := ease.ease(s.config.movement_easing, f64(step) / f64(maximum))
-		engine.set_character(
+		engine.set_particle(
 			e,
 			id,
-			coord = engine.coord_on_line(origins[read], input_coords[id], factor),
+			coord = engine.coord_on_line(origins[read], initial_coords[id], factor),
 		)
 		if step == maximum do continue
 		if write != read {

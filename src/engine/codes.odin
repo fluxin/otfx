@@ -1,269 +1,247 @@
 package engine
 
-// Prepared and dynamic visuals share one encoder and invalidation contract.
-// Preparation interns reusable appearances during build. Dynamic appearances
-// retain encoded color fragments, without interning or allocating in playback.
-
-import "core:mem"
-import "core:simd"
 import "core:strings"
-import "core:terminal/ansi"
 
-Visual_Code_Id :: distinct u32
-NO_CODE :: Visual_Code_Id(0)
+Visual_Id :: distinct u32
+NO_VISUAL :: Visual_Id(0)
 
-// Logical state is always current, regardless of its encoded representation.
-get_visual :: #force_inline proc(e: ^Engine, id: Char_Id) -> Visual {
-	return e.chars.visual[id]
+// Complete writable ANSI packet for the common one-rune appearance. Long
+// symbols borrow their string between the same prefix and reset slices.
+Packet :: struct {
+	bytes:          [52]byte,
+	prefix, length: u8,
 }
-
-// Whole-value publication shares one column writer. Compare before writing,
-// then preserve color fragments when only symbol or bold changes.
-@(private = "file")
-store_visual :: #force_inline proc(e: ^Engine, id: Char_Id, visual: ^Visual) {
-	mem.copy_non_overlapping(&e.chars.visual[id], visual, size_of(Visual))
+Packet_Field :: enum {
+	Symbol,
+	Foreground,
+	Background,
+	Bold,
 }
+Packet_Fields :: bit_set[Packet_Field]
+All_Packet_Fields :: Packet_Fields{.Symbol, .Foreground, .Background, .Bold}
 
-// Cache the variable decimal bytes, not ANSI constants or the existing symbol.
-// Two RGB triples need at most 11 bytes each ("255;255;255").
-Encoded_Colors :: struct {
-	fg, bg:      [11]byte,
-	using state: bit_field u16 {
-		fg_len: u8   | 4,
-		bg_len: u8   | 4,
-		valid:  bool | 1,
-	},
-}
-#assert(size_of(Encoded_Colors) == 24)
+// Fixed-width SGR fields allow setters to overwrite bytes without shifting.
+Packet_Template :: "\x1b[22m\x1b[0000000000000039m\x1b[0000000000000049m"
+#assert(len(Packet_Template) == 43)
 
-encode_color :: proc(bytes: []byte, color: Color, xterm: bool) -> u8 {
-	builder := strings.builder_from_bytes(bytes)
-	if xterm {
-		buf_append_decimal(&builder.buf, int(color_to_xterm(color)))
-	} else {
-		buf_append_decimal(&builder.buf, int(color.r))
-		strings.write_byte(&builder, ';')
-		buf_append_decimal(&builder.buf, int(color.g))
-		strings.write_byte(&builder, ';')
-		buf_append_decimal(&builder.buf, int(color.b))
-	}
-	return u8(strings.builder_len(builder))
-}
-
-encode_colors :: proc(cache: ^Encoded_Colors, fg, bg: Maybe(Color), cfg: ^Terminal_Config) {
-	cache.fg_len, cache.bg_len = 0, 0
-	if color, ok := fg.?; ok do cache.fg_len = encode_color(cache.fg[:], color, cfg.xterm_colors)
-	if color, ok := bg.?; ok do cache.bg_len = encode_color(cache.bg[:], color, cfg.xterm_colors)
-	cache.valid = true
-}
-
-Code_Entry :: struct {
+Visual_Entry :: struct {
 	visual: Visual,
-	offset: u32,
-	len:    u32,
+	packet: Packet,
 }
 
-code_pool_init :: proc(e: ^Engine) {
-	e.code_ids = make(map[Visual]Visual_Code_Id)
-	reserve(&e.code_entries, len(e.chars))
-	reserve(&e.code_bytes, len(e.chars) * 24)
+get_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
+	return e.visuals[e.particles.visual_id[id] - 1].visual
 }
 
-// Build and playback share the same byte assembler. Symbols already hold UTF-8;
-// ANSI syntax is constant, so only color numbers require cached formatting.
-write_visual :: proc(
-	b: ^strings.Builder,
-	symbol: string,
-	bold: bool,
-	colors: ^Encoded_Colors,
+packet_decimal :: #force_inline proc(bytes: []byte, v: u8) {
+	bytes[0] = '0' + v / 100
+	bytes[1] = '0' + (v / 10) % 10
+	bytes[2] = '0' + v % 10
+}
+
+packet_color :: proc(bytes: []byte, color: Maybe(Color), background, xterm: bool) {
+	if c, ok := color.?; ok {
+		copy(bytes, "\x1b[38;2;000;000;000m")
+		if background do bytes[2] = '4'
+		if xterm {
+			bytes[5] = '5'
+			for &b in bytes[7:18] do b = '0'
+			packet_decimal(bytes[15:18], color_to_xterm(c))
+		} else {
+			packet_decimal(bytes[7:10], c.r)
+			packet_decimal(bytes[11:14], c.g)
+			packet_decimal(bytes[15:18], c.b)
+		}
+	} else {
+		copy(bytes, "\x1b[0000000000000039m")
+		if background do bytes[16] = '4'
+	}
+}
+
+packet_update :: #force_inline proc(
+	p: ^Packet,
+	v: ^Visual,
 	cfg: ^Terminal_Config,
+	fields: Packet_Fields,
+	colors: ^Visual = nil,
 ) {
-	if cfg.no_color {
-		strings.write_string(b, symbol)
-		return
+	colors := v if colors == nil else colors
+	fields := fields
+	styled := !cfg.no_color && (colors.bold || colors.fg != nil || colors.bg != nil)
+	prefix := 43 if styled else 0
+	if int(p.prefix) != prefix {
+		if styled do copy(p.bytes[:], Packet_Template)
+		p.prefix = u8(prefix)
+		fields = All_Packet_Fields
 	}
-	if bold do strings.write_string(b, ansi.CSI + ansi.BOLD + ansi.SGR)
-	if colors.fg_len != 0 {
-		strings.write_string(b, cfg.xterm_colors ? "\x1b[38;5;" : "\x1b[38;2;")
-		strings.write_bytes(b, colors.fg[:int(colors.fg_len)])
-		strings.write_string(b, ansi.SGR)
+	if styled {
+		if .Bold in fields {
+			p.bytes[2], p.bytes[3] = '0', '1'
+			if !colors.bold do p.bytes[2], p.bytes[3] = '2', '2'
+		}
+		if .Foreground in fields do packet_color(p.bytes[5:24], colors.fg, false, cfg.xterm_colors)
+		if .Background in fields do packet_color(p.bytes[24:43], colors.bg, true, cfg.xterm_colors)
 	}
-	if colors.bg_len != 0 {
-		strings.write_string(b, cfg.xterm_colors ? "\x1b[48;5;" : "\x1b[48;2;")
-		strings.write_bytes(b, colors.bg[:int(colors.bg_len)])
-		strings.write_string(b, ansi.SGR)
-	}
-	strings.write_string(b, symbol)
-	if bold || colors.fg_len != 0 || colors.bg_len != 0 {
-		strings.write_string(b, ansi.CSI + ansi.RESET + ansi.SGR)
+	if .Symbol in fields {
+		count := len(v.symbol) if len(v.symbol) <= 4 else 0
+		copy(p.bytes[prefix:prefix + count], v.symbol[:count])
+		end := prefix + count
+		if styled {
+			copy(p.bytes[end:end + 4], "\x1b[0m")
+			end += 4
+		}
+		p.length = u8(end)
 	}
 }
 
-// Intern a visual and return its stable code id. Call during effect build for
-// any appearance that repeats across characters or frames.
-prepare_visual :: proc(e: ^Engine, visual: Visual) -> Visual_Code_Id {
-	if id, ok := e.code_ids[visual]; ok do return id
-	offset := len(e.code_bytes)
-	builder := strings.Builder {
-		buf = e.code_bytes,
+update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
+	entry := &e.visuals[e.particles.visual_id[id] - 1]
+	colors := &entry.visual
+	if e.particles.preserve_initial_colors[id] do colors = &e.visuals[e.particles.initial_visual_id[id] - 1].visual
+	packet_update(&entry.packet, &entry.visual, &e.cfg, fields, colors)
+}
+
+visual_pool_init :: proc(e: ^Engine) {
+	e.visual_ids = make(map[Visual]Visual_Id, 64)
+	reserve(&e.visuals, max(e.canvas.top * e.canvas.right * 2, 64))
+}
+
+prepare_visual :: proc(e: ^Engine, visual: Visual) -> Visual_Id {
+	if id, ok := e.visual_ids[visual]; ok do return id
+	entry := Visual_Entry {
+		visual = visual,
 	}
-	colors: Encoded_Colors
-	if !e.cfg.no_color do encode_colors(&colors, visual.fg, visual.bg, &e.cfg)
-	write_visual(&builder, visual.symbol, visual.bold, &colors, &e.cfg)
-	e.code_bytes = builder.buf
-	length := len(e.code_bytes) - offset
-	assert(u64(len(e.code_bytes)) <= u64(max(u32)))
-	assert(u64(len(e.code_entries)) < u64(max(u32)))
-	append(&e.code_entries, Code_Entry{visual = visual, offset = u32(offset), len = u32(length)})
-	id := Visual_Code_Id(len(e.code_entries))
-	e.code_ids[visual] = id
+	packet_update(&entry.packet, &entry.visual, &e.cfg, All_Packet_Fields)
+	append(&e.visuals, entry)
+	assert(u64(len(e.visuals)) <= u64(max(u32)))
+	id := Visual_Id(len(e.visuals))
+	e.visual_ids[visual] = id
 	return id
 }
 
-// Prepared publication updates logical state and selects its encoded bytes.
-@(private = "file")
-set_visual_prepared :: #force_inline proc(e: ^Engine, id: Char_Id, code: Visual_Code_Id) {
-	assert(code != NO_CODE)
-	prior := e.chars.code[id]
-	if prior == code do return
-	visual := &e.code_entries[code - 1].visual
-	changed := !visual_equal(&e.chars.visual[id], visual)
-	store_visual(e, id, visual)
-	e.chars.code[id] = code
-	e.chars.encoded_colors[id].valid = false
-	if changed do raster_mark_visual_change(e, int(id))
-}
-
-@(private = "file")
-set_visual_value :: #force_inline proc(e: ^Engine, id: Char_Id, visual: Visual) {
-	v := visual
-	prior := &e.chars.visual[id]
-	if visual_equal(prior, &v) do return
-	colors_changed :=
-		transmute(u32)prior.fg != transmute(u32)v.fg ||
-		transmute(u32)prior.bg != transmute(u32)v.bg
-	e.chars.code[id] = NO_CODE
-	store_visual(e, id, &v)
-	if colors_changed do e.chars.encoded_colors[id].valid = false
-	raster_mark_visual_change(e, int(id))
-}
-
-// Both forms publish logical state and let the engine own its derived bytes.
-set_visual :: proc {
-	set_visual_value,
-	set_visual_prepared,
-}
-
-// Bulk prepared appearances use the same ordered publication as set_visual.
-// Compare eight code IDs together; held blocks never touch logical appearance
-// or dirty state. IDs may be sparse or repeated; changed blocks retain order.
-set_visual_codes :: #force_inline proc(e: ^Engine, ids: []Char_Id, codes: []Visual_Code_Id) {
-	assert(len(ids) == len(codes))
-	base := 0
-	for ; base + 8 <= len(ids); base += 8 {
-		current: [8]u32
-		wanted: [8]u32
-		for lane in 0 ..< 8 {
-			assert(codes[base + lane] != NO_CODE)
-			current[lane] = u32(e.chars.code[ids[base + lane]])
-			wanted[lane] = u32(codes[base + lane])
-		}
-		changed := simd.to_bits(
-			simd.lanes_ne(transmute(#simd[8]u32)current, transmute(#simd[8]u32)wanted),
-		)
-		if changed == 0 do continue
-		for lane in 0 ..< 8 do set_visual(e, ids[base + lane], codes[base + lane])
-	}
-	for i in base ..< len(ids) do set_visual(e, ids[i], codes[i])
-}
-
-// External direct writers also use this invalidation before marking membership.
-invalidate_visual_bytes :: #force_inline proc(e: ^Engine, id: Char_Id) {
-	e.chars.code[id] = NO_CODE
-	e.chars.encoded_colors[id].valid = false
-}
-
-@(private = "file")
-visual_changed :: #force_inline proc(e: ^Engine, id: Char_Id) {
-	// Component setters have already released their prepared byte cache.
-	e.chars.encoded_colors[id].valid = false
-	raster_mark_visual_change(e, int(id))
-}
-
-// Preview and frame emission use the same policy-specialized writer.
-write_character :: proc(e: ^Engine, id: Char_Id, b: ^strings.Builder) {
-	assert(id >= 0 && int(id) < len(e.chars))
-	if e.cfg.no_color {
-		write_character_mode(e, id, b, .Ignore, true, false)
-	} else if e.cfg.existing_color_handling == .Always {
-		write_character_mode(e, id, b, .Always, false, false)
+// Switching a prepared appearance changes only the reference.
+set_visual_prepared :: #force_inline proc(e: ^Engine, id: Particle_Id, visual_id: Visual_Id) {
+	assert(visual_id != NO_VISUAL)
+	if e.particles.visual_id[id] == visual_id do return
+	if e.particles.preserve_initial_colors[id] {
+		source := &e.visuals[visual_id - 1].visual
+		target := &e.visuals[e.particles.mutable_visual_id[id] - 1].visual
+		target^ = source^
+		e.particles.visual_id[id] = e.particles.mutable_visual_id[id]
+		update_packet(e, id, All_Packet_Fields)
 	} else {
-		write_character_mode(e, id, b, .Ignore, false, false)
+		e.particles.visual_id[id] = visual_id
 	}
 }
 
-@(private = "package")
-write_character_mode :: #force_inline proc(
-	e: ^Engine,
-	id: Char_Id,
-	b: ^strings.Builder,
-	$handling: Existing_Color_Handling,
-	$no_color: bool,
-	$emitted: bool,
-) #no_bounds_check {
-	// Frame callers supply retained-raster IDs; preview validates its ID above.
-	// Prepared IDs and byte spans are engine-owned, append-only build products.
-	code := e.chars.code[id]
-	if code != NO_CODE &&
-	   (no_color || handling != .Always || !e.chars.uses_input_preexisting_colors[id]) {
-		entry := &e.code_entries[code - 1]
-		strings.write_bytes(b, e.code_bytes[int(entry.offset):int(entry.offset) + int(entry.len)])
-		when emitted do e.chars.cached_code[id] = code
-		return
+// A shared palette entry is immutable. Independent edits reuse the particle's
+// preallocated mutable slot; ordinary edits never copy a whole visual/packet.
+edit_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> (^Visual_Entry, Packet_Fields) {
+	own := e.particles.mutable_visual_id[id]
+	entry := &e.visuals[own - 1]
+	if e.particles.visual_id[id] == own do return entry, {}
+	entry.visual = e.visuals[e.particles.visual_id[id] - 1].visual
+	e.particles.visual_id[id] = own
+	return entry, All_Packet_Fields
+}
+
+set_visual_value :: proc(e: ^Engine, id: Particle_Id, value: Visual) {
+	old := &e.visuals[e.particles.visual_id[id] - 1].visual
+	fields: Packet_Fields
+	if !symbol_equal(old.symbol, value.symbol) do fields |= {.Symbol}
+	if old.fg != value.fg do fields |= {.Foreground}
+	if old.bg != value.bg do fields |= {.Background}
+	if old.bold != value.bold do fields |= {.Bold}
+	if fields == {} do return
+	entry, inherited := edit_visual(e, id)
+	entry.visual = value
+	update_packet(e, id, fields | inherited)
+}
+
+set_visual :: proc {
+	set_visual_prepared,
+	set_visual_value,
+}
+
+set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: string) {
+	if symbol_equal(get_visual(e, id).symbol, value) do return
+	entry, fields := edit_visual(e, id)
+	entry.visual.symbol = value
+	update_packet(e, id, fields | {.Symbol})
+}
+
+set_foreground :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
+	if get_visual(e, id).fg == value do return
+	entry, fields := edit_visual(e, id)
+	entry.visual.fg = value
+	update_packet(e, id, fields | {.Foreground})
+}
+
+set_background :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
+	if get_visual(e, id).bg == value do return
+	entry, fields := edit_visual(e, id)
+	entry.visual.bg = value
+	update_packet(e, id, fields | {.Background})
+}
+
+set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
+	if get_visual(e, id).bold == value do return
+	entry, fields := edit_visual(e, id)
+	entry.visual.bold = value
+	update_packet(e, id, fields | {.Bold})
+}
+
+// Rendering borrows packets; it performs no appearance assembly or encoding.
+append_packet :: #force_inline proc(e: ^Engine, id: Particle_Id) {
+	p := &e.visuals[e.particles.visual_id[id] - 1].packet
+	symbol := e.visuals[e.particles.visual_id[id] - 1].visual.symbol
+	if len(symbol) <= 4 {
+		append(&e.output_parts, p.bytes[:int(p.length)])
+	} else {
+		if p.prefix != 0 do append(&e.output_parts, p.bytes[:int(p.prefix)])
+		append(&e.output_parts, transmute([]byte)symbol)
+		if p.prefix != 0 do append(&e.output_parts, transmute([]byte)string("\x1b[0m"))
 	}
-	value := &e.chars.visual[id]
-	adjusted: Visual
-	if handling == .Always && e.chars.uses_input_preexisting_colors[id] {
-		effective_visual_into(&adjusted, value, e.chars.input_style[id], true, handling)
-		value = &adjusted
+}
+
+// Preview borrows the same packet used by frame output.
+write_particle :: proc(e: ^Engine, id: Particle_Id, b: ^strings.Builder) {
+	p := &e.visuals[e.particles.visual_id[id] - 1].packet
+	symbol := e.visuals[e.particles.visual_id[id] - 1].visual.symbol
+	if len(symbol) <= 4 {
+		strings.write_bytes(b, p.bytes[:int(p.length)])
+	} else {
+		strings.write_bytes(b, p.bytes[:int(p.prefix)])
+		strings.write_string(b, symbol)
+		if p.prefix != 0 do strings.write_string(b, "\x1b[0m")
 	}
-	colors := &e.chars.encoded_colors[id]
-	if !no_color && !colors.valid do encode_colors(colors, value.fg, value.bg, &e.cfg)
-	write_visual(b, value.symbol, value.bold, colors, &e.cfg)
-	when emitted {
-		e.chars.cached_code[id] = code
-		if code == NO_CODE {
-			mem.copy_non_overlapping(&e.chars.cached[id], value, size_of(Visual))
-		}
+}
+// Repeated IDs retain their ordered scalar semantics.
+set_visuals :: proc(e: ^Engine, ids: []Particle_Id, visuals: []Visual_Id) {
+	assert(len(ids) == len(visuals))
+	for id, i in ids do set_visual(e, id, visuals[i])
+}
+
+get_initial_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
+	return e.visuals[e.particles.initial_visual_id[id] - 1].visual
+}
+
+// Each particle owns one mutable entry. Prepared and initial entries may be
+// shared, but editing one particle never mutates another particle's bytes.
+init_particle_visual :: proc(e: ^Engine, id: Particle_Id, initial: Visual) {
+	e.particles.initial_visual_id[id] = prepare_visual(e, initial)
+	append(&e.visuals, Visual_Entry{visual = Visual{symbol = initial.symbol}})
+	e.particles.visual_id[id] = Visual_Id(len(e.visuals))
+	e.particles.mutable_visual_id[id] = e.particles.visual_id[id]
+	update_packet(e, id, All_Packet_Fields)
+}
+
+// Cold consumers can request the resolved value; the frame writer borrows bytes.
+get_render_visual :: proc(e: ^Engine, id: Particle_Id) -> Visual {
+	v := get_visual(e, id)
+	if e.particles.preserve_initial_colors[id] {
+		initial := get_initial_visual(e, id)
+		v.fg, v.bg, v.bold = initial.fg, initial.bg, initial.bold
 	}
-	return
-}
-
-set_symbol :: #force_inline proc(e: ^Engine, id: Char_Id, symbol: string) {
-	if symbol_equal(get_visual(e, id).symbol, symbol) do return
-	e.chars.code[id] = NO_CODE
-	e.chars.visual[id].symbol = symbol
-	// UTF-8 is already encoded; changing it does not invalidate color numbers.
-	raster_mark_visual_change(e, int(id))
-}
-
-set_foreground :: #force_inline proc(e: ^Engine, id: Char_Id, color: Maybe(Color)) {
-	if get_visual(e, id).fg == color do return
-	e.chars.code[id] = NO_CODE
-	e.chars.visual[id].fg = color
-	visual_changed(e, id)
-}
-
-set_background :: #force_inline proc(e: ^Engine, id: Char_Id, color: Maybe(Color)) {
-	if get_visual(e, id).bg == color do return
-	e.chars.code[id] = NO_CODE
-	e.chars.visual[id].bg = color
-	visual_changed(e, id)
-}
-
-set_bold :: #force_inline proc(e: ^Engine, id: Char_Id, bold: bool) {
-	if get_visual(e, id).bold == bold do return
-	e.chars.code[id] = NO_CODE
-	e.chars.visual[id].bold = bold
-	raster_mark_visual_change(e, int(id))
+	return v
 }

@@ -108,7 +108,7 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 	effects.thunderstorm_begin_strike(&s, &e)
 	count := len(s.strike_pending)
 	expected := make([]engine.Coord, count)
-	for id, i in s.strike_pending do expected[i] = e.chars.current_coord[id]
+	for id, i in s.strike_pending do expected[i] = e.particles.current_coord[id]
 	free_all(context.temp_allocator)
 	before := track.total_allocation_count
 	for s.strike_pending_head + 3 < count {
@@ -116,25 +116,25 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 		ids := effects.thunderstorm_render_candidates(&s)
 		testing.expect_value(t, len(ids), len(s.characters) + s.strike_pending_head)
 		for id, i in s.strike_pending {
-			testing.expect_value(t, e.chars.current_coord[id], expected[i])
-			testing.expect_value(t, e.chars.is_visible[id], i < s.strike_pending_head)
+			testing.expect_value(t, e.particles.current_coord[id], expected[i])
+			testing.expect_value(t, e.particles.is_visible[id], i < s.strike_pending_head)
 		}
 	}
 	testing.expect_value(t, track.total_allocation_count, before)
 	// The same seed must rebuild the same geometry and reuse the pool.
-	for id in s.strike_pending do e.chars.is_visible[id] = false
-	allocated_chars := len(e.chars)
+	for id in s.strike_pending do e.particles.is_visible[id] = false
+	allocated_chars := len(e.particles)
 	rand.reset(42)
 	effects.thunderstorm_begin_strike(&s, &e)
 	testing.expect_value(t, track.total_allocation_count, before)
-	testing.expect_value(t, len(e.chars), allocated_chars)
+	testing.expect_value(t, len(e.particles), allocated_chars)
 	testing.expect_value(t, len(s.strike_pending), count)
-	for id, i in s.strike_pending do testing.expect_value(t, e.chars.current_coord[id], expected[i])
+	for id, i in s.strike_pending do testing.expect_value(t, e.particles.current_coord[id], expected[i])
 	free_all(context.temp_allocator)
 	for s.strike_live do effects.thunderstorm_reveal_strike(&s, &e)
 	testing.expect_value(t, s.strike_pending_head, 0)
 	testing.expect_value(t, len(s.strike_pending), 0)
-	for id in s.strike_ids do testing.expect(t, !e.chars.is_visible[id])
+	for id in s.strike_ids do testing.expect(t, !e.particles.is_visible[id])
 	ids := effects.thunderstorm_render_candidates(&s)
 	testing.expect_value(t, len(ids), len(s.characters) + len(s.spark_active))
 }

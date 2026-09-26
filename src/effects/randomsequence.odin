@@ -58,30 +58,34 @@ randomsequence_parse :: proc(cfg: ^Randomsequence_Config, args: []string) -> boo
 
 Randomsequence_State :: struct {
 	config:         Randomsequence_Config,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
 	palette:        [dynamic]engine.Color,
 	start_ticks:    [dynamic]int,
 	active_slots:   [dynamic]int,
 	palette_len:    int,
-	pending:        [dynamic]engine.Char_Id,
+	pending:        [dynamic]engine.Particle_Id,
 	chars_per_tick: int,
 	color_handling: engine.Existing_Color_Handling,
 	tick:           int,
 }
 
 randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
-	s.chars_per_tick = max(int(s.config.speed * f64(len(e.character_sets.input))), 1)
+	s.chars_per_tick = max(int(s.config.speed * f64(len(e.particle_sets.input))), 1)
 	s.color_handling = e.cfg.existing_color_handling
 
-	chars := engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	chars := engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	s.characters = chars
 	reserve(&s.active_slots, len(chars))
-	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.start_ticks = make([dynamic]int, len(chars))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 
@@ -101,7 +105,7 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 		)
 		bg := e.cfg.terminal_background_color
 		for id, slot in chars {
-			final := engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
+			final := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
 			g := engine.gradient_make([]engine.Color{bg, final}, []int{7}, false)
 			if slot == 0 do s.palette_len = len(g)
 			append(&s.palette, ..g[:])
@@ -111,7 +115,7 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 
 	for id, slot in chars {
 		s.index_by_id[id] = slot
-		e.chars.is_visible[id] = false
+		e.particles.is_visible[id] = false
 		append(&s.pending, id)
 	}
 	rand.shuffle(s.pending[:])
@@ -121,7 +125,7 @@ randomsequence_next :: proc(
 	s: ^Randomsequence_State,
 	e: ^engine.Engine,
 ) -> (
-	[]engine.Char_Id,
+	[]engine.Particle_Id,
 	bool,
 ) {
 	if len(s.pending) == 0 && len(s.active_slots) == 0 {
@@ -130,11 +134,11 @@ randomsequence_next :: proc(
 	for _ in 0 ..< s.chars_per_tick {
 		if len(s.pending) == 0 do break
 		next := pop(&s.pending)
-		engine.set_character(e, next, visible = true)
+		engine.set_particle(e, next, visible = true)
 		slot := s.index_by_id[next]
 		s.start_ticks[slot] = s.tick
 		append(&s.active_slots, slot)
-		engine.set_symbol(e, next, e.chars.input_symbol[next])
+		engine.set_symbol(e, next, engine.get_initial_visual(e, engine.Particle_Id(next)).symbol)
 	}
 	write := 0
 	for slot in s.active_slots {
@@ -142,7 +146,7 @@ randomsequence_next :: proc(
 		id := s.characters[slot]
 		life := s.palette_len * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic {
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			if style.fg != nil || style.bg != nil {
 				step := min(age / s.config.final_gradient_frames, 7)
 				visual := engine.get_visual(e, id)

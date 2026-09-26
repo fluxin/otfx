@@ -100,9 +100,9 @@ pour_parse :: proc(cfg: ^Pour_Config, args: []string) -> bool {
 
 Pour_State :: struct {
 	config:         Pour_Config,
-	pool:           [dynamic]engine.Char_Id, // all groups, concatenated
+	pool:           [dynamic]engine.Particle_Id, // all groups, concatenated
 	group_spans:    [dynamic]engine.Span, // one span per group
-	revealed:       [dynamic]engine.Char_Id,
+	revealed:       [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	origins:        [dynamic]engine.Coord,
@@ -132,7 +132,7 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	grouping: engine.Character_Group
+	grouping: engine.Particle_Group
 	switch s.config.pour_direction {
 	case .Down:
 		grouping = .Row_B2T
@@ -143,22 +143,26 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	case .Right:
 		grouping = .Column_R2L
 	}
-	query := engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas}
-	groups := engine.get_characters_grouped(query, engine.CHAR_FILTER_INPUT, grouping)
-	n := len(e.character_sets.input)
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
+	groups := engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, grouping)
+	n := len(e.particle_sets.input)
 	reserve(&s.revealed, n)
 	reserve(&s.active_slots, n)
 	s.color_handling = e.cfg.existing_color_handling
-	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
 	s.color_steps = s.config.final_gradient_steps[0]
 	for i in 0 ..< n do s.start_ticks[i] = -1
-	input_coords := e.chars.input_coord[:]
-	current_coords := e.chars.current_coord[:]
-	visible := e.chars.is_visible[:]
+	initial_coords := e.particles.initial_coord[:len(e.particles)]
+	current_coords := e.particles.current_coord[:]
+	visible := e.particles.is_visible[:]
 
 	for gi in 0 ..< len(groups.spans) {
 		g := engine.group_members(groups, gi)
@@ -168,7 +172,7 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 			slot := len(s.pool)
 			append(&s.pool, id)
 			s.index_by_id[id] = slot
-			c := input_coords[id]
+			c := initial_coords[id]
 			start: engine.Coord
 			switch s.config.pour_direction {
 			case .Down:
@@ -197,10 +201,10 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	engine.groups_delete(&groups)
 }
 
-pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	spans := s.group_spans[:]
 	pool := s.pool[:]
-	visible := e.chars.is_visible[:]
+	visible := e.particles.is_visible[:]
 	if s.group_idx >= len(spans) && len(s.active_slots) == 0 {
 		return nil, false
 	}
@@ -211,7 +215,7 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 				if s.head >= cur.len do break
 				next := pool[cur.start + s.head]
 				s.head += 1
-				engine.set_character(e, next, visible = true)
+				engine.set_particle(e, next, visible = true)
 				append(&s.revealed, next)
 				slot := s.index_by_id[next]
 				s.start_ticks[slot] = s.tick
@@ -230,7 +234,7 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 	for slot in s.active_slots {
 		id := s.pool[slot]
 		age := s.tick - s.start_ticks[slot]
-		style := e.chars.input_style[id]
+		style := engine.get_initial_visual(e, engine.Particle_Id(id))
 		color_steps := s.color_handling == .Dynamic ? 10 : s.color_steps
 		color_ticks := (color_steps + 1) * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic && style.fg == nil && style.bg == nil {
@@ -240,17 +244,17 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool)
 		if age >= life do continue
 		if age < s.max_steps[slot] {
 			progress := f64(age + 1) / f64(s.max_steps[slot])
-			engine.set_character(
+			engine.set_particle(
 				e,
 				id,
 				coord = engine.coord_on_line(
 					s.origins[slot],
-					e.chars.input_coord[id],
+					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
 		} else {
-			engine.set_character(e, id, coord = e.chars.input_coord[id])
+			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
 		}
 		if age < color_ticks {
 			step := min(age / s.config.final_gradient_frames, color_steps)

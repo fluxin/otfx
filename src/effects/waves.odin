@@ -14,7 +14,7 @@ Waves_Config :: struct {
 	wave_gradient_steps:      [dynamic]int,
 	wave_count:               int,
 	wave_length:              int,
-	wave_direction:           engine.Character_Group,
+	wave_direction:           engine.Particle_Group,
 	wave_easing:              ease.Ease,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
@@ -106,13 +106,13 @@ waves_parse :: proc(cfg: ^Waves_Config, args: []string) -> bool {
 
 Waves_State :: struct {
 	config:         Waves_Config,
-	pending_cols:   engine.Char_Groups,
-	wave_codes:     [dynamic]engine.Visual_Code_Id, // age -> encoded visual
+	pending_cols:   engine.Particle_Groups,
+	wave_codes:     [dynamic]engine.Visual_Id, // age -> encoded visual
 	last_wave:      engine.Color,
-	final_colors:   [dynamic]engine.Color, // indexed by Char_Id
+	final_colors:   [dynamic]engine.Color, // indexed by Particle_Id
 	start_ticks:    [dynamic]int, // -1 pending, -2 complete
 	final_step:     [dynamic]int, // -1 until the final visual is published
-	active:         [dynamic]engine.Char_Id, // revealed, not yet complete
+	active:         [dynamic]engine.Particle_Id, // revealed, not yet complete
 	col_idx:        int,
 	tick:           int,
 	wave_ticks:     int,
@@ -146,7 +146,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	defer delete(symbols)
 	// Compile the shared eased timeline directly to code IDs. Repeated waves
 	// reuse one cycle; playback retains neither expanded symbols nor colors.
-	cycle := make([]engine.Visual_Code_Id, entries)
+	cycle := make([]engine.Visual_Id, entries)
 	defer delete(cycle)
 	for symbol, i in symbols {
 		cycle[i] = engine.prepare_visual(e, engine.Visual{symbol = symbol, fg = colors[i]})
@@ -155,49 +155,57 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	wave_length := max(s.config.wave_length, 1)
 	s.wave_ticks = wave_frames * wave_length
 	s.last_wave = colors[entries - 1]
-	s.wave_codes = make([dynamic]engine.Visual_Code_Id, max(s.wave_ticks - 1, 0))
+	s.wave_codes = make([dynamic]engine.Visual_Id, max(s.wave_ticks - 1, 0))
 	for age in 0 ..< len(s.wave_codes) {
 		eased := engine.eased_timeline_index(age, s.wave_ticks, s.config.wave_easing)
 		frame := min(eased / wave_length, wave_frames - 1)
 		s.wave_codes[age] = cycle[frame % entries]
 	}
 
-	chars := engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	chars := engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
-	input_coords := e.chars.input_coord[:]
-	visible := e.chars.is_visible
-	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	initial_coords := e.particles.initial_coord[:len(e.particles)]
+	visible := e.particles.is_visible
+	s.final_colors = make([dynamic]engine.Color, len(e.particles))
 	s.color_handling = e.cfg.existing_color_handling
-	s.start_ticks = make([dynamic]int, len(e.chars))
+	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
-	s.final_step = make([dynamic]int, len(e.chars))
+	s.final_step = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.final_step) do s.final_step[i] = -1
-	reserve(&s.active, len(e.chars))
+	reserve(&s.active, len(e.particles))
 	for id in chars {
-		c := input_coords[id]
+		c := initial_coords[id]
 		s.final_colors[id] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		visible[id] = false
 	}
 
-	s.pending_cols = engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.pending_cols = engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		s.config.wave_direction,
 	)
 }
 
-waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	group_count := len(s.pending_cols.spans)
 	if s.col_idx >= group_count && len(s.active) == 0 {
 		return nil, false
 	}
 	if s.col_idx < group_count {
 		for id in engine.group_members(s.pending_cols, s.col_idx) {
-			engine.set_character(e, id, visible = true)
+			engine.set_particle(e, id, visible = true)
 			s.start_ticks[id] = s.tick
 			append(&s.active, id)
 		}
@@ -208,7 +216,6 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	assert(wave_ticks >= 1 && len(s.config.final_gradient_steps) > 0)
 	final_steps := s.config.final_gradient_steps[0]
 	last_wave := s.last_wave
-	input_symbols := e.chars.input_symbol
 	// Completed characters leave the active list, so a frame's work is bounded
 	// by what is actually animating rather than the whole population.
 	write := 0
@@ -219,7 +226,7 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		} else {
 			final_age := age - (wave_ticks - 1)
 			final_ticks := (final_steps + 1) * 10
-			style := e.chars.input_style[id]
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			step := final_age == 0 ? 0 : min((final_age - 1) / 10, final_steps)
 			if s.color_handling == .Dynamic && style.fg == nil && style.bg == nil {
 				final_ticks = 10
@@ -227,7 +234,7 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			}
 			if step != s.final_step[id] {
 				visual := engine.Visual {
-					symbol = input_symbols[id],
+					symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
 				}
 				if s.color_handling == .Dynamic {
 					if style.fg == nil && style.bg == nil {

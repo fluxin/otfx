@@ -104,9 +104,9 @@ spray_parse :: proc(cfg: ^Spray_Config, args: []string) -> bool {
 
 Spray_State :: struct {
 	config:         Spray_Config,
-	characters:     [dynamic]engine.Char_Id,
+	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	pending:        [dynamic]engine.Char_Id,
+	pending:        [dynamic]engine.Particle_Id,
 	final_colors:   [dynamic]engine.Color,
 	start_colors:   [dynamic]engine.Color,
 	max_steps:      [dynamic]int,
@@ -155,14 +155,18 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	s.characters = engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	s.characters = engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
-	s.index_by_id = make([dynamic]int, len(e.chars))
+	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.start_colors = make([dynamic]engine.Color, n)
 	s.max_steps = make([dynamic]int, n)
@@ -170,16 +174,16 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 	s.origin = spray_origin(s.config.spray_position, e.canvas)
 	for id, i in s.characters {
 		s.index_by_id[id] = i
-		input_coord := e.chars.input_coord[id]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], input_coord)
+		initial_coord := e.particles.initial_coord[id]
+		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coord)
 		s.start_colors[i] = spectrum[rand.int_max(len(spectrum))]
 		speed := rand.float64_range(
 			s.config.movement_speed_range.lo,
 			s.config.movement_speed_range.hi,
 		)
-		e.chars.current_coord[id] = s.origin
+		e.particles.current_coord[id] = s.origin
 		s.max_steps[i] = max(
-			engine.round_half_even(engine.line_length(s.origin, input_coord, true) / speed),
+			engine.round_half_even(engine.line_length(s.origin, initial_coord, true) / speed),
 			1,
 		)
 		s.start_ticks[i] = -1
@@ -189,7 +193,7 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 	s.volume = max(int(f64(len(s.pending)) * s.config.spray_volume), 1)
 }
 
-spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	active := len(s.pending) != 0
 	for _, i in s.characters {
 		start := s.start_ticks[i]
@@ -204,7 +208,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			if len(s.pending) == 0 do break
 			id := pop(&s.pending)
 			s.start_ticks[s.index_by_id[id]] = s.tick
-			engine.set_character(e, id, visible = true)
+			engine.set_particle(e, id, visible = true)
 		}
 	}
 	for id, i in s.characters {
@@ -213,19 +217,19 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 		age := s.tick - start
 		if age < s.max_steps[i] {
 			progress := f64(age + 1) / f64(s.max_steps[i])
-			engine.set_character(
+			engine.set_particle(
 				e,
 				id,
 				coord = engine.coord_on_line(
 					s.origin,
-					e.chars.input_coord[id],
+					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
-			engine.set_character(e, id, layer = 1)
+			engine.set_particle(e, id, layer = 1)
 		} else {
-			engine.set_character(e, id, coord = e.chars.input_coord[id])
-			engine.set_character(e, id, layer = 0)
+			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
+			engine.set_particle(e, id, layer = 0)
 		}
 		if s.color_handling == .Dynamic {
 			step := min(age / 20, 7)
@@ -233,7 +237,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 			engine.dynamic_gradient_to_input(
 				&visual,
 				s.start_colors[i],
-				e.chars.input_style[id],
+				engine.get_initial_visual(e, engine.Particle_Id(id)),
 				7,
 				step,
 			)

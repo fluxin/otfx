@@ -66,7 +66,7 @@ errorcorrect_parse :: proc(cfg: ^Errorcorrect_Config, args: []string) -> bool {
 }
 
 Errorcorrect_Pair :: struct {
-	first, second: engine.Char_Id,
+	first, second: engine.Particle_Id,
 }
 
 // One flat active-id column; each id's phase is derived from its start tick.
@@ -78,7 +78,7 @@ Errorcorrect_State :: struct {
 	origins:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
-	active:         [dynamic]engine.Char_Id,
+	active:         [dynamic]engine.Particle_Id,
 	swap_delay:     int,
 	tick:           int,
 	color_handling: engine.Existing_Color_Handling,
@@ -98,30 +98,38 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
 	)
-	characters := engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_INPUT,
+	characters := engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(characters[:])
-	s.final_colors = make([dynamic]engine.Color, len(e.chars))
+	s.final_colors = make([dynamic]engine.Color, len(e.particles))
 	s.color_handling = e.cfg.existing_color_handling
-	s.origins = make([dynamic]engine.Coord, len(e.chars))
-	s.max_steps = make([dynamic]int, len(e.chars))
-	s.start_ticks = make([dynamic]int, len(e.chars))
+	s.origins = make([dynamic]engine.Coord, len(e.particles))
+	s.max_steps = make([dynamic]int, len(e.particles))
+	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	for id in characters {
-		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id])
-		engine.set_symbol(e, id, e.chars.input_symbol[id])
+		s.final_colors[id] = engine.gradient_sample(
+			sampler,
+			spectrum[:],
+			e.particles.initial_coord[id],
+		)
+		engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 		if s.color_handling == .Dynamic {
-			engine.set_foreground(e, id, e.chars.input_style[id].fg)
-			engine.set_background(e, id, e.chars.input_style[id].bg)
+			engine.set_foreground(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).fg)
+			engine.set_background(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).bg)
 		} else {
 			engine.set_foreground(e, id, s.final_colors[id])
 		}
-		e.chars.is_visible[id] = true
+		e.particles.is_visible[id] = true
 	}
-	available := make([dynamic]engine.Char_Id, 0, len(characters), context.temp_allocator)
+	available := make([dynamic]engine.Particle_Id, 0, len(characters), context.temp_allocator)
 	append(&available, ..characters[:])
 	for _ in 0 ..< int(s.config.error_pairs * f64(len(characters))) {
 		if len(available) < 2 do break
@@ -131,9 +139,11 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		second_index := rand.int_max(
 			len(available),
 		); second := available[second_index]; ordered_remove(&available, second_index)
-		first_home, second_home := e.chars.input_coord[first], e.chars.input_coord[second]
+		first_home, second_home :=
+			e.particles.initial_coord[first], e.particles.initial_coord[second]
 		s.origins[first], s.origins[second] = second_home, first_home
-		e.chars.current_coord[first], e.chars.current_coord[second] = second_home, first_home
+		e.particles.current_coord[first], e.particles.current_coord[second] =
+			second_home, first_home
 		s.max_steps[first] = max(
 			engine.round_half_even(
 				engine.line_length(second_home, first_home, true) / s.config.movement_speed,
@@ -156,7 +166,13 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	reserve(&s.active, 2 * len(s.swapped))
 }
 
-errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+errorcorrect_next :: proc(
+	s: ^Errorcorrect_State,
+	e: ^engine.Engine,
+) -> (
+	[]engine.Particle_Id,
+	bool,
+) {
 	if s.swapped_head < len(s.swapped) && s.swap_delay == 0 {
 		pair := s.swapped[s.swapped_head]; s.swapped_head += 1
 		s.start_ticks[pair.first] = s.tick
@@ -178,7 +194,11 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 				engine.set_symbol(e, id, "▓")
 				engine.set_foreground(e, id, s.config.error_color)
 			} else {
-				engine.set_symbol(e, id, e.chars.input_symbol[id])
+				engine.set_symbol(
+					e,
+					id,
+					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				)
 				engine.set_foreground(e, id, white)
 			}
 		case age < 84:
@@ -186,12 +206,16 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 			engine.set_foreground(e, id, s.config.error_color)
 		case age < last_start:
 			progress := f64(age - motion_start + 1) / f64(s.max_steps[id])
-			engine.set_character(
+			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_line(s.origins[id], e.chars.input_coord[id], progress),
+				coord = engine.coord_on_line(
+					s.origins[id],
+					e.particles.initial_coord[id],
+					progress,
+				),
 			)
-			engine.set_character(e, id, layer = 1)
+			engine.set_particle(e, id, layer = 1)
 			engine.set_symbol(e, id, "█")
 			engine.set_foreground(
 				e,
@@ -204,19 +228,19 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> ([]engin
 				),
 			)
 		case age < last_start + 21:
-			engine.set_character(e, id, coord = e.chars.input_coord[id])
-			engine.set_character(e, id, layer = 0)
+			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
+			engine.set_particle(e, id, layer = 0)
 			engine.set_symbol(e, id, Errorcorrect_Last_Wipe[(age - last_start) / 3])
 			engine.set_foreground(e, id, s.config.correct_color)
 		case:
-			engine.set_symbol(e, id, e.chars.input_symbol[id])
+			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
 			step := min((age - last_start - 21) / 3, 10)
 			if s.color_handling == .Dynamic {
 				visual := engine.get_visual(e, id)
 				engine.dynamic_gradient_to_input(
 					&visual,
 					s.config.correct_color,
-					e.chars.input_style[id],
+					engine.get_initial_visual(e, engine.Particle_Id(id)),
 					10,
 					step,
 				)

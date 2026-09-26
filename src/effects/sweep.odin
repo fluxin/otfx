@@ -11,8 +11,8 @@ import "core:fmt"
 
 Sweep_Config :: struct {
 	sweep_symbols:            [dynamic]string,
-	first_sweep_direction:    engine.Character_Group,
-	second_sweep_direction:   engine.Character_Group,
+	first_sweep_direction:    engine.Particle_Group,
+	second_sweep_direction:   engine.Particle_Group,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -75,10 +75,10 @@ Sweep_State :: struct {
 	first_frame_spans:            [dynamic]engine.Span,
 	second_frame_spans:           [dynamic]engine.Span,
 	start_ticks:                  [dynamic]int,
-	active:                       [dynamic]engine.Char_Id,
+	active:                       [dynamic]engine.Particle_Id,
 	active_phase:                 [dynamic]i8, // -1 inactive, 0 first lane, 1 second lane
 	reveal:                       engine.Group_Reveal,
-	second_groups:                engine.Char_Groups,
+	second_groups:                engine.Particle_Groups,
 	dynamic_second_sweep_palette: [dynamic]engine.Color,
 	first_phase:                  bool,
 	complete:                     bool,
@@ -102,17 +102,21 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		s.config.final_gradient_direction,
 	)
 
-	chars := engine.get_characters(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	chars := engine.get_particles(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(chars[:])
 	reserve(&s.active, len(chars))
-	s.first_frame_spans = make([dynamic]engine.Span, len(e.chars))
-	s.second_frame_spans = make([dynamic]engine.Span, len(e.chars))
-	s.start_ticks = make([dynamic]int, len(e.chars))
-	s.active_phase = make([dynamic]i8, len(e.chars))
+	s.first_frame_spans = make([dynamic]engine.Span, len(e.particles))
+	s.second_frame_spans = make([dynamic]engine.Span, len(e.particles))
+	s.start_ticks = make([dynamic]int, len(e.particles))
+	s.active_phase = make([dynamic]i8, len(e.particles))
 	for i in 0 ..< len(s.active_phase) {
 		s.active_phase[i] = -1
 		s.start_ticks[i] = -1
@@ -120,8 +124,8 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	reserve(&s.frames, len(chars) * (len(s.config.sweep_symbols) + 1) * 2)
 	switch s.color_handling {
 	case .Dynamic:
-		for id in e.character_sets.input {
-			style := e.chars.input_style[id]
+		for id in e.particle_sets.input {
+			style := engine.get_initial_visual(e, engine.Particle_Id(id))
 			if fg, ok := style.fg.?; ok do append(&s.dynamic_second_sweep_palette, fg)
 			if bg, ok := style.bg.?; ok do append(&s.dynamic_second_sweep_palette, bg)
 		}
@@ -135,21 +139,25 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		final: engine.Color_Pair
 		switch s.color_handling {
 		case .Dynamic:
-			if !e.chars.is_fill[id] do final = {e.chars.input_style[id].fg, e.chars.input_style[id].bg}
+			if !e.particles.is_fill[id] do final = {engine.get_initial_visual(e, engine.Particle_Id(id)).fg, engine.get_initial_visual(e, engine.Particle_Id(id)).bg}
 		case .Ignore, .Always:
-			if e.chars.is_fill[id] {
+			if e.particles.is_fill[id] {
 				final = {
 					fg = engine.Color{0x00, 0x00, 0x00},
 					bg = nil,
 				}
 			} else {
 				final = {
-					fg = engine.gradient_sample(sampler, spectrum[:], e.chars.input_coord[id]),
+					fg = engine.gradient_sample(
+						sampler,
+						spectrum[:],
+						e.particles.initial_coord[id],
+					),
 					bg = nil,
 				}
 			}
 		}
-		sym := e.chars.input_symbol[id]
+		sym := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
 
 		first_start := len(s.frames)
 		for symbol in s.config.sweep_symbols {
@@ -170,22 +178,30 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		s.second_frame_spans[id] = {second_start, len(s.config.sweep_symbols) + 1}
 	}
 
-	s.reveal.groups = engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	s.reveal.groups = engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		s.config.first_sweep_direction,
 	)
 	s.reveal.ease = .Circular_In_Out
 	s.reveal.duration = 100
-	s.second_groups = engine.get_characters_grouped(
-		engine.Character_Query{e.character_sets, e.chars.input_coord[:], e.canvas},
-		engine.CHAR_FILTER_ALL_FILLS,
+	s.second_groups = engine.get_particles_grouped(
+		engine.Particle_Query {
+			e.particle_sets,
+			e.particles.initial_coord[:len(e.particles)],
+			e.canvas,
+		},
+		engine.PARTICLE_FILTER_ALL_FILLS,
 		s.config.second_sweep_direction,
 	)
 	s.first_phase = true
 }
 
-sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, bool) {
+sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
 	if len(s.active) == 0 && s.complete {
 		return nil, false
 	}
@@ -193,7 +209,7 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Char_Id, boo
 	for gi in change.added.start ..< change.added.start + change.added.len {
 		for id in engine.group_members(s.reveal.groups, gi) {
 			if s.first_phase {
-				engine.set_character(e, id, visible = true)
+				engine.set_particle(e, id, visible = true)
 			}
 			phase: i8 = 0
 			if !s.first_phase {
