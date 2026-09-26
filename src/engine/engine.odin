@@ -316,8 +316,8 @@ create_timeline :: proc {
 // Renderer-owned admission state for effects that return a candidate slice.
 Frame_Selection :: enum u8 {
 	Absent,
-	Present,
-	Pending,
+	Even,
+	Odd,
 }
 
 Particle :: struct {
@@ -415,6 +415,8 @@ Engine :: struct {
 	particle_sets:     Particle_Sets,
 	layout:            Render_Layout,
 	frame_particles:   []Particle_Id,
+	frame_candidates:  [dynamic]Particle_Id,
+	frame_generation:  Frame_Selection,
 	dirty_rows:        []bool,
 	blank_row:         []byte,
 	visual_ids:        map[Visual]Visual_Id,
@@ -520,6 +522,7 @@ engine_make :: proc(
 		occupied[(c.row - 1) * e.canvas.right + c.column - 1] = true
 	}
 	make_fill_particles(&e, occupied)
+	reserve(&e.frame_candidates, cap(e.particles))
 	delete(occupied)
 	return e, .None
 }
@@ -1046,6 +1049,7 @@ Particle_Batch :: struct {
 particle_batch :: proc(e: ^Engine, count: int) -> Particle_Batch {
 	assert(count >= 0)
 	reserve(&e.particles, len(e.particles) + count)
+	reserve(&e.frame_candidates, cap(e.particles))
 	reserve(&e.visuals, len(e.visuals) + count * 2)
 	return {e, count}
 }
@@ -1072,6 +1076,7 @@ add_particle_single :: proc(e: ^Engine, symbol: string, position: Coord) -> Part
 	c.initial_coord = position
 	c.current_coord = position
 	append(&e.particles, c)
+	reserve(&e.frame_candidates, cap(e.particles))
 	id := Particle_Id(len(e.particles) - 1)
 	init_particle_visual(e, id, Visual{symbol = symbol})
 	return id

@@ -1,5 +1,7 @@
 package engine
 
+import "core:slice"
+
 frame :: proc(e: ^Engine, selected: Maybe([]Particle_Id) = nil) {
 	enforce_framerate(e)
 	frame_build(e, selected)
@@ -23,17 +25,32 @@ compose_frame :: proc(e: ^Engine, selection: Maybe([]Particle_Id) = nil) -> (wid
 	width, height = max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	selected, restricted := selection.?
 	count := len(selected) if restricted else len(e.particles)
-	// Candidate inclusion can change without any particle setter being called.
-	for &state in e.particles.frame_selection[:len(e.particles)] do if state == .Present do state = .Pending
-	for i in 0 ..< count {
-		id := selected[i] if restricted else Particle_Id(i)
-		if e.particles.frame_selection[id] == .Absent do dirty_particle_row(e, id)
-		e.particles.frame_selection[id] = .Present
-	}
-	for state, id in e.particles.frame_selection[:len(e.particles)] {
-		if state != .Pending do continue
-		dirty_particle_row(e, Particle_Id(id))
-		e.particles.frame_selection[id] = .Absent
+	// The engine owns this unique ID list: effects may overwrite their slice.
+	// Unchanged selections need no membership bookkeeping.
+	unchanged :=
+		slice.equal(selected, e.frame_candidates[:]) if restricted else len(e.frame_candidates) == len(e.particles)
+	if !unchanged {
+		// Two alternating marks distinguish this selection from the previous one.
+		e.frame_generation = .Odd if e.frame_generation == .Even else .Even
+		for i in 0 ..< count {
+			id := selected[i] if restricted else Particle_Id(i)
+			if e.particles[id].frame_selection == .Absent {
+				dirty_particle_row(e, id)
+				append(&e.frame_candidates, id)
+			}
+			e.particles[id].frame_selection = e.frame_generation
+		}
+		write := 0
+		for id in e.frame_candidates {
+			if e.particles[id].frame_selection != e.frame_generation {
+				dirty_particle_row(e, id)
+				e.particles[id].frame_selection = .Absent
+			} else {
+				e.frame_candidates[write] = id
+				write += 1
+			}
+		}
+		resize(&e.frame_candidates, write)
 	}
 	for dirty, row in e.dirty_rows {
 		if dirty do for &id in e.frame_particles[row * width:(row + 1) * width] do id = -1

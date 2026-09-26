@@ -1,4 +1,7 @@
-# Current renderer CPU profile
+# Renderer CPU profile before candidate-list tracking
+
+The later [candidate-list measurements](candidate-renderer.md) include a fresh
+ASM comparison and separate effect-update/frame-construction timings.
 
 Profiled the `b0cb53df` renderer plus the two exact-size color stores retained
 from the row-slot experiment. Native Odin build uses

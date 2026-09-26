@@ -152,7 +152,10 @@ placement writes currently occur during build, while every row starts dirty.
 Candidate-list changes also affect visibility without setters. A renderer-owned
 one-byte `Frame_Selection` state per particle detects inclusion/removal and marks
 the corresponding rows; candidate reordering and duplicates do not dirty rows.
-This preserves the existing candidate API but requires scans each frame.
+The initial dirty-row version scanned the full population for membership.
+The [candidate-list update](candidate-renderer.md) now reconciles only current
+and previous candidates and skips unchanged membership. Clipping and placement
+still visit current candidates.
 
 All 44 tests pass, including a new exact-output test for unchanged frames,
 single-row edits, movement between rows, hiding, selection removal/re-entry,
