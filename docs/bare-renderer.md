@@ -10,16 +10,17 @@ prepared visual assigns an ID; independent edits use the particle's reserved
 mutable entry. A shared-to-mutable transition preserves logical fields before
 patching the packet. Long symbols are borrowed separately.
 
-Each frame clears one reusable particle-ID slice, clips visible particles, and
-places them directly into terminal cells. Overlaps select the highest layer then
-particle ID. It emits complete rows, borrowing
+Setters mark a `[]bool` of dirty rows. Each frame clears only those rows in one
+reusable particle-ID slice, clips visible particles, and places them directly
+into dirty cells. Overlaps select the highest layer then particle ID. It emits
+complete dirty rows, borrowing
 packet slices and blank spans. Linux `writev` submits these slices; `frame_bytes`
 provides an explicit contiguous capture for tests. Emit or capture a built frame
 before changing particles or growing the visual table: output slices borrow that
 storage and are not immutable frame snapshots.
 
 Deleted renderer state includes cell membership links, dirty and selection
-bitmaps, previous-frame state, emitted appearance snapshots, dynamic color
+bitmaps, a separate previous-frame grid, emitted appearance snapshots, dynamic color
 caches, and the concatenated CLI output buffer. There are no `raster_*` functions
 or `mem.copy` calls in the engine. This does not mean zero data movement: packet
 setters write fields, long symbols are borrowed, capture concatenates slices,
@@ -101,9 +102,9 @@ establishing how fast a replacement will be. No rendering algorithm was changed
 during this profiling pass. Data, text reports, input, and timing results are saved
 under `/tmp/otfx-profile`; the symbolized binary is `/tmp/otfx-perf-debug`.
 
-## Removing the render sort
+## Removing the render sort (checkpoint `03dd01a0`)
 
-The renderer now owns one `[]Particle_Id` sized to the viewport. `compose_frame`
+This version owns one `[]Particle_Id` sized to the viewport. `compose_frame`
 fills it with -1, then places each visible candidate directly at its terminal
 cell, comparing layer and particle ID only when that cell is occupied. Emission
 scans row slices, coalescing empty cells into blank spans. This removes `Draw`,
@@ -137,3 +138,57 @@ compares two full-frame renderers; it does not establish parity with the older
 incremental renderer or ttfx ASM. Captures, comparison harness, binaries, and
 raw results are under `/tmp/otfx-direct`. The harness's historical `rust` column
 means sorted Odin and its `odin` column means direct-placement Odin in this run.
+
+## Dirty rows and fresh ASM comparison
+
+The current renderer adds `dirty_rows: []bool`. Visual setters mark the current
+visible row; movement marks both old and new rows; visibility and priority
+changes mark the affected row. Composition clears and rebuilds only dirty rows,
+and output writes each such row completely. A held frame has no row bytes.
+There is still one cell buffer, no previous-frame copy, and no sort.
+
+Particle mutations after the initial build must use setters. Direct effect
+placement writes currently occur during build, while every row starts dirty.
+Candidate-list changes also affect visibility without setters. A renderer-owned
+one-byte `Frame_Selection` state per particle detects inclusion/removal and marks
+the corresponding rows; candidate reordering and duplicates do not dirty rows.
+This preserves the existing candidate API but requires scans each frame.
+
+All 44 tests pass, including a new exact-output test for unchanged frames,
+single-row edits, movement between rows, hiding, selection removal/re-entry,
+duplicates, and offscreen movement. The 222 terminal-state captures match the
+full-frame version. Output bytes intentionally differ because held rows are
+omitted. The docs, accuracy, and parity consumers use the same composed cells.
+
+Compared directly with full-frame checkpoint `03dd01a0` on the same eight-effect
+screen, the geometric speedup is 0.95x (about 5% slower). Mean best wall time
+changes from 144.5 to 162.7 ms and mean CPU from 144.6 to 164.2 ms. Decrypt
+improves from about 152 to 103 ms, but Binarypath regresses from 234.9 to 335.1 ms
+and Laseretch from 337.1 to 387.7 ms. Row dirtying saves output but is not an
+overall speedup in this implementation. In a symbolized user-cycle profile of
+eight Laseretch runs, the scan for removed candidates alone accounts for 13.2%
+of samples; clipping and composition also remain significant.
+
+A fresh 35-effect CLI comparison forces ttfx ASM with `TTFX_ASM=force`, using
+`origin/asm-zen5` revision `ac940f2e11c95ef7e6d9e6d0c8b37d389a4e5e75`.
+The verified release binary SHA256 is
+`a1788a30978f735fd716ed30f5b2279bd07b4b89bb994c47c0b9612e1dab315c`.
+Odin uses `-o:speed -microarch:native -debug`; both run pinned to CPU 2 with the
+same 190x46 input, 200x50 canvas, seed 1, unpaced output to `/dev/null`, three
+samples, and a 0.3-second minimum sample. Matrix and Thunderstorm are excluded
+from the throughput aggregate because their duration is time-based.
+
+| Metric | ttfx ASM | otfx dirty rows |
+| --- | ---: | ---: |
+| Mean best wall time | 54.7 ms | 103.1 ms |
+| Mean child CPU time | 54.7 ms | 103.6 ms |
+| Average peak RSS | 87.9 MiB | 10.4 MiB |
+| Effects won | 32 | 3 |
+
+ASM is 2.00x faster by geometric mean. otfx wins Binarypath, Overflow, and Slice.
+Frame counts differ for 21 of 35 effects, so these are complete CLI workloads,
+not identical per-frame simulations. `/dev/null` excludes terminal-emulator
+cost. [Per-effect timings and frame counts](dirty-rows-asm-benchmark.tsv) are
+checked in; raw logs, harnesses, captures, and profile data are in
+`/tmp/otfx-rows`. The full-versus-dirty harness's historical `rust` column is
+the full-frame Odin binary; the ASM harness's `rust` column is actual ttfx ASM.

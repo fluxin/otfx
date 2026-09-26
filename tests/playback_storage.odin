@@ -73,11 +73,14 @@ rebuilt_output_storage_does_not_grow :: proc(t: ^testing.T) {
 			// rows exercise both encoded cell size and relative cursor movement.
 			for pass in 0 ..< 5 {
 				for id in 0 ..< len(e.particles) {
-					e.particles.is_visible[id] =
-						pass == 0 ||
+					engine.set_particle(
+						&e,
+						engine.Particle_Id(id),
+						visible = pass == 0 ||
 						(pass == 1 && id % 2 == 0) ||
 						(pass == 3 && e.particles.current_coord[id].row % 3 == 0) ||
-						(pass == 4 && id == len(e.particles) - 1)
+						(pass == 4 && id == len(e.particles) - 1),
+					)
 					engine.set_visual(
 						&e,
 						engine.Particle_Id(id),

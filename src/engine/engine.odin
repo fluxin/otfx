@@ -313,6 +313,13 @@ create_timeline :: proc {
 	create_gradient_timeline,
 }
 
+// Renderer-owned admission state for effects that return a candidate slice.
+Frame_Selection :: enum u8 {
+	Absent,
+	Present,
+	Pending,
+}
+
 Particle :: struct {
 	initial_visual_id:       Visual_Id,
 	initial_coord:           Coord,
@@ -324,6 +331,7 @@ Particle :: struct {
 	visual_id:               Visual_Id,
 	mutable_visual_id:       Visual_Id,
 	preserve_initial_colors: bool,
+	frame_selection:         Frame_Selection,
 }
 
 Particle_Storage :: #soa[dynamic]Particle
@@ -407,6 +415,7 @@ Engine :: struct {
 	particle_sets:     Particle_Sets,
 	layout:            Render_Layout,
 	frame_particles:   []Particle_Id,
+	dirty_rows:        []bool,
 	blank_row:         []byte,
 	visual_ids:        map[Visual]Visual_Id,
 	visuals:           [dynamic]Visual_Entry,
@@ -486,6 +495,8 @@ engine_make :: proc(
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.frame_particles = make([]Particle_Id, width * height)
+	e.dirty_rows = make([]bool, height)
+	for &dirty in e.dirty_rows do dirty = true
 	e.blank_row = make([]byte, width)
 	for &b in e.blank_row do b = ' '
 	reserve(&e.output_parts, width * height * 4 + height)

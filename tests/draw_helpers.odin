@@ -35,6 +35,8 @@ expect_visible_draws :: proc(t: ^testing.T, e: ^engine.Engine) {
 	for id, index in e.frame_particles {
 		if id < 0 do continue
 		row, col := index / e.layout.visible_right, index % e.layout.visible_right
+		// A delta contains only rewritten rows. Held rows remain on screen.
+		if row >= len(lines) || lines[row].width == 0 do continue
 		expected := engine.get_render_visual(e, id)
 		if e.cfg.no_color do expected.fg, expected.bg, expected.bold = nil, nil, false
 		testing.expect(t, row < len(lines) && col < lines[row].width)

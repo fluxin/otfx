@@ -95,6 +95,7 @@ packet_update :: #force_inline proc(
 }
 
 update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
+	dirty_particle_row(e, id)
 	entry := &e.visuals[e.particles.visual_id[id] - 1]
 	colors := &entry.visual
 	if e.particles.preserve_initial_colors[id] do colors = &e.visuals[e.particles.initial_visual_id[id] - 1].visual
@@ -131,6 +132,7 @@ set_visual_prepared :: #force_inline proc(e: ^Engine, id: Particle_Id, visual_id
 		update_packet(e, id, All_Packet_Fields)
 	} else {
 		e.particles.visual_id[id] = visual_id
+		dirty_particle_row(e, id)
 	}
 }
 

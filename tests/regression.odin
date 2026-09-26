@@ -73,7 +73,7 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		engine.frame_build(&e)
 		testing.expect_value(t, string(engine.frame_bytes(&e)), "hello")
 		engine.frame_build(&e)
-		testing.expect_value(t, string(engine.frame_bytes(&e)), "hello")
+		testing.expect_value(t, len(engine.frame_bytes(&e)), 0)
 		id := e.particle_sets.input[0]
 		engine.set_foreground(&e, engine.Particle_Id(id), engine.Color{255, 0, 0})
 		engine.frame_build(&e)
@@ -81,7 +81,7 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		engine.set_symbol(&e, engine.Particle_Id(id), "X")
 		engine.frame_build(&e)
 		testing.expect(t, strings.contains(string(engine.frame_bytes(&e)), "X"))
-		e.particles.is_visible[id] = false
+		engine.set_particle(&e, id, visible = false)
 		engine.frame_build(&e)
 		testing.expect_value(t, string(engine.frame_bytes(&e)), " ello")
 	}
@@ -151,13 +151,13 @@ render_painter_creation_order :: proc(t: ^testing.T) {
 	testing.expect_value(t, draw_at(&e, 0), i32(added))
 	engine.compose_frame(&e)
 	testing.expect_value(t, draw_at(&e, 0), i32(added))
-	e.particles.is_visible[added] = false
+	engine.set_particle(&e, added, visible = false)
 	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(fill))
-	e.particles.is_visible[fill] = false
+	engine.set_particle(&e, fill, visible = false)
 	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(b))
-	e.particles.layer[a] = 1
+	engine.set_particle(&e, a, layer = 1)
 	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(a))
 	engine.compose_frame(&e)

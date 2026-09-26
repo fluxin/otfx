@@ -32,7 +32,7 @@ wide_raster_preserves_cursor_distances_and_long_symbols :: proc(t: ^testing.T) {
 	)
 	testing.expect_value(t, engine.frame_bytes(&e)[len(input) - 1], u8('B'))
 	engine.frame_build(&e)
-	testing.expect_value(t, engine.frame_bytes(&e)[len(input) - 1], u8('B'))
+	testing.expect_value(t, len(engine.frame_bytes(&e)), 0)
 	// Symbol bytes are not limited to a rune or a fixed per-cell byte capacity.
 	large := strings.repeat("x", 65537 * 65)
 	engine.set_symbol(&e, e.particle_sets.input[0], large)

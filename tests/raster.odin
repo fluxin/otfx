@@ -51,14 +51,15 @@ frame_composition_matches_full_paint :: proc(t: ^testing.T) {
 			}
 			clear(&selected)
 			for id in 0 ..< len(e.particles) {
-				e.particles.is_visible[id] = (id + tick) % 5 != 0
-				e.particles.layer[id] = (id + tick / 3) % 4 - 2
 				// Include clipping and crowded cells; leave positions unchanged
 				// on alternate ticks to exercise independent layer/visual changes.
-				e.particles.current_coord[id] = {
-					(id * 7 + tick / 2) % (width + 2),
-					(id + tick / 4) % 5,
-				}
+				engine.set_particle(
+					&e,
+					engine.Particle_Id(id),
+					visible = (id + tick) % 5 != 0,
+					layer = (id + tick / 3) % 4 - 2,
+					coord = engine.Coord{(id * 7 + tick / 2) % (width + 2), (id + tick / 4) % 5},
+				)
 				engine.set_symbol(&e, engine.Particle_Id(id), "X" if (id + tick) % 2 == 0 else "Y")
 				engine.set_foreground(&e, engine.Particle_Id(id), engine.Color{u8(tick), 100, 200})
 				if tick % 7 != 0 && (id + tick) % 3 != 0 {
@@ -101,9 +102,9 @@ frame_composition_keeps_pending_visual_changes :: proc(t: ^testing.T) {
 	expect_frame_cell(t, &e, 64, 0, engine.Visual{symbol = "A"})
 	// Update without emission, then move again. Only the latest position is
 	// drawn, but the last emitted position must still be erased.
-	e.particles.current_coord[id] = {1, 1}
+	engine.set_particle(&e, id, coord = engine.Coord{1, 1})
 	engine.compose_frame(&e)
-	e.particles.current_coord[id] = {2, 1}
+	engine.set_particle(&e, id, coord = engine.Coord{2, 1})
 	engine.set_symbol(&e, engine.Particle_Id(id), "B")
 	engine.frame_build(&e)
 	expect_frame_cell(t, &e, 64, 0, engine.Visual{symbol = " "})
