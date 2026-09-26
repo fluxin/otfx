@@ -2,6 +2,12 @@ package engine
 
 import "core:slice"
 
+frame :: proc(e: ^Engine, selected: Maybe([]Particle_Id) = nil) {
+	enforce_framerate(e)
+	frame_build(e, selected)
+	free_all(context.temp_allocator)
+}
+
 // One transient draw per visible particle; sorting makes overlap resolution
 // deterministic without a retained cell grid or membership lists.
 Draw :: struct {

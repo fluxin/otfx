@@ -2,7 +2,7 @@ package engine
 
 import "core:math/ease"
 
-// Eased reveal of a prefix of character groups (wipe/highlight/sweep).
+// Eased reveal of a prefix of particle groups (wipe/highlight/sweep).
 Group_Reveal :: struct {
 	groups:   Particle_Groups,
 	ease:     ease.Ease,
@@ -38,10 +38,4 @@ group_reveal_reset :: proc(r: ^Group_Reveal) {
 
 group_reveal_complete :: proc(r: Group_Reveal) -> bool {
 	return r.tick >= r.duration
-}
-
-frame :: proc(e: ^Engine, selected: Maybe([]Particle_Id) = nil) {
-	enforce_framerate(e)
-	frame_build(e, selected)
-	free_all(context.temp_allocator)
 }
