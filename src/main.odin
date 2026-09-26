@@ -704,7 +704,7 @@ run_effect_once :: proc(
 ) -> effects.Run_Outcome {
 	context.allocator = allocator
 
-	ctx, input_error := engine.engine_make(input, opts.cfg, context.allocator)
+	ctx, input_error := engine.engine_make(input, opts.cfg)
 	if input_error != .None {
 		switch input_error {
 		case .Invalid_Tab_Width:

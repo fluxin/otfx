@@ -6,10 +6,10 @@ import "core:fmt"
 import "core:math/ease"
 
 Orbittingvolley_Config :: struct {
-	top_launcher_symbol:      string,
-	right_launcher_symbol:    string,
-	bottom_launcher_symbol:   string,
-	left_launcher_symbol:     string,
+	top_launcher_symbol:      rune,
+	right_launcher_symbol:    rune,
+	bottom_launcher_symbol:   rune,
+	left_launcher_symbol:     rune,
 	launcher_movement_speed:  f64,
 	character_movement_speed: f64,
 	volley_size:              f64,
@@ -22,10 +22,10 @@ Orbittingvolley_Config :: struct {
 
 orbittingvolley_config_default :: proc() -> Orbittingvolley_Config {
 	cfg := Orbittingvolley_Config {
-		top_launcher_symbol      = "█",
-		right_launcher_symbol    = "█",
-		bottom_launcher_symbol   = "█",
-		left_launcher_symbol     = "█",
+		top_launcher_symbol      = '█',
+		right_launcher_symbol    = '█',
+		bottom_launcher_symbol   = '█',
+		left_launcher_symbol     = '█',
 		launcher_movement_speed  = 0.8,
 		character_movement_speed = 1.5,
 		volley_size              = 0.03,
@@ -90,7 +90,7 @@ Orbittingvolley_State :: struct {
 	magazine_heads:     [4]int,
 	launcher_ids:       [4]engine.Particle_Id,
 	launcher_positions: [4]engine.Coord,
-	launcher_symbols:   [4]string,
+	launcher_symbols:   [4]rune,
 	launcher_spectrum:  [dynamic]engine.Color,
 	launcher_sampler:   engine.Gradient_Sampler,
 	launcher_advance:   f64,
@@ -143,11 +143,11 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	s.launch_origins = make([dynamic]engine.Coord, n)
 	s.launch_steps = make([dynamic]int, n)
 	initial_coords := e.particles.initial_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		s.final_colors[i] = engine.gradient_sample(text_sampler, spectrum[:], initial_coords[id])
 		s.launch_starts[i] = -1
-		visible[id] = false
+		visible_flags[id] -= {.Visible}
 	}
 
 	// Center-to-outside source ordering, then branch-wrapped round-robin
@@ -196,11 +196,12 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		engine.coord(e.canvas.left, e.canvas.bottom),
 	}
 	for i in 0 ..< 4 {
-		id := engine.add_particle(e, s.launcher_symbols[i], starts[i])
+		appearance := engine.prepare_appearance(e, engine.Appearance{})
+		id := engine.add_particle(e, s.launcher_symbols[i], appearance, starts[i])
 		s.launcher_ids[i] = id
 		s.launcher_positions[i] = starts[i]
 		e.particles.layer[id] = 2
-		e.particles.is_visible[id] = true
+		e.particles.flags[id] += {.Visible}
 	}
 }
 
@@ -215,20 +216,20 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	s.launcher_positions[0] = engine.coord(col, e.canvas.top)
 	s.launcher_positions[1] = engine.coord(
 		e.canvas.right,
-		e.canvas.top - engine.round_half_even(progress * f64(e.canvas.top - e.canvas.bottom)),
+		e.canvas.top - engine.round_to_int(progress * f64(e.canvas.top - e.canvas.bottom)),
 	)
 	s.launcher_positions[2] = engine.coord(
-		e.canvas.right - engine.round_half_even(progress * f64(e.canvas.right - e.canvas.left)),
+		e.canvas.right - engine.round_to_int(progress * f64(e.canvas.right - e.canvas.left)),
 		e.canvas.bottom,
 	)
 	s.launcher_positions[3] = engine.coord(
 		e.canvas.left,
-		e.canvas.bottom + engine.round_half_even(progress * f64(e.canvas.top - e.canvas.bottom)),
+		e.canvas.bottom + engine.round_to_int(progress * f64(e.canvas.top - e.canvas.bottom)),
 	)
 	for i in 0 ..< 4 {
 		id := s.launcher_ids[i]
 		p := s.launcher_positions[i]
-		engine.set_particle(e, id, coord = p)
+		engine.set_particle(e, id, p)
 		engine.set_symbol(e, id, s.launcher_symbols[i])
 		engine.set_foreground(
 			e,
@@ -266,7 +267,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 					s.launch_origins[i] = s.launcher_positions[launcher]
 					id := s.characters[i]
 					s.launch_steps[i] = max(
-						engine.round_half_even(
+						engine.round_to_int(
 							engine.line_length(
 								s.launch_origins[i],
 								e.particles.initial_coord[id],
@@ -276,9 +277,9 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 						),
 						1,
 					)
-					engine.set_particle(e, id, coord = s.launch_origins[i])
-					engine.set_particle(e, id, layer = 1)
-					engine.set_particle(e, id, visible = true)
+					engine.set_particle(e, id, s.launch_origins[i])
+					engine.set_particle(e, id, engine.Layer(1))
+					engine.set_particle(e, id, engine.Visible(true))
 				}
 			}
 			s.delay = s.config.launch_delay
@@ -287,7 +288,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 		}
 	} else if !s.launchers_hidden {
 		for id in s.launcher_ids {
-			engine.set_particle(e, id, visible = false)
+			engine.set_particle(e, id, engine.Visible(false))
 		}
 		s.launchers_hidden = true
 	}
@@ -302,26 +303,26 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 		if age >= steps {
 			// Preserve the layer transition one tick after the final motion sample.
 			if age == steps {
-				engine.set_particle(e, id, layer = 0)
+				engine.set_particle(e, id, engine.Layer(0))
 			}
 			continue
 		}
 		engine.set_particle(
 			e,
 			id,
-			coord = engine.coord_on_line(
+			engine.coord_on_line(
 				s.launch_origins[i],
 				initial_coords[id],
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			),
 		)
 		if s.color_handling == .Dynamic {
-			visual := engine.get_visual(e, id)
+			appearance := engine.get_appearance(e, id)
 			engine.dynamic_apply_input_colors(
-				&visual,
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
+				&appearance,
+				engine.get_initial_appearance(e, engine.Particle_Id(id)),
 			)
-			engine.set_visual(e, id, visual)
+			engine.set_appearance(e, id, appearance)
 		} else {
 			engine.set_foreground(e, id, s.final_colors[i])
 		}

@@ -24,7 +24,7 @@ Terminal_Config :: struct {
 
 // Existing input colors are either ignored, held at the renderer boundary, or
 // consumed by an effect's own final lanes. Dynamic intentionally stays an
-// effect decision: a global override would hide temporary effect visuals.
+// effect decision: a global override would hide temporary effect appearances.
 Existing_Color_Handling :: enum {
 	Ignore,
 	Always,

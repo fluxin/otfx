@@ -5,8 +5,8 @@ import "../engine"
 import "core:fmt"
 import "core:math/rand"
 
-Burn_Char_Order :: [9]string{"'", ".", "▖", "▙", "█", "▜", "▀", "▝", "."}
-Burn_Smoke_Symbols :: [6]string{".", ",", "'", "`", "#", "*"}
+Burn_Char_Order :: [9]rune{'\'', '.', '▖', '▙', '█', '▜', '▀', '▝', '.'}
+Burn_Smoke_Symbols :: [6]rune{'.', ',', '\'', '`', '#', '*'}
 
 Burn_Config :: struct {
 	starting_color:           engine.Color,
@@ -73,7 +73,7 @@ Burn_State :: struct {
 	start_ticks:       [dynamic]int,
 	last_fire_tick:    int,
 	fire_palette:      [dynamic]engine.Color,
-	fire_symbols:      [dynamic]string,
+	fire_symbols:      [dynamic]rune,
 	smoke_ids:         [dynamic]engine.Particle_Id,
 	smoke_start_ticks: [dynamic]int,
 	smoke_origins:     [dynamic]engine.Coord,
@@ -137,15 +137,15 @@ burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
 	tick, remaining := 0, rand.int_range(2, 5)
 	for cell in order {
 		id := cells[cell]
-		if !e.particles.is_fill[id] &&
-		   (engine.get_initial_visual(e, engine.Particle_Id(id)).symbol != " " ||
+		if (.Fill not_in e.particles.flags[id]) &&
+		   (e.particles.initial_symbol[engine.Particle_Id(id)] != ' ' ||
 				   s.color_handling != .Ignore) {
 			i := index_by_id[id]
 			s.start_ticks[i] = tick
 			final_ticks := 36
 			if s.color_handling == .Dynamic &&
-			   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil &&
-			   engine.get_initial_visual(e, engine.Particle_Id(id)).bg == nil {
+			   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil &&
+			   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg == nil {
 				final_ticks = 4
 			}
 			s.last_fire_tick = max(s.last_fire_tick, tick + len(s.fire_palette) * 4 + final_ticks)
@@ -198,7 +198,7 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 
 	initial_coords := e.particles.initial_coord
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		s.final_colors[i] = engine.gradient_sample(
 			final_sampler,
@@ -208,17 +208,18 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		s.start_ticks[i] = -1
 		s.smoke_start_ticks[i] = -1
 		engine.set_foreground(e, id, s.config.starting_color)
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 	}
 	burn_start_ticks(s, e)
 
 	// At most one smoke trail can be born from each source character. Allocate
 	// that exact maximum up front; no hidden per-frame particle allocation.
+	smoke := engine.prepare_appearance(e, engine.Appearance{})
 	characters := engine.particle_batch(e, n)
 	for _ in 0 ..< n {
-		id := engine.add_particle(&characters, ".", engine.coord(0, 0))
+		id := engine.add_particle(&characters, '.', smoke, engine.coord(0, 0))
 		e.particles.layer[id] = 2
-		e.particles.is_visible[id] = false
+		e.particles.flags[id] -= {.Visible}
 		append(&s.smoke_ids, id)
 	}
 }
@@ -235,14 +236,14 @@ burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 	s.smoke_origins[particle] = origin
 	s.smoke_targets[particle] = target
 	s.smoke_steps[particle] = max(
-		engine.round_half_even(engine.line_length(origin, target, true) / 0.5),
+		engine.round_to_int(engine.line_length(origin, target, true) / 0.5),
 		1,
 	)
-	engine.set_particle(e, id, coord = origin)
+	engine.set_particle(e, id, origin)
 	symbols := Burn_Smoke_Symbols
 	engine.set_symbol(e, id, symbols[rand.int_max(len(symbols))])
 	engine.set_foreground(e, id, engine.Color{0x50, 0x4F, 0x4F})
-	engine.set_particle(e, id, visible = true)
+	engine.set_particle(e, id, engine.Visible(true))
 }
 
 burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
@@ -267,17 +268,17 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 			engine.set_foreground(e, id, s.fire_palette[entry])
 		} else {
 			if age == fire_ticks do burn_emit_smoke(s, e, i)
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					s.fire_palette[len(s.fire_palette) - 1],
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					8,
 					min((age - fire_ticks) / 4, 8),
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(
 					e,
@@ -301,7 +302,7 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 		life := max(s.smoke_steps[i], 100)
 		id := s.smoke_ids[i]
 		if age >= life {
-			engine.set_particle(e, id, visible = false)
+			engine.set_particle(e, id, engine.Visible(false))
 			continue
 		}
 		s.active_smoke[write] = i
@@ -310,7 +311,7 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 		engine.set_particle(
 			e,
 			id,
-			coord = engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress),
+			engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress),
 		)
 		engine.set_foreground(
 			e,

@@ -6,7 +6,7 @@ import "core:fmt"
 import "core:math/ease"
 import "core:math/rand"
 
-Crumble_Dust_Symbols :: [3]string{"*", ".", ","}
+Crumble_Dust_Symbols :: [3]rune{'*', '.', ','}
 
 Crumble_Config :: struct {
 	final_gradient_stops:     [dynamic]engine.Color,
@@ -65,7 +65,7 @@ Crumble_State :: struct {
 	vacuum_starts:   [dynamic]int,
 	vacuum_steps:    [dynamic]int,
 	reset_steps:     [dynamic]int,
-	dust_symbols:    [dynamic]string, // five contiguous symbols per character
+	dust_symbols:    [dynamic]rune, // five contiguous symbols per character
 	fall_order:      [dynamic]int,
 	vacuum_order:    [dynamic]int,
 	fall_active:     [dynamic]int,
@@ -121,25 +121,25 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	s.vacuum_starts = make([dynamic]int, n)
 	s.vacuum_steps = make([dynamic]int, n)
 	s.reset_steps = make([dynamic]int, n)
-	s.dust_symbols = make([dynamic]string, n * 5)
+	s.dust_symbols = make([dynamic]rune, n * 5)
 	s.fall_order = make([dynamic]int, n)
 	s.vacuum_order = make([dynamic]int, n)
 
 	initial_coords := e.particles.initial_coord
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	dust_choices := Crumble_Dust_Symbols
 	for id, i in s.characters {
 		input := initial_coords[id]
 		final_color := engine.gradient_sample(sampler, spectrum[:], input)
 		s.final_colors[i] = final_color
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
-			if fg, ok := style.fg.?; ok {
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			if fg, ok := style.colors.fg.?; ok {
 				s.weak_colors[i] = engine.adjust_color_brightness(fg, 0.65)
 				s.dust_colors[i] = engine.adjust_color_brightness(fg, 0.55)
 				s.has_dim_fg[i] = 1
-			} else if style.bg == nil {
+			} else if style.colors.bg == nil {
 				s.weak_colors[i] = engine.adjust_color_brightness(
 					engine.Color{0x80, 0x80, 0x80},
 					0.65,
@@ -150,7 +150,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 				)
 				s.has_dim_fg[i] = 1
 			}
-			if bg, ok := style.bg.?; ok {
+			if bg, ok := style.colors.bg.?; ok {
 				s.weak_bg[i] = engine.adjust_color_brightness(bg, 0.65)
 				s.dust_bg[i] = engine.adjust_color_brightness(bg, 0.55)
 			}
@@ -162,7 +162,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		s.fall_starts[i] = -1
 		s.vacuum_starts[i] = -1
 		s.fall_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(input, engine.coord(input.column, e.canvas.bottom), true) /
 				0.65,
 			),
@@ -172,19 +172,16 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		vacuum_end := engine.coord(input.column, e.canvas.top)
 		vacuum_control := engine.coord(e.canvas.center_column, e.canvas.center_row)
 		s.vacuum_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.quadratic_bezier_length(vacuum_start, vacuum_control, vacuum_end),
 			),
 			1,
 		)
-		s.reset_steps[i] = max(
-			engine.round_half_even(engine.line_length(vacuum_end, input, true)),
-			1,
-		)
+		s.reset_steps[i] = max(engine.round_to_int(engine.line_length(vacuum_end, input, true)), 1)
 		reset_tail := 68
 		if s.color_handling == .Dynamic &&
-		   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil &&
-		   engine.get_initial_visual(e, engine.Particle_Id(id)).bg == nil {
+		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil &&
+		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg == nil {
 			reset_tail = 32
 		}
 		s.reset_max_ticks = max(s.reset_max_ticks, s.reset_steps[i] + reset_tail)
@@ -197,7 +194,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 			engine.set_foreground(e, id, nil)
 		}
 		engine.set_background(e, id, s.weak_bg[i])
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 	}
 	rand.shuffle(s.fall_order[:])
 	rand.shuffle(s.vacuum_order[:])
@@ -260,11 +257,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				age := s.phase_tick - start
 				if age >= 40 + s.fall_steps[i] do continue
 				if age < 40 {
-					engine.set_symbol(
-						e,
-						id,
-						engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-					)
+					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 					if s.has_dim_fg[i] != 0 {
 						engine.set_foreground(
 							e,
@@ -298,7 +291,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				engine.set_particle(
 					e,
 					id,
-					coord = engine.coord_on_line(
+					engine.coord_on_line(
 						input,
 						engine.coord(input.column, e.canvas.bottom),
 						ease.ease(.Bounce_Out, progress),
@@ -340,7 +333,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				engine.set_particle(
 					e,
 					id,
-					coord = engine.coord_on_quadratic_bezier(
+					engine.coord_on_quadratic_bezier(
 						engine.coord(input.column, e.canvas.bottom),
 						engine.coord(e.canvas.center_column, e.canvas.center_row),
 						engine.coord(input.column, e.canvas.top),
@@ -363,32 +356,25 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 					engine.set_particle(
 						e,
 						id,
-						coord = engine.coord_on_line(
+						engine.coord_on_line(
 							engine.coord(input.column, e.canvas.top),
 							input,
 							f64(s.phase_tick + 1) / f64(steps),
 						),
 					)
-					engine.set_symbol(
-						e,
-						id,
-						engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-					)
+					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 					engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
 					engine.set_background(e, id, s.dust_bg[i])
 					continue
 				}
 				flash_age := s.phase_tick - steps
-				engine.set_symbol(
-					e,
-					id,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				)
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				if flash_age < 28 {
 					if s.color_handling == .Dynamic {
-						style := engine.get_initial_visual(e, engine.Particle_Id(id))
+						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 						if s.has_dim_fg[i] != 0 {
-							start := style.fg != nil ? style.fg.? : engine.Color{0x80, 0x80, 0x80}
+							start :=
+								style.colors.fg != nil ? style.colors.fg.? : engine.Color{0x80, 0x80, 0x80}
 							engine.set_foreground(
 								e,
 								id,
@@ -402,7 +388,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 						} else {
 							engine.set_foreground(e, id, nil)
 						}
-						if bg, ok := style.bg.?; ok {
+						if bg, ok := style.colors.bg.?; ok {
 							engine.set_background(
 								e,
 								id,
@@ -430,20 +416,20 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 					}
 				} else {
 					if s.color_handling == .Dynamic {
-						style := engine.get_initial_visual(e, engine.Particle_Id(id))
-						if style.fg == nil && style.bg == nil {
+						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+						if style.colors.fg == nil && style.colors.bg == nil {
 							engine.set_foreground(e, id, nil)
 							engine.set_background(e, id, nil)
 						} else {
-							visual := engine.get_visual(e, id)
+							appearance := engine.get_appearance(e, id)
 							engine.dynamic_gradient_to_input(
-								&visual,
+								&appearance,
 								engine.Color{0xFF, 0xFF, 0xFF},
 								style,
 								9,
 								min((flash_age - 28) / 4, 9),
 							)
-							engine.set_visual(e, id, visual)
+							engine.set_appearance(e, id, appearance)
 						}
 					} else {
 						engine.set_foreground(

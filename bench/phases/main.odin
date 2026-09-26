@@ -16,7 +16,7 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 	rand.reset_u64(1)
 	cfg := engine.config_default()
 	cfg.frame_rate = 0
-	e, err := engine.engine_make(input, cfg, context.allocator)
+	e, err := engine.engine_make(input, cfg)
 	assert(err == .None)
 	fx, ok := effects.make_effect(kind, nil)
 	assert(ok)
@@ -44,7 +44,7 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 		s := e.stats
 		other := playback - update - s.compose - s.emit - s.write
 		fmt.eprintf(
-			"%v\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			"%v\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
 			kind,
 			sample,
 			frames,
@@ -65,10 +65,8 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 			s.blank_cells,
 			s.blank_spans,
 			s.cursor_moves,
-			s.long_symbols,
 			s.patched_cells,
-			s.rebuilt_rows,
-			s.packet_bytes_copied,
+			s.cell_bytes_written,
 			s.ownership_visits,
 		)
 	} else {
@@ -95,7 +93,7 @@ main :: proc() {
 	defer delete(input)
 	when engine.FRAME_STATS_ENABLED {
 		fmt.eprintln(
-			"effect\tsample\tframes\tupdate_ms\tcompose_ms\temit_ms\twrite_ms\tplayback_ms\tother_ms\tdirty_rows\tmax_dirty_rows\tdescriptors\tmax_descriptors\twritev_calls\twrite_bytes\tcandidate_visits\tcells\tblank_cells\tblank_spans\tcursor_moves\tlong_symbols\tpatched_cells\trebuilt_rows\tpacket_bytes_copied\townership_visits",
+			"effect\tsample\tframes\tupdate_ms\tcompose_ms\temit_ms\twrite_ms\tplayback_ms\tother_ms\tdirty_rows\tmax_dirty_rows\tdescriptors\tmax_descriptors\twritev_calls\twrite_bytes\tcandidate_visits\tcells\tblank_cells\tblank_spans\tcursor_moves\tpatched_cells\tcell_bytes_written\townership_visits",
 		)
 	} else {fmt.eprintln("effect\tsample\tframes\tupdate_ms\tframe_build_ms\tplayback_ms")}
 	for kind in ([]effects.Effect_Kind{.Colorshift, .Decrypt, .Binarypath, .Burn, .Laseretch, .Rain, .Print}) {

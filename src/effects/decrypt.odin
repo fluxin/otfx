@@ -58,7 +58,7 @@ Decrypt_Fast_Frames :: 80
 Decrypt_Slow_Max_Frames :: 15
 Decrypt_Fast_Ticks :: Decrypt_Fast_Frames * 2
 Decrypt_Discovered_Ticks :: 11 * 5 // ten interpolation steps plus exact final
-Decrypt_Block_Symbols :: [4]string{"▉", "▓", "▒", "░"}
+Decrypt_Block_Symbols :: [4]rune{'▉', '▓', '▒', '░'}
 
 // Per-character timeline columns. Symbol values are u16 indices into the
 // shared encrypted alphabet; there are no scene/event objects in the hot path.
@@ -83,25 +83,26 @@ Decrypt_State :: struct {
 	decrypt_tick:        int,
 	decrypt_finish_tick: int,
 	phase:               Decrypt_Phase,
-	cipher_codes:        [dynamic]engine.Visual_Id, // encrypted symbol x ciphertext color
-	typing_codes:        [dynamic]engine.Visual_Id, // n * Decrypt_Typing_Frames
+	encrypted_symbols:   [dynamic]rune,
+	typing_glyphs:       [dynamic]rune,
+	cipher_codes:        [dynamic]engine.Appearance_Id, // ciphertext appearance palette
+	typing_codes:        [dynamic]engine.Appearance_Id, // n * Decrypt_Typing_Frames
 	color_index:         [dynamic]int, // decrypt row -> ciphertext palette
-	cipher_colors:       int,
 	color_handling:      engine.Existing_Color_Handling,
 }
 
-encrypted_symbols_build :: proc() -> [dynamic]string {
-	symbols: [dynamic]string
-	for n in 33 ..< 127 do append(&symbols, engine.rune_to_string(rune(n)))
-	for n in 9608 ..< 9632 do append(&symbols, engine.rune_to_string(rune(n)))
-	for n in 9472 ..< 9599 do append(&symbols, engine.rune_to_string(rune(n)))
-	for n in 174 ..< 452 do append(&symbols, engine.rune_to_string(rune(n)))
+encrypted_symbols_build :: proc() -> [dynamic]rune {
+	symbols: [dynamic]rune
+	for n in 33 ..< 127 do append(&symbols, rune(n))
+	for n in 9608 ..< 9632 do append(&symbols, rune(n))
+	for n in 9472 ..< 9599 do append(&symbols, rune(n))
+	for n in 174 ..< 452 do append(&symbols, rune(n))
 	return symbols
 }
 
 decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	encrypted_symbols := encrypted_symbols_build()
-	defer delete(encrypted_symbols)
+	s.encrypted_symbols = encrypted_symbols
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -181,30 +182,23 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 		)
 	}
 
-	// Playback visuals are (encrypted symbol, ciphertext color) products, so
-	// intern that shared product once. Typing needs its own five-frame rows.
 	palette := max(len(s.config.ciphertext_colors), 1)
-	s.cipher_colors = palette
-	s.cipher_codes = make([dynamic]engine.Visual_Id, len(encrypted_symbols) * palette)
-	for symbol, si in encrypted_symbols {
-		for color, ci in s.config.ciphertext_colors {
-			s.cipher_codes[si * palette + ci] = engine.prepare_visual(
-				e,
-				engine.Visual{symbol = symbol, fg = color},
-			)
-		}
+	s.cipher_codes = make([dynamic]engine.Appearance_Id, palette)
+	for color, ci in s.config.ciphertext_colors {
+		s.cipher_codes[ci] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
 	}
-	s.typing_codes = make([dynamic]engine.Visual_Id, n * Decrypt_Typing_Frames)
+	s.typing_glyphs = make([dynamic]rune, n * Decrypt_Typing_Frames)
+	s.typing_codes = make([dynamic]engine.Appearance_Id, n * Decrypt_Typing_Frames)
 	blocks := Decrypt_Block_Symbols
 	for i in 0 ..< n {
 		for frame in 0 ..< Decrypt_Typing_Frames {
 			symbol :=
 				frame < Decrypt_Typing_Frames - 1 ? blocks[frame] : encrypted_symbols[int(typing_symbols[i])]
-			s.typing_codes[i * Decrypt_Typing_Frames + frame] = engine.prepare_visual(
+			s.typing_glyphs[i * Decrypt_Typing_Frames + frame] = symbol
+			s.typing_codes[i * Decrypt_Typing_Frames + frame] = engine.prepare_appearance(
 				e,
-				engine.Visual {
-					symbol = symbol,
-					fg = typing_colors[i * Decrypt_Typing_Frames + frame],
+				engine.Appearance {
+					colors = {fg = typing_colors[i * Decrypt_Typing_Frames + frame]},
 				},
 			)
 		}
@@ -223,7 +217,7 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 					s.typing_head += 1
 					s.typing_start_ticks[i] = s.typing_tick
 					s.typing_finish_tick = max(s.typing_finish_tick, s.typing_tick + 9)
-					engine.set_particle(e, s.characters[i], visible = true)
+					engine.set_particle(e, s.characters[i], engine.Visible(true))
 				}
 			}
 			samples := Decrypt_Typing_Samples
@@ -237,9 +231,10 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 			for change in changes {
 				i := s.typing_tail + change.slot
 				id, frame := s.characters[i], change.sample
-				engine.set_visual(e, id, s.typing_codes[i * Decrypt_Typing_Frames + frame])
+				engine.set_symbol(e, id, s.typing_glyphs[i * Decrypt_Typing_Frames + frame])
+				engine.set_appearance(e, id, s.typing_codes[i * Decrypt_Typing_Frames + frame])
 			}
-			// Activations are ordered, so completed visual writers form a prefix.
+			// Activations are ordered, so completed appearance writers form a prefix.
 			// The existing finish tick still supplies the final one-tick hold.
 			for s.typing_tail < s.typing_head &&
 			    s.typing_previous[s.typing_tail] == Decrypt_Typing_Frames - 1 {
@@ -251,18 +246,18 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 	}
 	if s.phase == .Decrypting {
 		if s.decrypt_tick == s.decrypt_finish_tick do return false
-		palette := s.cipher_colors
 		if s.decrypt_tick < Decrypt_Fast_Ticks {
 			frame := s.decrypt_tick / 2
 			for base := 0; base < len(s.characters); base += 8 {
 				count := min(8, len(s.characters) - base)
-				codes: [8]engine.Visual_Id
+				codes: [8]engine.Appearance_Id
 				for lane in 0 ..< count {
 					i := base + lane
 					symbol := int(s.fast_symbols[i * Decrypt_Fast_Frames + frame])
-					codes[lane] = s.cipher_codes[symbol * palette + s.color_index[i]]
+					engine.set_symbol(e, s.characters[i], s.encrypted_symbols[symbol])
+					codes[lane] = s.cipher_codes[s.color_index[i]]
 				}
-				engine.set_visuals(e, s.characters[base:base + count], codes[:count])
+				engine.set_appearances(e, s.characters[base:base + count], codes[:count])
 			}
 			s.decrypt_tick += 1
 			return true
@@ -279,37 +274,38 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 			}
 			if frame < int(s.slow_counts[i]) {
 				symbol := int(s.slow_symbols[base + frame])
-				engine.set_visual(e, id, s.cipher_codes[symbol * palette + int(s.color_index[i])])
+				engine.set_symbol(e, id, s.encrypted_symbols[symbol])
+				engine.set_appearance(e, id, s.cipher_codes[s.color_index[i]])
 				s.slow_active[write] = i
 				write += 1
 				continue
 			}
 			discovered_tick := slow_tick - s.slow_totals[i]
-			visual := engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-			}
+			appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
+			appearance := engine.Appearance{}
 			if s.color_handling == .Dynamic {
 				step := min(discovered_tick / 5, 10)
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					engine.Color{0xff, 0xff, 0xff},
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					10,
 					step,
 				)
 			} else {
 				if discovered_tick < Decrypt_Discovered_Ticks {
-					visual.fg = engine.gradient_between_step(
+					appearance.colors.fg = engine.gradient_between_step(
 						engine.Color{0xff, 0xff, 0xff},
 						s.final_colors[i],
 						10,
 						min(discovered_tick / 5, 10),
 					)
 				} else {
-					visual.fg = s.final_colors[i]
+					appearance.colors.fg = s.final_colors[i]
 				}
 			}
-			engine.set_visual(e, id, visual)
+			engine.set_symbol(e, id, appearance_symbol)
+			engine.set_appearance(e, id, appearance)
 			if discovered_tick < Decrypt_Discovered_Ticks {
 				s.slow_active[write] = i
 				write += 1

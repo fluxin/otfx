@@ -1,51 +1,35 @@
 package engine
 
 import "core:container/bit_array"
-import "core:mem"
 import "core:time"
 
 // Engine state, construction, and playback time.
 
 Engine :: struct {
-	cfg:               Terminal_Config,
-	canvas:            Canvas,
-	terminal_width:    int,
-	terminal_height:   int,
-	input_line_widths: [dynamic]int,
-	resize_seen_at:    Maybe(time.Tick),
-	particles:         Particle_Storage, // struct-of-arrays arena
-	mono_start:        time.Tick,
-	particle_sets:     Particle_Sets,
-	layout:            Render_Layout,
-	frame_particles:   []Particle_Id,
-	frame_candidates:  [dynamic]Particle_Id,
-	frame_generation:  Frame_Selection,
-	dirty_rows:        []bool,
-	cell_heads:        []Particle_Id,
-	frame_visuals:     []Visual_Id,
-	row_bytes:         [][dynamic]byte,
-	row_valid:         []bool,
-	dirty_cells:       bit_array.Bit_Array,
-	row_changes:       []int,
-	cell_offsets:      []int,
-	blank_row:         []byte,
-	visual_ids:        map[Visual]Visual_Id,
-	visuals:           [dynamic]Visual_Entry,
-	output_parts:      [dynamic][]byte,
-	capture_buf:       [dynamic]byte,
-	last_print:        time.Tick,
-	logical_frame:     int,
-	stats:             Frame_Stats_State,
+	cfg:                   Terminal_Config,
+	canvas:                Canvas,
+	terminal_width:        int,
+	terminal_height:       int,
+	input_line_widths:     [dynamic]int,
+	resize_seen_at:        Maybe(time.Tick),
+	particles:             Particle_Storage, // struct-of-arrays arena
+	mono_start:            time.Tick,
+	particle_sets:         Particle_Sets,
+	layout:                Render_Layout,
+	updates:               [dynamic]Particle_Update,
+	cells:                 []Render_Cell,
+	rows:                  []Render_Row,
+	dirty_cells:           bit_array.Bit_Array,
+	dirty_rows, emit_rows: bit_array.Bit_Array,
+	canvas_bytes:          []byte, // contiguous fixed-width cell slots, borrowed by rows
+	cell_stride:           int,
+	shared_appearances:    [dynamic]Appearance,
+	last_print:            time.Tick,
+	logical_frame:         int,
+	stats:                 Frame_Stats_State,
 }
 
-engine_make :: proc(
-	input: string,
-	cfg: Terminal_Config,
-	formatted_allocator: mem.Allocator,
-) -> (
-	Engine,
-	Input_Error,
-) {
+engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error) {
 	e: Engine
 	e.cfg = cfg
 	e.mono_start = time.tick_now()
@@ -64,22 +48,25 @@ engine_make :: proc(
 	e.terminal_width, e.terminal_height = term_w, term_h
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
-	e.frame_particles = make([]Particle_Id, width * height)
-	for &id in e.frame_particles do id = -1
-	e.dirty_rows = make([]bool, height)
-	e.cell_heads = make([]Particle_Id, width * height)
-	e.frame_visuals = make([]Visual_Id, width * height)
-	e.row_bytes = make([][dynamic]byte, height)
-	e.row_valid = make([]bool, height)
+	e.cells = make([]Render_Cell, width * height)
+	for &cell in e.cells do cell.top = -1
+	e.rows = make([]Render_Row, height)
 	bit_array.init(&e.dirty_cells, width * height)
-	e.row_changes = make([]int, height)
-	e.cell_offsets = make([]int, (width + 1) * height)
-	for &bytes in e.row_bytes do reserve(&bytes, width * size_of(Packet) + 52)
-	for &dirty in e.dirty_rows do dirty = true
-	e.blank_row = make([]byte, width)
-	for &b in e.blank_row do b = ' '
-	reserve(&e.output_parts, height * 2 + 1)
-	visual_pool_init(&e)
+	bit_array.init(&e.dirty_rows, height)
+	bit_array.init(&e.emit_rows, height)
+	for &row, i in e.rows {
+		row.cells = e.cells[i * width:(i + 1) * width]
+		bit_array.set(&e.dirty_rows, i)
+	}
+	e.cell_stride = 4 if cfg.no_color else 51
+	e.canvas_bytes = make([]byte, width * height * e.cell_stride)
+	for &cell, i in e.cells {
+		cell.bytes = e.canvas_bytes[i * e.cell_stride:(i + 1) * e.cell_stride]
+		cell.bytes[0] = ' '
+	}
+	row_length := width * e.cell_stride
+	for &row, i in e.rows do row.bytes = e.canvas_bytes[i * row_length:(i + 1) * row_length]
+	reserve(&e.shared_appearances, max(e.canvas.top * e.canvas.right, 64))
 	setup_input_particles(&e, lines)
 	// drop characters that landed outside the canvas (same as upstream)
 	write := 0
@@ -99,7 +86,6 @@ engine_make :: proc(
 		occupied[(c.row - 1) * e.canvas.right + c.column - 1] = true
 	}
 	make_fill_particles(&e, occupied)
-	reserve(&e.frame_candidates, cap(e.particles))
 	delete(occupied)
 	return e, .None
 }

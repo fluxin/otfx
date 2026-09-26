@@ -6,7 +6,7 @@ import "core:fmt"
 import "core:math/ease"
 
 @(private, rodata)
-Print_Typing_Symbols: [4]string = {"█", "█", "▓", "▒"}
+Print_Typing_Symbols: [4]rune = {'█', '█', '▓', '▒'}
 
 Print_Config :: struct {
 	print_head_return_speed:  f64,
@@ -91,13 +91,14 @@ print_row_characters :: proc(s: ^Print_State, row_index: int) -> []engine.Partic
 
 print_row_all_fill :: proc(chars: ^engine.Particle_Storage, ids: []engine.Particle_Id) -> bool {
 	for id in ids {
-		if !chars.is_fill[id] do return false
+		if (.Fill not_in chars.flags[id]) do return false
 	}
 	return true
 }
 
 print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
-	s.typing_head = engine.add_particle(e, "█", engine.coord(1, 1))
+	typing_appearance := engine.prepare_appearance(e, engine.Appearance{})
+	s.typing_head = engine.add_particle(e, '█', typing_appearance, engine.coord(1, 1))
 
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
@@ -148,7 +149,7 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		right_extent := 0
 		if !all_fill {
 			for id in group {
-				if !e.particles.is_fill[id] do right_extent = max(right_extent, e.particles.initial_coord[id].column)
+				if (.Fill not_in e.particles.flags[id]) do right_extent = max(right_extent, e.particles.initial_coord[id].column)
 			}
 		}
 		start := len(s.row_chars)
@@ -177,7 +178,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 			for _ in 0 ..< count {
 				id := characters[row.typed]
 				row.typed += 1
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 				s.char_start_ticks[id] = s.tick
 				append(&s.active_chars, id)
 				s.last_column = e.particles.initial_coord[id].column
@@ -190,7 +191,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 					engine.set_particle(
 						e,
 						id,
-						coord = engine.Coord {
+						engine.Coord {
 							e.particles.current_coord[id].column,
 							e.particles.current_coord[id].row + (1),
 						},
@@ -206,7 +207,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 			   !print_row_all_fill(&e.particles, current_ids) {
 				left_extent := e.canvas.right
 				for id in current_ids {
-					if !e.particles.is_fill[id] do left_extent = min(left_extent, e.particles.initial_coord[id].column)
+					if (.Fill not_in e.particles.flags[id]) do left_extent = min(left_extent, e.particles.initial_coord[id].column)
 				}
 				trim := 0
 				for trim < len(current_ids) && e.particles.initial_coord[current_ids[trim]].column < left_extent do trim += 1
@@ -216,12 +217,12 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 			}
 
 			s.head_origin = engine.coord(s.last_column, 1)
-			engine.set_particle(e, s.typing_head, coord = s.head_origin)
-			engine.set_particle(e, s.typing_head, visible = true)
+			engine.set_particle(e, s.typing_head, s.head_origin)
+			engine.set_particle(e, s.typing_head, engine.Visible(true))
 			target_column := e.particles.initial_coord[current_ids[0]].column
 			s.head_target = engine.coord(target_column, 1)
 			s.head_max_steps = max(
-				engine.round_half_even(
+				engine.round_to_int(
 					engine.line_length(s.head_origin, s.head_target, true) /
 					s.config.print_head_return_speed,
 				),
@@ -241,20 +242,20 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 		if frame < 4 {
 			engine.set_symbol(e, id, Print_Typing_Symbols[frame])
 		} else if frame == 4 {
-			engine.set_symbol(e, id, "░")
+			engine.set_symbol(e, id, '░')
 		} else {
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 		}
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
-			if fg, ok := style.fg.?; ok {
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			if fg, ok := style.colors.fg.?; ok {
 				engine.set_foreground(e, id, engine.gradient_between_step(white, fg, 5, frame))
-			} else if style.bg == nil && frame < 5 {
+			} else if style.colors.bg == nil && frame < 5 {
 				engine.set_foreground(e, id, white)
 			} else {
 				engine.set_foreground(e, id, nil)
 			}
-			if bg, ok := style.bg.?; ok {
+			if bg, ok := style.colors.bg.?; ok {
 				engine.set_background(e, id, engine.gradient_between_step(white, bg, 5, frame))
 			} else {
 				engine.set_background(e, id, nil)
@@ -278,15 +279,15 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 		engine.set_particle(
 			e,
 			s.typing_head,
-			coord = engine.coord_on_line(
+			engine.coord_on_line(
 				s.head_origin,
 				s.head_target,
 				ease.ease(s.config.print_head_easing, progress),
 			),
 		)
 		if age + 1 >= s.head_max_steps {
-			engine.set_particle(e, s.typing_head, coord = s.head_target)
-			engine.set_particle(e, s.typing_head, visible = false)
+			engine.set_particle(e, s.typing_head, s.head_target)
+			engine.set_particle(e, s.typing_head, engine.Visible(false))
 			s.head_return_active = false
 		}
 	}

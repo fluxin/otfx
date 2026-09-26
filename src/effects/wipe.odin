@@ -129,12 +129,8 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		case .Dynamic:
 			s.frame_spans[id] = engine.create_timeline(
 				&s.frames,
-				{
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).fg,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).bg,
-					false,
-				},
+				e.particles.initial_symbol[id],
+				engine.Appearance{colors = engine.get_initial_appearance(e, id).colors},
 				s.config.final_gradient_frames,
 				gradient_steps + 1,
 			)
@@ -142,7 +138,7 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 			final := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
 			s.frame_spans[id] = engine.create_timeline(
 				&s.frames,
-				engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+				e.particles.initial_symbol[engine.Particle_Id(id)],
 				s.config.final_gradient_frames,
 				spectrum[0],
 				final,
@@ -161,7 +157,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 		change := engine.group_reveal_step(&s.reveal)
 		for gi in change.added.start ..< change.added.start + change.added.len {
 			for id in engine.group_members(s.reveal.groups, gi) {
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 				s.start_ticks[id] = s.tick
 				if s.active_by_id[id] == 0 {
 					s.active_by_id[id] = 1
@@ -173,7 +169,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 			for id in engine.group_members(s.reveal.groups, gi) {
 				s.active_by_id[id] = 0
 				s.start_ticks[id] = -1
-				engine.set_particle(e, id, visible = false)
+				engine.set_particle(e, id, engine.Visible(false))
 			}
 		}
 		s.wipe_delay = s.config.wipe_delay
@@ -186,7 +182,8 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 		span := s.frame_spans[id]
 		age := s.tick - s.start_ticks[id]
 		frame := age / s.config.final_gradient_frames
-		engine.set_visual(e, id, s.frames[span.start + frame].visual)
+		engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
+		engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
 		if age + 1 == span.len * s.config.final_gradient_frames {
 			s.active_by_id[id] = 0
 		} else {

@@ -201,9 +201,9 @@ adjust_color_brightness :: proc(color: Color, brightness: f64) -> Color {
 	hsla.z = clamp(hsla.z, 0.0, 1.0)
 	rgba = linalg.vector4_hsl_to_rgb(hsla.x, hsla.y, hsla.z, hsla.w)
 	return {
-		u8(round_half_even(rgba.x * 255)),
-		u8(round_half_even(rgba.y * 255)),
-		u8(round_half_even(rgba.z * 255)),
+		u8(round_to_int(rgba.x * 255)),
+		u8(round_to_int(rgba.y * 255)),
+		u8(round_to_int(rgba.z * 255)),
 	}
 }
 

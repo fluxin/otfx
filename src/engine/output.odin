@@ -2,6 +2,7 @@ package engine
 
 import "base:intrinsics"
 import "core:c/libc"
+import "core:container/bit_array"
 import "core:fmt"
 import "core:os"
 import "core:strconv"
@@ -13,6 +14,17 @@ import "core:time"
 // Terminal I/O, cursor lifecycle, resize handling, and explicit capture.
 
 Frame_Origin :: string(ansi.DECRC + ansi.DECSC)
+
+// Cursor-next-line also returns to column one. Storage lives through writev.
+row_move :: proc(buf: []byte, rows: int) -> []byte {
+	if rows == 0 do return nil
+	if rows == 1 do return transmute([]byte)string("\x1b[1E")
+	buf[0], buf[1] = '\x1b', '['
+	digits := strconv.write_uint(buf[2:], u64(rows), 10)
+	end := 2 + len(digits)
+	buf[end] = 'E'
+	return buf[:end + 1]
+}
 
 prep_canvas :: proc(reuse_canvas: bool, visible_right, visible_top: int) {
 	os.write_string(os.stdout, ansi.CSI + ansi.DECTCEM_HIDE)
@@ -48,35 +60,26 @@ move_cursor_up :: proc(n: int) -> string {
 	return fmt.tprintf("%s%d%s", ansi.CSI, n, ansi.CUU)
 }
 
-buf_append_decimal :: proc(buf: ^$Buffer, v: int) {
-	// Colors fit three digits; cursor distances can span the full canvas.
-	if v >= 1000 {
-		storage: [20]byte
-		append(buf, ..transmute([]byte)strconv.write_int(storage[:], i64(v), 10))
-		return
+// Capture owns its contiguous copy. Terminal output borrows row bytes instead.
+frame_bytes :: proc(e: ^Engine, allocator := context.temp_allocator) -> []byte {
+	move: [24]byte
+	length, cursor := 0, 0
+	rows := bit_array.make_iterator(&e.emit_rows)
+	for i, ok := bit_array.iterate_by_set(&rows); ok; i, ok = bit_array.iterate_by_set(&rows) {
+		row := &e.rows[i]
+		length += len(row_move(move[:], i - cursor)) + len(row.bytes)
+		cursor = i
 	}
-	if v >= 100 {
-		append(buf, byte('0') + byte(v / 100))
+	out := make([]byte, length, allocator)
+	used := 0
+	cursor = 0
+	rows = bit_array.make_iterator(&e.emit_rows)
+	for i, ok := bit_array.iterate_by_set(&rows); ok; i, ok = bit_array.iterate_by_set(&rows) {
+		used += copy(out[used:], row_move(move[:], i - cursor))
+		used += copy(out[used:], e.rows[i].bytes)
+		cursor = i
 	}
-	if v >= 10 {
-		append(buf, byte('0') + byte((v / 10) % 10))
-	}
-	append(buf, byte('0') + byte(v % 10))
-}
-
-// Copy cached bytes into the frame; encoding remains in the appearance setters.
-write_output :: #force_inline proc(out: ^[dynamic]byte, used: ^int, bytes: []byte) {
-	end := used^ + len(bytes)
-	if end > len(out^) do non_zero_resize(out, max(end, 2 * len(out^)))
-	copy(out^[used^:end], bytes)
-	used^ = end
-}
-
-// Contiguous capture is an explicit consumer, not a second renderer.
-frame_bytes :: proc(e: ^Engine) -> []byte {
-	clear(&e.capture_buf)
-	for part in e.output_parts do append(&e.capture_buf, ..part)
-	return e.capture_buf[:]
+	return out
 }
 
 // The syscall boundary is the only consumer needing native iovec descriptors.
@@ -110,16 +113,23 @@ write_vectors :: proc(fd: linux.Fd, vectors: []linux.IO_Vec, e: ^Engine = nil) -
 print_frame :: proc(e: ^Engine) {
 	when FRAME_STATS_ENABLED {e.stats.clock = time.tick_now()}
 	storage: [1024]linux.IO_Vec
+	moves: [1024][24]byte = ---
 	prefix := transmute([]byte)Frame_Origin
 	storage[0] = {raw_data(prefix), uint(len(prefix))}
 	count := 1
-	for bytes in e.output_parts {
-		storage[count] = {raw_data(bytes), uint(len(bytes))}
-		count += 1
-		if count == len(storage) {
-			if write_vectors(1, storage[:count], e) != nil do return
-			count = 0
+	cursor := 0
+	rows := bit_array.make_iterator(&e.emit_rows)
+	for i, ok := bit_array.iterate_by_set(&rows); ok; i, ok = bit_array.iterate_by_set(&rows) {
+		for bytes in ([2][]byte{row_move(moves[count][:], i - cursor), e.rows[i].bytes}) {
+			if len(bytes) == 0 do continue
+			storage[count] = {raw_data(bytes), uint(len(bytes))}
+			count += 1
+			if count == len(storage) {
+				if write_vectors(1, storage[:count], e) != nil do return
+				count = 0
+			}
 		}
+		cursor = i
 	}
 	if count != 0 do write_vectors(1, storage[:count], e)
 	os.flush(os.stdout)

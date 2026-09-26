@@ -1,0 +1,9 @@
+effect	reference_best_ms	candidate_best_ms	reference_frames	candidate_frames	reference_mean_ms	candidate_mean_ms	reference_cpu_ms	candidate_cpu_ms	reference_rss_kib	candidate_rss_kib	best_change_pct
+beams	1.0	0.8	164	193	1.0	0.8	0.9	0.8	27992.0	3588.0	-19.999999999999996
+binarypath	1.5	0.8	394	402	1.5	0.8	1.4	0.8	34416.0	3780.0	-46.666666666666664
+expand	1.0	0.4	41	41	1.0	0.4	0.9	0.3	32584.0	3592.0	-60.0
+fireworks	1.5	0.9	1156	654	1.5	0.9	1.4	0.9	36784.0	3768.0	-40.0
+laseretch	1.4	0.7	270	269	1.4	0.7	1.3	0.7	36824.0	3784.0	-50.0
+print	0.9	0.4	129	129	0.9	0.4	0.9	0.4	36304.0	3720.0	-55.55555555555556
+swarm	1.5	1.1	1346	1401	1.5	1.1	1.5	1.1	36856.0	5932.0	-26.66666666666666
+wipe	0.8	0.4	138	138	0.8	0.4	0.8	0.3	25952.0	3588.0	-50.0

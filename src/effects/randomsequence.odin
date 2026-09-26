@@ -115,7 +115,7 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 
 	for id, slot in chars {
 		s.index_by_id[id] = slot
-		e.particles.is_visible[id] = false
+		e.particles.flags[id] -= {.Visible}
 		append(&s.pending, id)
 	}
 	rand.shuffle(s.pending[:])
@@ -128,11 +128,11 @@ randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool
 	for _ in 0 ..< s.chars_per_tick {
 		if len(s.pending) == 0 do break
 		next := pop(&s.pending)
-		engine.set_particle(e, next, visible = true)
+		engine.set_particle(e, next, engine.Visible(true))
 		slot := s.index_by_id[next]
 		s.start_ticks[slot] = s.tick
 		append(&s.active_slots, slot)
-		engine.set_symbol(e, next, engine.get_initial_visual(e, engine.Particle_Id(next)).symbol)
+		engine.set_symbol(e, next, e.particles.initial_symbol[engine.Particle_Id(next)])
 	}
 	write := 0
 	for slot in s.active_slots {
@@ -140,18 +140,18 @@ randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool
 		id := s.characters[slot]
 		life := s.palette_len * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
-			if style.fg != nil || style.bg != nil {
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			if style.colors.fg != nil || style.colors.bg != nil {
 				step := min(age / s.config.final_gradient_frames, 7)
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					e.cfg.terminal_background_color,
 					style,
 					7,
 					step,
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 				life = 8 * s.config.final_gradient_frames
 			} else {
 				if age < 8 * s.config.final_gradient_frames {

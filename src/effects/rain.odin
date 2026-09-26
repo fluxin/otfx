@@ -13,7 +13,7 @@ import "core:slice"
 Rain_Config :: struct {
 	rain_colors:              [dynamic]engine.Color,
 	movement_speed:           Float_Range_Value,
-	rain_symbols:             [dynamic]string,
+	rain_symbols:             [dynamic]rune,
 	final_gradient_stops:     [dynamic]engine.Color,
 	final_gradient_steps:     [dynamic]int,
 	final_gradient_direction: engine.Gradient_Direction,
@@ -39,7 +39,7 @@ rain_config_default :: proc() -> Rain_Config {
 			engine.Color{0xE3, 0xEF, 0xFC},
 		},
 	)
-	append(&cfg.rain_symbols, ..[]string{"o", ".", ",", "*", "|"})
+	append(&cfg.rain_symbols, ..[]rune{'o', '.', ',', '*', '|'})
 	append(
 		&cfg.final_gradient_stops,
 		..[]engine.Color {
@@ -87,7 +87,7 @@ Rain_State :: struct {
 	active_slots:   [dynamic]int, // dense slots that still move or fade
 	final_colors:   [dynamic]engine.Color,
 	drop_colors:    [dynamic]engine.Color,
-	drop_symbols:   [dynamic]string,
+	drop_symbols:   [dynamic]rune,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
 	by_row_head:    int,
@@ -129,7 +129,7 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.drop_colors = make([dynamic]engine.Color, n)
-	s.drop_symbols = make([dynamic]string, n)
+	s.drop_symbols = make([dynamic]rune, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
 	reserve(&s.pending, n)
@@ -147,7 +147,7 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 		e.particles.current_coord[id] = engine.coord(c.column, e.canvas.top)
 		speed := rand.float64_range(s.config.movement_speed.lo, s.config.movement_speed.hi)
 		s.max_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(e.particles.current_coord[id], c, true) / speed,
 			),
 			1,
@@ -168,7 +168,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 	by_row := s.by_row[:]
 	pending := &s.pending
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
-	visible := e.particles.is_visible[:]
+	visible_flags := e.particles.flags[:]
 	if s.by_row_head >= len(by_row) && len(pending^) == 0 && len(s.active_slots) == 0 {
 		return false
 	}
@@ -191,7 +191,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 			unordered_remove(pending, idx)
 			slot := s.index_by_id[next]
 			s.start_ticks[slot] = s.tick
-			engine.set_particle(e, next, visible = true)
+			engine.set_particle(e, next, engine.Visible(true))
 			append(&s.active_slots, slot)
 		}
 	}
@@ -205,7 +205,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_line(
+				engine.coord_on_line(
 					engine.coord(e.particles.initial_coord[id].column, e.canvas.top),
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -214,20 +214,20 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 			engine.set_symbol(e, id, s.drop_symbols[slot])
 			engine.set_foreground(e, id, s.drop_colors[slot])
 		} else {
-			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_particle(e, id, e.particles.initial_coord[id])
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			fade_tick := age - (s.max_steps[slot] - 1)
 			fade_step := min(fade_tick / 3, 7)
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					s.drop_colors[slot],
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					7,
 					fade_step,
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(
 					e,

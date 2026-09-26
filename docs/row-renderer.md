@@ -1,5 +1,9 @@
 # Incremental cell ownership and row bytes
 
+Subsequent state and API simplifications are recorded in
+[engine consolidation](engine-consolidation.md); the measurements below describe
+the original retained-renderer checkpoint.
+
 The 35-effect CLI benchmark falls from **93.2 to 48.2 ms mean best wall time**
 against frozen otfx `f75ea5a5`. Mean child CPU falls from 93.1 to 48.1 ms;
 average peak RSS grows from 10.7 to 11.3 MiB. Geometric speedup is **1.83×**.

@@ -75,6 +75,7 @@ Swarm_State :: struct {
 	index_by_id:        [dynamic]int,
 	group_by_index:     [dynamic]int,
 	final_colors:       [dynamic]engine.Color,
+	landing_colors:     [dynamic][11]engine.Color_Pair,
 	swarms:             engine.Particle_Groups,
 	group_stage_counts: [dynamic]int,
 	flash_colors:       [dynamic]engine.Color,
@@ -139,6 +140,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
+	s.landing_colors = make([dynamic][11]engine.Color_Pair, n)
 	s.waypoints = make([dynamic]engine.Coord, n * s.stage_stride)
 	s.lane_origins = make([dynamic]engine.Coord, n * s.stage_stride)
 	s.lane_starts = make([dynamic]int, n * s.stage_stride)
@@ -151,15 +153,45 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 
 	initial_coords := e.particles.initial_coord
 	current_coords := e.particles.current_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
-		visible[id] = false
+		input := engine.get_initial_appearance(e, id)
+		for step in 0 ..< 11 {
+			appearance := engine.get_appearance(e, id)
+			if s.color_handling == .Dynamic {
+				if input.colors.fg == nil && input.colors.bg == nil {
+					appearance.colors.fg = engine.gradient_between_step(
+						s.config.flash_color,
+						engine.Color{255, 255, 255},
+						10,
+						step,
+					)
+				} else {
+					engine.dynamic_gradient_to_input(
+						&appearance,
+						s.config.flash_color,
+						input,
+						10,
+						step,
+					)
+				}
+			} else {
+				appearance.colors.fg = engine.gradient_between_step(
+					s.config.flash_color,
+					s.final_colors[i],
+					10,
+					step,
+				)
+			}
+			s.landing_colors[i][step] = appearance.colors
+		}
+		visible_flags[id] -= {.Visible}
 		current_coords[id] = engine.canvas_random_coord(e.canvas, true, false)
 	}
 
-	swarm_size := max(engine.round_half_even(f64(n) * s.config.swarm_size), 1)
+	swarm_size := max(engine.round_to_int(f64(n) * s.config.swarm_size), 1)
 	for start := 0; start < n; start += swarm_size {
 		end := min(start + swarm_size, n)
 		span_start := len(s.swarms.members)
@@ -314,7 +346,7 @@ swarm_plan_segment :: proc(
 	row := swarm_lane_index(s, character, stage)
 	target := swarm_waypoint(s, character, stage)
 	steps := max(
-		engine.round_half_even(
+		engine.round_to_int(
 			engine.line_length(origin, target, true) / swarm_stage_speed(stage, stage_count),
 		),
 		1,
@@ -368,9 +400,9 @@ swarm_plan_group :: proc(s: ^Swarm_State, e: ^engine.Engine, group, start_tick: 
 		stage_count := s.group_stage_counts[group]
 		if stage + 1 == stage_count {
 			id := s.characters[i]
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 			fade_ticks :=
-				s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 36 : 33
+				s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 36 : 33
 			s.lane_finish[i] = event.tick + fade_ticks
 			plan_stages[i] = -1
 			continue
@@ -411,8 +443,8 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		s.character_stages[i] = 0
-		engine.set_particle(e, id, coord = s.lane_origins[swarm_lane_index(s, i, 0)])
-		engine.set_particle(e, id, visible = true)
+		engine.set_particle(e, id, s.lane_origins[swarm_lane_index(s, i, 0)])
+		engine.set_particle(e, id, engine.Visible(true))
 		append(&s.active_indexes, i)
 	}
 }
@@ -439,89 +471,47 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 		if s.tick >= s.lane_ends[row] {
 			if s.tick >= s.lane_finish[i] {
 				if s.color_handling == .Dynamic {
-					visual := engine.get_visual(e, id)
+					appearance := engine.get_appearance(e, id)
 					engine.dynamic_apply_input_colors(
-						&visual,
-						engine.get_initial_visual(e, engine.Particle_Id(id)),
+						&appearance,
+						engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					)
-					engine.set_visual(e, id, visual)
+					engine.set_appearance(e, id, appearance)
 				} else {
 					engine.set_foreground(e, id, s.final_colors[i])
 				}
 				continue
 			}
-			engine.set_particle(e, id, layer = 0)
+			engine.set_particle(e, id, engine.Layer(0))
 			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
-			if s.color_handling == .Dynamic {
-				style := engine.get_initial_visual(e, engine.Particle_Id(id))
-				if style.fg == nil && style.bg == nil && s.tick - s.lane_ends[row] >= 33 {
-					engine.set_foreground(e, id, nil)
-				} else if fg, ok := style.fg.?; ok {
-					engine.set_foreground(
-						e,
-						id,
-						engine.gradient_between_step(s.config.flash_color, fg, 10, landing_step),
-					)
-				} else if style.bg == nil {
-					engine.set_foreground(
-						e,
-						id,
-						engine.gradient_between_step(
-							s.config.flash_color,
-							engine.Color{0xff, 0xff, 0xff},
-							10,
-							landing_step,
-						),
-					)
-				} else {
-					engine.set_foreground(e, id, nil)
-				}
-				if bg, ok := style.bg.?; ok {
-					engine.set_background(
-						e,
-						id,
-						engine.gradient_between_step(s.config.flash_color, bg, 10, landing_step),
-					)
-				} else {
-					engine.set_background(e, id, nil)
-				}
-			} else {
-				engine.set_foreground(
-					e,
-					id,
-					engine.gradient_between_step(
-						s.config.flash_color,
-						s.final_colors[i],
-						10,
-						landing_step,
-					),
-				)
+			appearance := engine.get_appearance(e, id)
+			appearance.colors = s.landing_colors[i][landing_step]
+			if s.color_handling == .Dynamic && s.tick - s.lane_ends[row] >= 33 {
+				appearance.colors = engine.get_initial_appearance(e, id).colors
 			}
-			engine.set_particle(e, id, coord = swarm_waypoint(s, i, stage))
+			engine.set_appearance(e, id, appearance)
+			engine.set_particle(e, id, swarm_waypoint(s, i, stage))
 			s.active_indexes[write] = i
 			write += 1
 			continue
 		}
 		if s.tick >= s.lane_starts[row] {
 			progress := f64(s.tick - s.lane_starts[row] + 1) / f64(s.lane_steps[row])
+			factor := ease.ease(swarm_stage_easing(stage, stage_count), progress)
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_line(
-					s.lane_origins[row],
-					swarm_waypoint(s, i, stage),
-					ease.ease(swarm_stage_easing(stage, stage_count), progress),
-				),
+				engine.coord_on_line(s.lane_origins[row], swarm_waypoint(s, i, stage), factor),
 			)
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
-			engine.set_particle(e, id, layer = 1)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			engine.set_particle(e, id, engine.Layer(1))
 			entry := 0
 			if stage % 3 == 0 {
 				// Entry and landing flash through a mirrored palette as distance
 				// progresses. Inner paths retain the base color.
-				distance_fraction := ease.ease(swarm_stage_easing(stage, stage_count), progress)
+				distance_fraction := factor
 				entry = clamp(
-					engine.round_half_even(f64(SWARM_FLASH_ENTRIES - 1) * distance_fraction),
+					engine.round_to_int(f64(SWARM_FLASH_ENTRIES - 1) * distance_fraction),
 					0,
 					SWARM_FLASH_ENTRIES - 1,
 				)

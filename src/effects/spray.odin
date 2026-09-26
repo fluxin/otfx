@@ -183,7 +183,7 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		)
 		e.particles.current_coord[id] = s.origin
 		s.max_steps[i] = max(
-			engine.round_half_even(engine.line_length(s.origin, initial_coord, true) / speed),
+			engine.round_to_int(engine.line_length(s.origin, initial_coord, true) / speed),
 			1,
 		)
 		s.start_ticks[i] = -1
@@ -208,7 +208,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 			if len(s.pending) == 0 do break
 			id := pop(&s.pending)
 			s.start_ticks[s.index_by_id[id]] = s.tick
-			engine.set_particle(e, id, visible = true)
+			engine.set_particle(e, id, engine.Visible(true))
 		}
 	}
 	for id, i in s.characters {
@@ -220,28 +220,28 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_line(
+				engine.coord_on_line(
 					s.origin,
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
-			engine.set_particle(e, id, layer = 1)
+			engine.set_particle(e, id, engine.Layer(1))
 		} else {
-			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
-			engine.set_particle(e, id, layer = 0)
+			engine.set_particle(e, id, e.particles.initial_coord[id])
+			engine.set_particle(e, id, engine.Layer(0))
 		}
 		if s.color_handling == .Dynamic {
 			step := min(age / 20, 7)
-			visual := engine.get_visual(e, id)
+			appearance := engine.get_appearance(e, id)
 			engine.dynamic_gradient_to_input(
-				&visual,
+				&appearance,
 				s.start_colors[i],
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
+				engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				7,
 				step,
 			)
-			engine.set_visual(e, id, visual)
+			engine.set_appearance(e, id, appearance)
 		} else if age < 160 {
 			engine.set_foreground(
 				e,

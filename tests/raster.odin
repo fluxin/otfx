@@ -1,17 +1,15 @@
 package regression
 
 import "../src/engine"
+import "core:container/bit_array"
 import "core:mem"
-import "core:strings"
 import "core:testing"
 
 // Independent full-paint oracle: no retained membership or dirty state.
-raster_expected :: proc(e: ^engine.Engine, selected: []engine.Particle_Id, all: bool, out: []i32) {
+raster_expected :: proc(e: ^engine.Engine, out: []i32) {
 	for &cell in out do cell = -1
 	for id in 0 ..< len(e.particles) {
-		included := all
-		for candidate in selected do included ||= int(candidate) == id
-		if !included || !e.particles.is_visible[id] do continue
+		if (.Visible not_in e.particles.flags[id]) do continue
 		p := e.particles.current_coord[id]
 		row, column := p.row + e.layout.row_offset, p.column + e.layout.col_offset
 		if row < e.layout.visible_bottom ||
@@ -35,133 +33,57 @@ frame_composition_matches_full_paint :: proc(t: ^testing.T) {
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
 	context.allocator = mem.dynamic_arena_allocator(&arena)
-	// Exercise bitmap tails and rows sharing a word, plus character growth
-	// across membership words. Overlaps include different and equal layers.
+	// Exercise bitmap tails, rows sharing a word, and particle growth.
+	// Overlaps include different and equal layers.
 	for width in ([]int{1, 7, 63, 64, 65}) {
 		cfg := engine.config_default()
 		cfg.canvas_width, cfg.canvas_height = width, 3
 		cfg.ignore_terminal_dimensions = true
-		e, err := engine.engine_make("ABC\nD", cfg, context.allocator)
+		e, err := engine.engine_make("ABC\nD", cfg)
 		testing.expect_value(t, err, engine.Input_Error.None)
+		shared := engine.prepare_appearance(&e, engine.Appearance{})
 		expected := make([]i32, width * 3)
-		selected: [dynamic]engine.Particle_Id
 		for tick in 0 ..< 90 {
 			if tick == 30 || tick == 60 {
-				for _ in 0 ..< 65 do engine.add_particle(&e, "X", {1, 1})
+				for _ in 0 ..< 65 do engine.add_particle(&e, 'X', shared, {1, 1})
 			}
-			clear(&selected)
 			for id in 0 ..< len(e.particles) {
 				// Include clipping and crowded cells; leave positions unchanged
-				// on alternate ticks to exercise independent layer/visual changes.
-				engine.set_particle(
-					&e,
-					engine.Particle_Id(id),
-					visible = (id + tick) % 5 != 0,
-					layer = (id + tick / 3) % 4 - 2,
-					coord = engine.Coord{(id * 7 + tick / 2) % (width + 2), (id + tick / 4) % 5},
-				)
-				engine.set_symbol(&e, engine.Particle_Id(id), "X" if (id + tick) % 2 == 0 else "Y")
-				engine.set_foreground(&e, engine.Particle_Id(id), engine.Color{u8(tick), 100, 200})
-				if tick % 7 != 0 && (id + tick) % 3 != 0 {
-					append(&selected, engine.Particle_Id(id))
-					if id % 11 == 0 do append(&selected, engine.Particle_Id(id))
+				// on alternate ticks to exercise independent layer/appearance changes.
+				visible :=
+					(id + tick) % 5 != 0 &&
+					(tick % 4 == 0 || (tick % 7 != 0 && (id + tick) % 3 != 0))
+				layer := (id + tick / 3) % 4
+				position := engine.Coord{(id * 7 + tick / 2) % (width + 2), (id + tick / 4) % 5}
+				if tick % 2 == 0 {
+					engine.set_particle(
+						&e,
+						engine.Particle_Id(id),
+						coord = position,
+						visible = visible,
+						layer = layer,
+					)
+				} else {
+					engine.set_particle(&e, engine.Particle_Id(id), engine.Visible(visible))
+					engine.set_particle(&e, engine.Particle_Id(id), engine.Layer(layer))
+					engine.set_particle(&e, engine.Particle_Id(id), position)
 				}
+				engine.set_symbol(&e, engine.Particle_Id(id), 'X' if (id + tick) % 2 == 0 else 'Y')
+				engine.set_foreground(&e, engine.Particle_Id(id), engine.Color{u8(tick), 100, 200})
 			}
-			all := tick % 4 == 0
-			raster_expected(&e, selected[:], all, expected)
-			if all {
-				engine.compose_frame(&e)
-				engine.frame_build(&e)
-			} else {
-				engine.compose_frame(&e, selected[:])
-				engine.frame_build(&e, selected[:])
-			}
+			engine.compose_frame(&e)
+			raster_expected(&e, expected)
+			engine.frame_build(&e)
 			for cell, index in expected do testing.expect_value(t, draw_at(&e, index), cell)
 			// Rebuilding preserves the same visible appearance.
-			if all {engine.frame_build(&e)} else {engine.frame_build(&e, selected[:])}
+			engine.frame_build(&e)
 			expect_visible_draws(t, &e)
 		}
 	}
 }
 
 @(test)
-frame_composition_keeps_pending_visual_changes :: proc(t: ^testing.T) {
-	arena: mem.Dynamic_Arena
-	mem.dynamic_arena_init(&arena)
-	defer mem.dynamic_arena_destroy(&arena)
-	context.allocator = mem.dynamic_arena_allocator(&arena)
-	cfg := engine.config_default()
-	cfg.canvas_width, cfg.canvas_height = 65, 2
-	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("A", cfg, context.allocator)
-	testing.expect_value(t, err, engine.Input_Error.None)
-	id := e.particle_sets.input[0]
-	e.particles.is_visible[id] = true
-	e.particles.current_coord[id] = {65, 2}
-	engine.frame_build(&e)
-	expect_frame_cell(t, &e, 64, 0, engine.Visual{symbol = "A"})
-	// Update without emission, then move again. Only the latest position is
-	// drawn, but the last emitted position must still be erased.
-	engine.set_particle(&e, id, coord = engine.Coord{1, 1})
-	engine.compose_frame(&e)
-	engine.set_particle(&e, id, coord = engine.Coord{2, 1})
-	engine.set_symbol(&e, engine.Particle_Id(id), "B")
-	engine.frame_build(&e)
-	expect_frame_cell(t, &e, 64, 0, engine.Visual{symbol = " "})
-	expect_frame_cell(t, &e, 1, 1, engine.Visual{symbol = "B"})
-	engine.frame_build(&e)
-	expect_visible_draws(t, &e)
-}
-
-@(test)
-particle_settings_preserve_omitted_values :: proc(t: ^testing.T) {
-	arena: mem.Dynamic_Arena
-	mem.dynamic_arena_init(&arena)
-	defer mem.dynamic_arena_destroy(&arena)
-	context.allocator = mem.dynamic_arena_allocator(&arena)
-	cfg := engine.config_default()
-	cfg.canvas_width, cfg.canvas_height = 3, 1
-	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("A", cfg, context.allocator)
-	testing.expect_value(t, err, engine.Input_Error.None)
-	id := e.particle_sets.input[0]
-	engine.set_particle(&e, id, visible = true)
-	engine.frame_build(&e)
-	visual := engine.get_visual(&e, engine.Particle_Id(id))
-	// Equal text from a distinct allocation is still an unchanged setting.
-	visual.symbol = strings.clone(visual.symbol)
-	engine.set_particle(&e, id)
-	engine.set_particle(
-		&e,
-		id,
-		coord = e.particles.current_coord[id],
-		visible = true,
-		layer = 0,
-		visual = visual,
-	)
-	// Separate setter calls preserve omitted settings.
-	engine.set_particle(&e, id, coord = engine.Coord{2, 1})
-	engine.set_particle(&e, id, layer = 5)
-	visual.symbol = "B"
-	visual.fg = engine.Color{1, 2, 3}
-	engine.set_particle(&e, id, visual = visual)
-	testing.expect_value(t, e.particles.layer[id], 5)
-	testing.expect_value(t, e.particles.is_visible[id], true)
-	engine.frame_build(&e)
-	testing.expect_value(t, draw_at(&e, 0), i32(-1))
-	testing.expect_value(t, draw_at(&e, 1), i32(id))
-	// Clearing a nullable color is an actual visual update.
-	visual.fg = nil
-	engine.set_particle(&e, id, visual = visual)
-	engine.frame_build(&e)
-	testing.expect(t, len(engine.frame_bytes(&e)) > 0)
-	engine.set_particle(&e, id, visible = false)
-	engine.frame_build(&e)
-	testing.expect_value(t, draw_at(&e, 1), i32(-1))
-}
-
-@(test)
-frame_composition_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
+cell_layers_reuse_storage_and_reveal_lower_occupants :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -169,28 +91,240 @@ frame_composition_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.canvas_width, cfg.canvas_height = 1, 1
 	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("A", cfg, context.allocator)
+	e, err := engine.engine_make("A", cfg)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	back := e.particle_sets.input[0]
-	front := engine.add_particle(&e, "B", {1, 1})
-	engine.set_particle(&e, back, visible = true)
-	engine.set_particle(&e, front, visible = true, layer = 1)
+	shared := engine.prepare_appearance(&e, engine.Appearance{})
+	ids: [32]engine.Particle_Id
+	for &id, i in ids {
+		id = engine.add_particle(&e, 'X', shared, {1, 1})
+		engine.set_particle(
+			&e,
+			id,
+			visible = true,
+			layer = (i * 7) % 9 + 1,
+			coord = e.particles[id].current_coord,
+		)
+	}
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
-	visual := engine.get_visual(&e, engine.Particle_Id(back))
-	visual.symbol = "Z"
-	engine.set_particle(&e, back, visual = visual)
+	storage :: proc(e: ^engine.Engine) -> (count, capacity: int) {
+		for ids in e.cells[0].layers {
+			count += len(ids)
+			capacity += cap(ids)
+		}
+		return
+	}
+	slots, _ := storage(&e)
+	capacity := 0
+	expected: [1]i32
+	for tick in 0 ..< 256 {
+		id := ids[(tick * 13) % len(ids)]
+		engine.set_particle(&e, id, engine.Visible(false))
+		engine.frame_build(&e)
+		raster_expected(&e, expected[:])
+		testing.expect_value(t, draw_at(&e, 0), expected[0])
+		engine.set_particle(&e, id, engine.Layer(((tick % 128) * 5) % 11))
+		engine.set_particle(&e, id, engine.Visible(true))
+		engine.frame_build(&e)
+		raster_expected(&e, expected[:])
+		testing.expect_value(t, draw_at(&e, 0), expected[0])
+		count, current_capacity := storage(&e)
+		testing.expect_value(t, count, slots)
+		// Repeat the same layer transitions after warming every bucket.
+		if tick == 127 do capacity = current_capacity
+		if tick >= 128 do testing.expect_value(t, current_capacity, capacity)
+		for bucket, layer in e.cells[0].layers {
+			for occupant in bucket {
+				testing.expect_value(t, e.particles[occupant].layer, layer)
+			}
+		}
+	}
+	for id in ids do engine.set_particle(&e, id, engine.Visible(false))
+	engine.frame_build(&e)
+	testing.expect_value(t, draw_at(&e, 0), i32(-1))
+	for i := len(ids) - 1; i >= 0; i -= 1 {
+		engine.set_particle(&e, ids[i], engine.Visible(true))
+		engine.frame_build(&e)
+		raster_expected(&e, expected[:])
+		testing.expect_value(t, draw_at(&e, 0), expected[0])
+	}
+	count, current_capacity := storage(&e)
+	testing.expect_value(t, count, slots)
+	testing.expect_value(t, current_capacity, capacity)
+}
+
+@(test)
+indexed_layers_reuse_warmed_storage :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	track: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&track, mem.dynamic_arena_allocator(&arena))
+	defer mem.tracking_allocator_destroy(&track)
+	context.allocator = mem.tracking_allocator(&track)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 1, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	id := e.particle_sets.input[0]
+	engine.set_particle(&e, id, engine.Visible(true))
+	engine.frame_build(&e)
+	// Direct indices retain an array for each visited layer rather than retagging
+	// one empty bucket. Warming the range owns those first-use allocations.
+	for layer in 0 ..= 128 {
+		engine.set_particle(&e, id, engine.Layer(layer))
+		engine.frame_build(&e)
+		testing.expect_value(t, draw_at(&e, 0), i32(id))
+	}
+	allocations := track.total_allocation_count
+	for layer := 128; layer >= 0; layer -= 1 {
+		engine.set_particle(&e, id, engine.Layer(layer))
+		engine.frame_build(&e)
+		testing.expect_value(t, draw_at(&e, 0), i32(id))
+	}
+	testing.expect_value(t, len(e.cells[0].layers), 129)
+	testing.expect_value(t, track.total_allocation_count, allocations)
+}
+
+@(test)
+layer_setter_rejects_negative_index :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 1, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	testing.expect_assert(t, "layer must be a nonnegative array index")
+	engine.set_particle(&e, e.particle_sets.input[0], engine.Layer(-1))
+}
+
+@(test)
+placement_setter_rejects_negative_index :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 1, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	testing.expect_assert(t, "layer must be a nonnegative array index")
+	engine.set_particle(&e, e.particle_sets.input[0], coord = {1, 1}, visible = false, layer = -1)
+}
+
+@(test)
+frame_composition_keeps_pending_appearance_changes :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 65, 2
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	id := e.particle_sets.input[0]
+	e.particles.flags[id] += {.Visible}
+	e.particles.current_coord[id] = {65, 2}
+	engine.frame_build(&e)
+	expect_frame_cell(t, &e, 64, 0, 'A', engine.Appearance{})
+	// Update without emission, then move again. Only the latest position is
+	// drawn, but the last emitted position must still be erased.
+	engine.set_particle(&e, id, engine.Coord{1, 1})
+	engine.compose_frame(&e)
+	engine.set_particle(&e, id, engine.Coord{2, 1})
+	engine.set_symbol(&e, engine.Particle_Id(id), 'B')
+	engine.frame_build(&e)
+	expect_frame_cell(t, &e, 64, 0, ' ', engine.Appearance{})
+	expect_frame_cell(t, &e, 1, 1, 'B', engine.Appearance{})
 	engine.frame_build(&e)
 	expect_visible_draws(t, &e)
-	engine.set_particle(&e, front, visible = false)
+}
+
+@(test)
+particle_setters_preserve_other_fields :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 3, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	id := e.particle_sets.input[0]
+	engine.set_particle(&e, id, engine.Visible(true))
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "Z")
-	// A hidden selection must not discard another particle's visual update.
-	engine.frame_build(&e, []engine.Particle_Id{front})
-	visual.symbol = "Y"
-	engine.set_particle(&e, back, visual = visual)
+	appearance := engine.get_appearance(&e, engine.Particle_Id(id))
+	// Reapplying an equal appearance is still an unchanged setting.
+	engine.set_particle(&e, id, coord = e.particles.current_coord[id], visible = true, layer = 0)
+	engine.set_appearance(&e, id, appearance)
+	// Single-field setter calls preserve the other fields.
+	engine.set_particle(&e, id, engine.Coord{2, 1})
+	engine.set_particle(&e, id, engine.Layer(5))
+	engine.set_symbol(&e, id, 'B')
+	appearance.colors.fg = engine.Color{1, 2, 3}
+	engine.set_appearance(&e, id, appearance)
+	engine.compose_frame(&e)
+	testing.expect_value(t, e.particles.layer[id], 5)
+	testing.expect_value(t, (.Visible in e.particles.flags[id]), true)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "Y")
+	testing.expect_value(t, draw_at(&e, 0), i32(-1))
+	testing.expect_value(t, draw_at(&e, 1), i32(id))
+	// Clearing a nullable color is an actual appearance update.
+	appearance.colors.fg = nil
+	engine.set_appearance(&e, id, appearance)
+	engine.frame_build(&e)
+	testing.expect(t, len(frame_without_padding(&e)) > 0)
+	engine.set_particle(&e, id, engine.Visible(false))
+	engine.frame_build(&e)
+	testing.expect_value(t, draw_at(&e, 1), i32(-1))
+}
+
+@(test)
+frame_composition_reveals_occluded_appearance_changes :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 1, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	back := e.particle_sets.input[0]
+	front := engine.add_particle(
+		&e,
+		'B',
+		engine.prepare_appearance(&e, engine.Appearance{}),
+		{1, 1},
+	)
+	engine.set_particle(&e, back, engine.Visible(true))
+	engine.set_particle(
+		&e,
+		front,
+		visible = true,
+		layer = 1,
+		coord = e.particles[front].current_coord,
+	)
+	engine.frame_build(&e)
+	testing.expect_value(t, string(frame_without_padding(&e)), "B")
+	appearance := engine.get_appearance(&e, engine.Particle_Id(back))
+	engine.set_symbol(&e, back, 'Z')
+	engine.set_appearance(&e, back, appearance)
+	engine.frame_build(&e)
+	expect_visible_draws(t, &e)
+	engine.set_particle(&e, front, engine.Visible(false))
+	engine.frame_build(&e)
+	testing.expect_value(t, string(frame_without_padding(&e)), "Z")
+	// A hidden particle retains appearance updates until it re-enters.
+	engine.set_particle(&e, back, engine.Visible(false))
+	engine.frame_build(&e)
+	engine.set_symbol(&e, back, 'Y')
+	engine.set_appearance(&e, back, appearance)
+	engine.set_particle(&e, back, engine.Visible(true))
+	engine.frame_build(&e)
+	testing.expect_value(t, string(frame_without_padding(&e)), "Y")
 }
 
 @(test)
@@ -205,17 +339,18 @@ frame_composition_character_growth_is_amortized :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.canvas_width, cfg.canvas_height = 1, 1
 	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("A", cfg, context.allocator)
+	e, err := engine.engine_make("A", cfg)
 	testing.expect_value(t, err, engine.Input_Error.None)
+	shared := engine.prepare_appearance(&e, engine.Appearance{})
 	allocations := track.total_allocation_count
-	for _ in 0 ..< 8192 do engine.add_particle(&e, "X", {1, 1})
+	for _ in 0 ..< 8192 do engine.add_particle(&e, 'X', shared, {1, 1})
 	// Exact-capacity reservation per added character caused quadratic arena
 	// growth. Thousands of additions should need only geometric pool growth.
 	testing.expect(t, track.total_allocation_count - allocations < 200)
 	engine.frame_build(&e)
 	allocations = track.total_allocation_count
 	for id in 0 ..< len(e.particles) {
-		engine.set_particle(&e, engine.Particle_Id(id), visible = true)
+		engine.set_particle(&e, engine.Particle_Id(id), engine.Visible(true))
 	}
 	engine.frame_build(&e)
 	testing.expect_value(t, track.total_allocation_count, allocations)
@@ -230,7 +365,7 @@ frame_composition_clips_signed_extremes_and_empty_viewport :: proc(t: ^testing.T
 	cfg := engine.config_default()
 	cfg.canvas_width, cfg.canvas_height = 3, 3
 	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("A", cfg, context.allocator)
+	e, err := engine.engine_make("A", cfg)
 	testing.expect_value(t, err, engine.Input_Error.None)
 	e.layout.row_offset, e.layout.col_offset = 7, -11
 	id := e.particle_sets.input[0]
@@ -241,19 +376,17 @@ frame_composition_clips_signed_extremes_and_empty_viewport :: proc(t: ^testing.T
 			id,
 			visible = true,
 			coord = engine.Coord{p.column - e.layout.col_offset, p.row - e.layout.row_offset},
+			layer = e.particles[id].layer,
 		)
-		raster_expected(&e, nil, true, expected[:])
+		engine.compose_frame(&e)
+		raster_expected(&e, expected[:])
 		engine.frame_build(&e)
 		for cell, index in expected do testing.expect_value(t, draw_at(&e, index), cell)
 	}
 	// An inverted interval is empty; unsigned interval widths must not admit it.
 	e.layout.visible_left = 4
-	for &dirty in e.dirty_rows do dirty = true
-	engine.set_particle(
-		&e,
-		id,
-		coord = engine.Coord{2 - e.layout.col_offset, 2 - e.layout.row_offset},
-	)
+	for i in 0 ..< len(e.rows) do bit_array.set(&e.dirty_rows, i)
+	engine.set_particle(&e, id, engine.Coord{2 - e.layout.col_offset, 2 - e.layout.row_offset})
 	engine.frame_build(&e)
-	for cell in e.frame_particles do testing.expect_value(t, cell, engine.Particle_Id(-1))
+	for cell in e.cells do testing.expect_value(t, cell.top, engine.Particle_Id(-1))
 }

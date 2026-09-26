@@ -68,6 +68,7 @@ overflow_parse :: proc(cfg: ^Overflow_Config, args: []string) -> bool {
 Overflow_Row :: struct {
 	span:  engine.Span,
 	final: bool,
+	row:   int,
 }
 
 Overflow_State :: struct {
@@ -91,21 +92,11 @@ overflow_append_row :: proc(
 		len   = len(characters),
 	}
 	append(&state.row_characters, ..characters)
-	append(&state.pending_rows, Overflow_Row{span, final})
+	append(&state.pending_rows, Overflow_Row{span = span, final = final})
 }
 
-overflow_row_move_up :: proc(e: ^engine.Engine, characters: []engine.Particle_Id) {
-	coords := e.particles.current_coord[:]
-	for id in characters {
-		engine.set_particle(e, id, coord = engine.Coord{coords[id].column, coords[id].row + (1)})
-	}
-}
-
-overflow_row_setup :: proc(e: ^engine.Engine, characters: []engine.Particle_Id) {
-	input := e.particles.initial_coord[:len(e.particles)]
-	for id in characters {
-		engine.set_particle(e, id, coord = engine.coord(input[id].column, 0))
-	}
+overflow_row_position :: proc(e: ^engine.Engine, characters: []engine.Particle_Id, row: int) {
+	for id in characters do engine.set_position(e, id, engine.coord(e.particles.initial_coord[id].column, row))
 }
 
 overflow_row_color :: proc(
@@ -114,14 +105,8 @@ overflow_row_color :: proc(
 	color: engine.Color,
 ) {
 	for id in characters {
-		engine.set_visual(
-			e,
-			id,
-			engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				fg = color,
-			},
-		)
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_appearance(e, id, engine.Appearance{colors = {fg = color}})
 	}
 }
 
@@ -181,15 +166,16 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 			for id in source {
 				copy_id := engine.add_particle(
 					e,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+					e.particles.initial_symbol[id],
+					e.particles.initial_appearance_id[id],
 					e.particles.initial_coord[id],
 				)
-				e.particles.initial_visual_id[copy_id] = e.particles.initial_visual_id[id]
-				e.particles.preserve_initial_colors[copy_id] =
-					e.particles.preserve_initial_colors[id]
+				if .Preserve_Initial_Colors in e.particles.flags[id] do e.particles.flags[copy_id] += {.Preserve_Initial_Colors}
+				engine.set_symbol(e, copy_id, e.particles.initial_symbol[id])
+				engine.set_appearance(e, copy_id, engine.Appearance{})
 				append(&s.row_characters, copy_id)
 			}
-			append(&s.pending_rows, Overflow_Row{{start, len(source)}, false})
+			append(&s.pending_rows, Overflow_Row{span = {start, len(source)}, final = false})
 		}
 	}
 
@@ -201,20 +187,18 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		for id in row {
 			if id < engine.Particle_Id(len(final_colors)) {
 				if s.color_handling == .Dynamic {
-					visual := engine.get_visual(e, id)
+					appearance := engine.get_appearance(e, id)
 					engine.dynamic_apply_input_colors(
-						&visual,
-						engine.get_initial_visual(e, engine.Particle_Id(id)),
+						&appearance,
+						engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					)
-					engine.set_visual(e, id, visual)
+					engine.set_appearance(e, id, appearance)
 				} else {
-					engine.set_visual(
+					engine.set_symbol(e, id, e.particles.symbol[id])
+					engine.set_appearance(
 						e,
 						id,
-						engine.Visual {
-							symbol = engine.get_visual(e, id).symbol,
-							fg = final_colors[id],
-						},
+						engine.Appearance{colors = {fg = final_colors[id]}},
 					)
 				}
 			}
@@ -239,11 +223,12 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 	if s.delay == 0 {
 		for _ in 0 ..< rand.int_range(1, s.config.overflow_speed + 1) {
 			if s.pending_head >= len(s.pending_rows) do break
-			for row in s.active_rows {
+			for &row in s.active_rows {
 				characters := engine.span_slice(s.row_characters[:], row.span)
-				overflow_row_move_up(e, characters)
+				row.row += 1
+				overflow_row_position(e, characters, row.row)
 				if !row.final {
-					head_row := e.particles.current_coord[characters[0]].row
+					head_row := row.row
 					index := min(head_row, len(s.overflow_gradient) - 1)
 					overflow_row_color(e, characters, s.overflow_gradient[index])
 				}
@@ -251,13 +236,13 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 			next := s.pending_rows[s.pending_head]
 			s.pending_head += 1
 			characters := engine.span_slice(s.row_characters[:], next.span)
-			overflow_row_setup(e, characters)
-			overflow_row_move_up(e, characters)
+			next.row = 1
+			overflow_row_position(e, characters, next.row)
 			if !next.final {
 				overflow_row_color(e, characters, s.overflow_gradient[0])
 			}
 			for id in characters {
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 			}
 			append(&s.active_rows, next)
 		}
@@ -269,7 +254,7 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 	write := 0
 	for row in s.active_rows {
 		characters := engine.span_slice(s.row_characters[:], row.span)
-		if e.particles.current_coord[characters[0]].row <= e.canvas.top {
+		if row.row <= e.canvas.top {
 			s.active_rows[write] = row
 			write += 1
 		}

@@ -10,7 +10,6 @@ import "core:image"
 import "core:mem/virtual"
 import "core:os"
 import "core:strings"
-import "core:unicode/utf8"
 
 // Terminal-cell captures, not ANSI parses: the tool steps the real effect and
 // renderer pipeline and rasterizes the resulting cell grid.
@@ -199,12 +198,13 @@ raster_render_cells :: proc(
 	width, height: int,
 ) {
 	raster_fill(r, Background)
-	for id, cell in e.frame_particles {
+	for entry, cell in e.cells {
+		id := entry.top
 		if id < 0 do continue
 		screen_row, column := cell / width, cell % width
-		visual := engine.get_render_visual(e, engine.Particle_Id(id))
+		appearance := engine.get_render_appearance(e, engine.Particle_Id(id))
 		cell_background := Background
-		if bg, ok := visual.bg.?; ok {
+		if bg, ok := appearance.colors.bg.?; ok {
 			cell_background = color_pixel(bg)
 			raster_fill_rect(
 				r,
@@ -215,10 +215,10 @@ raster_render_cells :: proc(
 				cell_background,
 			)
 		}
-		if visual.symbol == "" do continue
+		if e.particles[id].symbol == 0 do continue
 		fg := Foreground
-		if color, ok := visual.fg.?; ok do fg = color_pixel(color)
-		ch, _ := utf8.decode_rune(visual.symbol)
+		if color, ok := appearance.colors.fg.?; ok do fg = color_pixel(color)
+		ch := e.particles[id].symbol
 		if shape, is_shape := block_for(ch); is_shape {
 			raster_shape(r, column, screen_row, shape, fg, cell_background)
 		} else if shape, is_shape := box_for(ch); is_shape {

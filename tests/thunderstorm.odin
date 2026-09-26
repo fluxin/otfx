@@ -98,7 +98,7 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.canvas_width, cfg.canvas_height = 80, 50
 	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("hello", cfg, context.allocator)
+	e, err := engine.engine_make("hello", cfg)
 	testing.expect(t, err == .None)
 	s := effects.Thunderstorm_State {
 		config = effects.thunderstorm_config_default(),
@@ -115,12 +115,12 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 		effects.thunderstorm_reveal_strike(&s, &e)
 		for id, i in s.strike_pending {
 			testing.expect_value(t, e.particles.current_coord[id], expected[i])
-			testing.expect_value(t, e.particles.is_visible[id], i < s.strike_pending_head)
+			testing.expect_value(t, (.Visible in e.particles.flags[id]), i < s.strike_pending_head)
 		}
 	}
 	testing.expect_value(t, track.total_allocation_count, before)
 	// The same seed must rebuild the same geometry and reuse the pool.
-	for id in s.strike_pending do e.particles.is_visible[id] = false
+	for id in s.strike_pending do e.particles.flags[id] -= {.Visible}
 	allocated_chars := len(e.particles)
 	rand.reset(42)
 	effects.thunderstorm_begin_strike(&s, &e)
@@ -129,8 +129,10 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(s.strike_pending), count)
 	for id, i in s.strike_pending do testing.expect_value(t, e.particles.current_coord[id], expected[i])
 	free_all(context.temp_allocator)
-	for s.strike_live do effects.thunderstorm_reveal_strike(&s, &e)
+	for s.strike_live {
+		effects.thunderstorm_reveal_strike(&s, &e)
+	}
 	testing.expect_value(t, s.strike_pending_head, 0)
 	testing.expect_value(t, len(s.strike_pending), 0)
-	for id in s.strike_ids do testing.expect(t, !e.particles.is_visible[id])
+	for id in s.strike_ids do testing.expect(t, (.Visible not_in e.particles.flags[id]))
 }

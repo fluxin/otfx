@@ -5,10 +5,10 @@ import "core:fmt"
 import "core:math/rand"
 
 @(private, rodata)
-Errorcorrect_First_Wipe: [8]string = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"}
+Errorcorrect_First_Wipe: [8]rune = {'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
 @(private, rodata)
-Errorcorrect_Last_Wipe: [7]string = {"▇", "▆", "▅", "▄", "▃", "▂", "▁"}
+Errorcorrect_Last_Wipe: [7]rune = {'▇', '▆', '▅', '▄', '▃', '▂', '▁'}
 
 Errorcorrect_Config :: struct {
 	error_pairs:              f64,
@@ -120,14 +120,22 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 			spectrum[:],
 			e.particles.initial_coord[id],
 		)
-		engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 		if s.color_handling == .Dynamic {
-			engine.set_foreground(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).fg)
-			engine.set_background(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).bg)
+			engine.set_foreground(
+				e,
+				id,
+				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg,
+			)
+			engine.set_background(
+				e,
+				id,
+				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg,
+			)
 		} else {
 			engine.set_foreground(e, id, s.final_colors[id])
 		}
-		e.particles.is_visible[id] = true
+		e.particles.flags[id] += {.Visible}
 	}
 	available := make([dynamic]engine.Particle_Id, 0, len(characters), context.temp_allocator)
 	append(&available, ..characters[:])
@@ -145,13 +153,13 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		e.particles.current_coord[first], e.particles.current_coord[second] =
 			second_home, first_home
 		s.max_steps[first] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(second_home, first_home, true) / s.config.movement_speed,
 			),
 			1,
 		)
 		s.max_steps[second] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(first_home, second_home, true) / s.config.movement_speed,
 			),
 			1,
@@ -185,14 +193,10 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 		switch {
 		case age < 60:
 			if (age / 3) % 2 == 0 {
-				engine.set_symbol(e, id, "▓")
+				engine.set_symbol(e, id, '▓')
 				engine.set_foreground(e, id, s.config.error_color)
 			} else {
-				engine.set_symbol(
-					e,
-					id,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				)
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				engine.set_foreground(e, id, white)
 			}
 		case age < 84:
@@ -203,14 +207,10 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_line(
-					s.origins[id],
-					e.particles.initial_coord[id],
-					progress,
-				),
+				engine.coord_on_line(s.origins[id], e.particles.initial_coord[id], progress),
 			)
-			engine.set_particle(e, id, layer = 1)
-			engine.set_symbol(e, id, "█")
+			engine.set_particle(e, id, engine.Layer(1))
+			engine.set_symbol(e, id, '█')
 			engine.set_foreground(
 				e,
 				id,
@@ -218,27 +218,27 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 					s.config.error_color,
 					s.config.correct_color,
 					10,
-					min(engine.round_half_even(progress * 10), 10),
+					min(engine.round_to_int(progress * 10), 10),
 				),
 			)
 		case age < last_start + 21:
-			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
-			engine.set_particle(e, id, layer = 0)
+			engine.set_particle(e, id, e.particles.initial_coord[id])
+			engine.set_particle(e, id, engine.Layer(0))
 			engine.set_symbol(e, id, Errorcorrect_Last_Wipe[(age - last_start) / 3])
 			engine.set_foreground(e, id, s.config.correct_color)
 		case:
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			step := min((age - last_start - 21) / 3, 10)
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					s.config.correct_color,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					10,
 					step,
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(
 					e,

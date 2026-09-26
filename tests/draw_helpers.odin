@@ -3,47 +3,75 @@ package regression
 import "../src/engine"
 import "core:testing"
 
+// Padding is intentionally present on the wire. Existing protocol witnesses
+// compare all non-NUL bytes; dedicated slot tests verify padding and aliasing.
+frame_without_padding :: proc(e: ^engine.Engine, allocator := context.temp_allocator) -> []byte {
+	bytes := engine.frame_bytes(e, allocator)
+	used := 0
+	for b in bytes {
+		if b == 0 do continue
+		bytes[used] = b
+		used += 1
+	}
+	return bytes[:used]
+}
+
 // Existing composition witnesses use bottom-up logical canvas indices.
 draw_at :: proc(e: ^engine.Engine, cell: int) -> i32 {
 	width, height := e.layout.visible_right, e.layout.visible_top
 	top_down := (height - 1 - cell / width) * width + cell % width
-	return i32(e.frame_particles[top_down])
+	return i32(e.cells[top_down].top)
 }
 
 expect_frame_cell :: proc(
 	t: ^testing.T,
 	e: ^engine.Engine,
 	column, row: int,
-	expected: engine.Visual,
+	expected_symbol: rune,
+	expected: engine.Appearance,
 ) {
-	lines, err := engine.preprocess_input(string(engine.frame_bytes(e)), 4)
+	lines, err := engine.preprocess_input(string(frame_without_padding(e)), 4)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	actual := engine.Visual {
-		symbol = " ",
-	}
+	actual_symbol := ' '
+	actual := engine.Appearance{}
 	if row < len(lines) && column < lines[row].width {
 		cell := lines[row].cells[column]
 		actual = cell.style
-		actual.symbol = engine.rune_to_string(cell.symbol)
+		actual_symbol = cell.symbol
 	}
-	testing.expect_value(t, actual, expected)
+	testing.expect_value(t, actual_symbol, expected_symbol)
+	expect_appearance(t, actual, expected)
 }
 
 expect_visible_draws :: proc(t: ^testing.T, e: ^engine.Engine) {
-	lines, err := engine.preprocess_input(string(engine.frame_bytes(e)), 4)
+	lines, err := engine.preprocess_input(string(frame_without_padding(e)), 4)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	for id, index in e.frame_particles {
+	for entry, index in e.cells {
+		id := entry.top
 		if id < 0 do continue
 		row, col := index / e.layout.visible_right, index % e.layout.visible_right
 		// A delta contains only rewritten rows. Held rows remain on screen.
 		if row >= len(lines) || lines[row].width == 0 do continue
-		expected := engine.get_render_visual(e, id)
-		if e.cfg.no_color do expected.fg, expected.bg, expected.bold = nil, nil, false
+		expected := engine.get_render_appearance(e, id)^
+		if e.cfg.no_color do expected.colors.fg, expected.colors.bg, expected.bold = nil, nil, false
 		testing.expect(t, row < len(lines) && col < lines[row].width)
 		if row >= len(lines) || col >= lines[row].width do continue
 		cell := lines[row].cells[col]
 		actual := cell.style
-		actual.symbol = engine.rune_to_string(cell.symbol)
-		testing.expect_value(t, actual, expected)
+		testing.expect_value(t, cell.symbol, e.particles[id].symbol)
+		expect_appearance(t, actual, expected)
 	}
+}
+
+// Derived bytes are engine/config-specific; compare the public style fields here.
+expect_appearance :: proc(t: ^testing.T, actual, expected: engine.Appearance) {
+	testing.expect_value(t, actual.colors, expected.colors)
+	testing.expect_value(t, actual.bold, expected.bold)
+}
+
+// Effect-only tests still advance through the render boundary before reading values.
+step_frame :: proc(next: $F, state: $S, e: ^engine.Engine) -> bool {
+	alive := next(state, e)
+	if alive do engine.frame_build(e)
+	return alive
 }

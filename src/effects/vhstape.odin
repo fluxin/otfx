@@ -5,7 +5,7 @@ import engine "../engine"
 import "core:fmt"
 import "core:math/rand"
 
-Vhs_Noise_Symbols :: [4]string{"#", "*", ".", ":"}
+Vhs_Noise_Symbols :: [4]rune{'#', '*', '.', ':'}
 
 Vhstape_Config :: struct {
 	glitch_line_colors:       [dynamic]engine.Color,
@@ -187,22 +187,22 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.final_colors = make([]engine.Color, storage_len)
 	initial_coords := e.particles.initial_coord
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 			engine.set_foreground(
 				e,
 				id,
-				style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80},
+				style.colors.fg != nil ? style.colors.fg : engine.Color{0x80, 0x80, 0x80},
 			)
-			engine.set_background(e, id, style.bg)
+			engine.set_background(e, id, style.colors.bg)
 		} else {
 			engine.set_foreground(e, id, s.final_colors[id])
 		}
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 	}
 	s.rows = engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_B2T)
 	row_count := len(s.rows.spans)
@@ -252,27 +252,39 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.redraw_row = row_count - 1
 }
 
-vhstape_set_stable_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
-	engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+vhstape_set_stable_appearance :: proc(
+	s: ^Vhstape_State,
+	e: ^engine.Engine,
+	id: engine.Particle_Id,
+) {
+	engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 	if s.color_handling == .Dynamic {
-		style := engine.get_initial_visual(e, engine.Particle_Id(id))
-		engine.set_foreground(e, id, style.fg != nil ? style.fg : engine.Color{0x80, 0x80, 0x80})
-		engine.set_background(e, id, style.bg)
+		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+		engine.set_foreground(
+			e,
+			id,
+			style.colors.fg != nil ? style.colors.fg : engine.Color{0x80, 0x80, 0x80},
+		)
+		engine.set_background(e, id, style.colors.bg)
 	} else {
 		engine.set_foreground(e, id, s.final_colors[id])
 		engine.set_background(e, id, nil)
 	}
 }
 
-vhstape_set_final_visual :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
-	engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+vhstape_set_final_appearance :: proc(
+	s: ^Vhstape_State,
+	e: ^engine.Engine,
+	id: engine.Particle_Id,
+) {
+	engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 	if s.color_handling == .Dynamic {
-		visual := engine.get_visual(e, id)
+		appearance := engine.get_appearance(e, id)
 		engine.dynamic_apply_input_colors(
-			&visual,
-			engine.get_initial_visual(e, engine.Particle_Id(id)),
+			&appearance,
+			engine.get_initial_appearance(e, engine.Particle_Id(id)),
 		)
-		engine.set_visual(e, id, visual)
+		engine.set_appearance(e, id, appearance)
 	} else {
 		engine.set_foreground(e, id, s.final_colors[id])
 		engine.set_background(e, id, nil)
@@ -286,17 +298,20 @@ vhstape_activate_character :: proc(s: ^Vhstape_State, id: engine.Particle_Id) {
 	append(&s.active_characters, id)
 }
 
-vhstape_noise_visual :: proc(
+vhstape_noise_appearance :: proc(
 	s: ^Vhstape_State,
 	frames: []Vhstape_Noise_Frame,
 	frame_count: int,
 	id: engine.Particle_Id,
 	frame: int,
-) -> engine.Visual {
+) -> (
+	rune,
+	engine.Appearance,
+) {
 	i := s.index_by_id[id]
 	choice := frames[i * frame_count + frame]
 	symbols := Vhs_Noise_Symbols
-	return {symbol = symbols[choice.symbol], fg = s.config.noise_colors[choice.color]}
+	return symbols[choice.symbol], {colors = {fg = s.config.noise_colors[choice.color]}}
 }
 
 vhstape_start_scene :: proc(
@@ -306,50 +321,60 @@ vhstape_start_scene :: proc(
 	scene: Vhstape_Scene,
 ) {
 	s.scenes[id] = scene
-	symbol := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
+	symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
 	switch scene {
 	case .Forward:
-		engine.set_visual(
+		engine.set_symbol(e, id, symbol)
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual{symbol = symbol, fg = s.config.glitch_line_colors[0]},
+			engine.Appearance{colors = {fg = s.config.glitch_line_colors[0]}},
 		)
 	case .Backward:
-		engine.set_visual(
+		engine.set_symbol(e, id, symbol)
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual {
-				symbol = symbol,
-				fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+			engine.Appearance {
+				colors = {fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1]},
 			},
 		)
 	case .Base:
 		s.scene_ticks[id] = 0
-		vhstape_set_stable_visual(s, e, id)
+		vhstape_set_stable_appearance(s, e, id)
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
-			engine.set_visual(
-				e,
+			symbol, appearance := vhstape_noise_appearance(
+				s,
+				s.snow_frames[:],
+				VHSTAPE_SNOW_FRAMES,
 				id,
-				vhstape_noise_visual(s, s.snow_frames[:], VHSTAPE_SNOW_FRAMES, id, step / 2),
+				step / 2,
 			)
+			engine.set_symbol(e, id, symbol)
+			engine.set_appearance(e, id, appearance)
 		} else {
-			vhstape_set_stable_visual(s, e, id)
+			vhstape_set_stable_appearance(s, e, id)
 		}
 	case .Final_Snow:
 		s.scene_ticks[id] = 0
-		engine.set_visual(
-			e,
+		symbol, appearance := vhstape_noise_appearance(
+			s,
+			s.final_snow_frames[:],
+			VHSTAPE_FINAL_SNOW_FRAMES,
 			id,
-			vhstape_noise_visual(s, s.final_snow_frames[:], VHSTAPE_FINAL_SNOW_FRAMES, id, 0),
+			0,
 		)
+		engine.set_symbol(e, id, symbol)
+		engine.set_appearance(e, id, appearance)
 	case .Final_Redraw:
 		s.scene_ticks[id] = 0
-		engine.set_visual(
+		engine.set_symbol(e, id, '█')
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual{symbol = "█", fg = engine.Color{0xFF, 0xFF, 0xFF}},
+			engine.Appearance{colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}},
 		)
 	case .Idle:
 	}
@@ -381,9 +406,7 @@ vhstape_start_motion :: proc(
 }
 
 vhstape_steps :: proc(origin, target: engine.Coord, denominator: int) -> int {
-	return engine.round_half_even(
-		engine.line_length(origin, target, true) * f64(denominator) / 40.0,
-	)
+	return engine.round_to_int(engine.line_length(origin, target, true) * f64(denominator) / 40.0)
 }
 
 vhstape_start_restore :: proc(
@@ -456,7 +479,7 @@ vhstape_contains_row :: proc(rows: []int, row: int) -> bool {
 vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine.Canvas) {
 	if s.active_wave_top < 0 {
 		if canvas.text_height < 3 do return
-		lower := max(3, engine.round_half_even(f64(canvas.text_height) * 0.5))
+		lower := max(3, engine.round_to_int(f64(canvas.text_height) * 0.5))
 		s.active_wave_top = canvas.text_bottom + rand.int_range(lower, canvas.text_height + 1)
 	} else if len(s.active_wave_rows) > 0 {
 		if rand.float64() < 0.3 do s.active_wave_top += rand.float64() < 0.3 ? 1 : -1
@@ -501,11 +524,7 @@ vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Par
 	if kind == .Idle do return
 	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
 	if frame < frame_count {
-		engine.set_particle(
-			e,
-			id,
-			coord = s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame],
-		)
+		engine.set_particle(e, id, s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame])
 		frame += 1
 		s.motion_frame[id] = frame
 	}
@@ -524,7 +543,7 @@ vhstape_synced_color :: proc(
 	reverse: bool,
 ) -> engine.Color {
 	i := clamp(
-		engine.round_half_even(f64(len(palette) - 1) * f64(max(step, 1)) / f64(max(max_steps, 1))),
+		engine.round_to_int(f64(len(palette) - 1) * f64(max(step, 1)) / f64(max(max_steps, 1))),
 		0,
 		len(palette) - 1,
 	)
@@ -535,31 +554,35 @@ vhstape_synced_color :: proc(
 vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
 	scene := s.scenes[id]
 	if scene == .Idle do return
-	symbol := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
+	symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
 	switch scene {
 	case .Forward:
 		if s.motions[id] == .Idle {
-			engine.set_visual(
+			engine.set_symbol(e, id, symbol)
+			engine.set_appearance(
 				e,
 				id,
-				engine.Visual {
-					symbol = symbol,
-					fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+				engine.Appearance {
+					colors = {
+						fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
+					},
 				},
 			)
 			s.scenes[id] = .Idle
 		} else {
-			engine.set_visual(
+			engine.set_symbol(e, id, symbol)
+			engine.set_appearance(
 				e,
 				id,
-				engine.Visual {
-					symbol = symbol,
-					fg = vhstape_synced_color(
-						s.config.glitch_line_colors[:],
-						s.motion_frame[id],
-						s.motion_frame_count[id],
-						false,
-					),
+				engine.Appearance {
+					colors = {
+						fg = vhstape_synced_color(
+							s.config.glitch_line_colors[:],
+							s.motion_frame[id],
+							s.motion_frame_count[id],
+							false,
+						),
+					},
 				},
 			)
 		}
@@ -567,33 +590,39 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 		if s.motions[id] == .Idle {
 			vhstape_start_scene(s, e, id, .Base)
 		} else {
-			engine.set_visual(
+			engine.set_symbol(e, id, symbol)
+			engine.set_appearance(
 				e,
 				id,
-				engine.Visual {
-					symbol = symbol,
-					fg = vhstape_synced_color(
-						s.config.glitch_line_colors[:],
-						s.motion_frame[id],
-						s.motion_frame_count[id],
-						true,
-					),
+				engine.Appearance {
+					colors = {
+						fg = vhstape_synced_color(
+							s.config.glitch_line_colors[:],
+							s.motion_frame[id],
+							s.motion_frame_count[id],
+							true,
+						),
+					},
 				},
 			)
 		}
 	case .Base:
-		vhstape_set_stable_visual(s, e, id)
+		vhstape_set_stable_appearance(s, e, id)
 		s.scenes[id] = .Idle
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
-			engine.set_visual(
-				e,
+			symbol, appearance := vhstape_noise_appearance(
+				s,
+				s.snow_frames[:],
+				VHSTAPE_SNOW_FRAMES,
 				id,
-				vhstape_noise_visual(s, s.snow_frames[:], VHSTAPE_SNOW_FRAMES, id, step / 2),
+				step / 2,
 			)
+			engine.set_symbol(e, id, symbol)
+			engine.set_appearance(e, id, appearance)
 		} else {
-			vhstape_set_stable_visual(s, e, id)
+			vhstape_set_stable_appearance(s, e, id)
 		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == VHSTAPE_SNOW_FRAMES * 2 + 1 {
@@ -602,28 +631,27 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 		}
 	case .Final_Snow:
 		step := s.scene_ticks[id]
-		engine.set_visual(
-			e,
+		symbol, appearance := vhstape_noise_appearance(
+			s,
+			s.final_snow_frames[:],
+			VHSTAPE_FINAL_SNOW_FRAMES,
 			id,
-			vhstape_noise_visual(
-				s,
-				s.final_snow_frames[:],
-				VHSTAPE_FINAL_SNOW_FRAMES,
-				id,
-				step / 2,
-			),
+			step / 2,
 		)
+		engine.set_symbol(e, id, symbol)
+		engine.set_appearance(e, id, appearance)
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == VHSTAPE_FINAL_SNOW_FRAMES * 2 do s.scenes[id] = .Idle
 	case .Final_Redraw:
 		if s.scene_ticks[id] < 6 {
-			engine.set_visual(
+			engine.set_symbol(e, id, '█')
+			engine.set_appearance(
 				e,
 				id,
-				engine.Visual{symbol = "█", fg = engine.Color{0xFF, 0xFF, 0xFF}},
+				engine.Appearance{colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}},
 			)
 		} else {
-			vhstape_set_final_visual(s, e, id)
+			vhstape_set_final_appearance(s, e, id)
 		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == 7 do s.scenes[id] = .Idle

@@ -105,7 +105,7 @@ spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) {
 		s.config.search_speed_range.hi,
 	)
 	s.spot_steps[i] = max(
-		engine.round_half_even(
+		engine.round_to_int(
 			engine.quadratic_bezier_length(origin, control, target) / s.spot_speeds[i],
 		),
 		1,
@@ -144,22 +144,22 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	s.bright_bg = make([dynamic]Maybe(engine.Color), n)
 	s.dark_bg = make([dynamic]Maybe(engine.Color), n)
 	initial_coords := e.particles.initial_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 
 	for id, i in s.characters {
 		bright := engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 			bright = engine.Color{0x80, 0x80, 0x80}
-			if fg, ok := style.fg.?; ok do bright = fg
-			s.bright_bg[i] = style.bg
-			if bg, ok := style.bg.?; ok do s.dark_bg[i] = engine.adjust_color_brightness(bg, 0.2)
+			if fg, ok := style.colors.fg.?; ok do bright = fg
+			s.bright_bg[i] = style.colors.bg
+			if bg, ok := style.colors.bg.?; ok do s.dark_bg[i] = engine.adjust_color_brightness(bg, 0.2)
 		}
 		s.bright_colors[i] = bright
 		s.dark_colors[i] = engine.adjust_color_brightness(bright, 0.2)
 		engine.set_foreground(e, id, s.dark_colors[i])
 		engine.set_background(e, id, s.color_handling == .Dynamic ? s.dark_bg[i] : nil)
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 	}
 
 	count := s.config.spotlight_count
@@ -216,7 +216,7 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 				s.spot_targets[i] = e.canvas.center
 				s.spot_controls[i] = s.spot_positions[i]
 				s.spot_steps[i] = max(
-					engine.round_half_even(
+					engine.round_to_int(
 						engine.line_length(s.spot_positions[i], e.canvas.center, true) / 0.5,
 					),
 					1,
@@ -235,22 +235,23 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 
 	initial_coords := e.particles.initial_coord
 	for id, i in s.characters {
-		visual := engine.get_visual(e, id)
+		appearance := engine.get_appearance(e, id)
 		p := initial_coords[id]
 		nearest := engine.line_length(s.spot_positions[0], p, true)
 		for j in 1 ..< len(s.spot_positions) do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
 		if s.color_handling == .Dynamic &&
 		   s.phase == .Expand &&
-		   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil {
-			visual.fg = nil
-			visual.bg = engine.get_initial_visual(e, engine.Particle_Id(id)).bg
-			engine.set_particle(e, id, visual = visual)
+		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil {
+			appearance.colors.fg = nil
+			appearance.colors.bg =
+				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg
+			engine.set_appearance(e, id, appearance)
 			continue
 		}
 		if nearest > f64(s.illuminate_range) {
-			visual.fg = s.dark_colors[i]
-			visual.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
-			engine.set_particle(e, id, visual = visual)
+			appearance.colors.fg = s.dark_colors[i]
+			appearance.colors.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
+			engine.set_appearance(e, id, appearance)
 			continue
 		}
 		bright := s.bright_colors[i]
@@ -261,17 +262,17 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 				1 - (nearest - start) / (f64(s.illuminate_range) * s.config.beam_falloff),
 				0.2,
 			)
-			visual.fg = engine.adjust_color_brightness(bright, factor)
+			appearance.colors.fg = engine.adjust_color_brightness(bright, factor)
 			if s.color_handling == .Dynamic {
 				if bg, ok := s.bright_bg[i].?; ok {
-					visual.bg = engine.adjust_color_brightness(bg, factor)
+					appearance.colors.bg = engine.adjust_color_brightness(bg, factor)
 				}
 			}
 		} else {
-			visual.fg = bright
-			visual.bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
+			appearance.colors.fg = bright
+			appearance.colors.bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
 		}
-		engine.set_particle(e, id, visual = visual)
+		engine.set_appearance(e, id, appearance)
 	}
 	if s.phase == .Expand do s.illuminate_range += 1
 	return true

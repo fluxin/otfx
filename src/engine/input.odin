@@ -1,7 +1,5 @@
 package engine
 
-import "core:unicode/utf8"
-
 // Decode input text and terminal escapes, then materialize input particles.
 
 Input_Error :: enum {
@@ -14,7 +12,7 @@ Input_Error :: enum {
 
 Input_Cell :: struct {
 	symbol: rune,
-	style:  Visual,
+	style:  Appearance,
 }
 
 Line :: struct {
@@ -22,8 +20,8 @@ Line :: struct {
 	width: int,
 }
 
-input_style_has_color :: #force_inline proc(style: Visual) -> bool {
-	return style.fg != nil || style.bg != nil
+input_style_has_color :: #force_inline proc(style: Appearance) -> bool {
+	return style.colors.fg != nil || style.colors.bg != nil
 }
 
 preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error) {
@@ -31,7 +29,7 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 	lines: [dynamic]Line
 	append(&lines, Line{})
 	row, col := 0, 0
-	active: Visual
+	active: Appearance
 	standard_fg: Maybe(int)
 
 	ensure :: proc(lines: ^[dynamic]Line, row, col: int) {
@@ -162,7 +160,7 @@ input_apply_cursor :: proc(params, intermediates: []rune, final: rune, row, col:
 	return true
 }
 
-input_apply_sgr :: proc(params: []rune, active: ^Visual, standard_fg: ^Maybe(int)) -> bool {
+input_apply_sgr :: proc(params: []rune, active: ^Appearance, standard_fg: ^Maybe(int)) -> bool {
 	values: [dynamic]int
 	defer delete(values[:])
 	if len(params) == 0 {
@@ -191,25 +189,25 @@ input_apply_sgr :: proc(params: []rune, active: ^Visual, standard_fg: ^Maybe(int
 			standard_fg^ = nil
 		case p == 1:
 			active.bold = true
-			if standard, ok := standard_fg^.?; ok do active.fg = xterm_to_rgb(u8(standard - 30 + 8))
+			if standard, ok := standard_fg^.?; ok do active.colors.fg = xterm_to_rgb(u8(standard - 30 + 8))
 		case p == 22:
 			active.bold = false
-			if standard, ok := standard_fg^.?; ok do active.fg = xterm_to_rgb(u8(standard - 30))
+			if standard, ok := standard_fg^.?; ok do active.colors.fg = xterm_to_rgb(u8(standard - 30))
 		case p == 39:
-			active.fg = nil
+			active.colors.fg = nil
 			standard_fg^ = nil
 		case p == 49:
-			active.bg = nil
+			active.colors.bg = nil
 		case p >= 30 && p <= 37:
-			active.fg = xterm_to_rgb(u8(p - 30 + (active.bold ? 8 : 0)))
+			active.colors.fg = xterm_to_rgb(u8(p - 30 + (active.bold ? 8 : 0)))
 			standard_fg^ = p
 		case p >= 90 && p <= 97:
-			active.fg = xterm_to_rgb(u8(p - 90 + 8))
+			active.colors.fg = xterm_to_rgb(u8(p - 90 + 8))
 			standard_fg^ = nil
 		case p >= 40 && p <= 47:
-			active.bg = xterm_to_rgb(u8(p - 40))
+			active.colors.bg = xterm_to_rgb(u8(p - 40))
 		case p >= 100 && p <= 107:
-			active.bg = xterm_to_rgb(u8(p - 100 + 8))
+			active.colors.bg = xterm_to_rgb(u8(p - 100 + 8))
 		case p == 38 || p == 48:
 			if i + 1 >= len(values) do return false
 			is_fg := p == 38
@@ -231,10 +229,10 @@ input_apply_sgr :: proc(params: []rune, active: ^Visual, standard_fg: ^Maybe(int
 				return false
 			}
 			if is_fg {
-				active.fg = color
+				active.colors.fg = color
 				standard_fg^ = nil
 			} else {
-				active.bg = color
+				active.colors.bg = color
 			}
 		}
 		i += 1
@@ -264,14 +262,6 @@ csi_default_param :: proc(params: []rune) -> int {
 	return max(csi_param(params, 0), 1)
 }
 
-rune_to_string :: proc(r: rune) -> string {
-	bytes, n := utf8.encode_rune(r)
-	// string([]byte) aliases the backing array, so copy off the stack
-	out := make([]byte, n)
-	copy(out, bytes[:n])
-	return string(out)
-}
-
 setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 	// The decoded input already gives the population. Allocate/zero the SoA
 	// columns once instead of growing and scattering a complete row per glyph.
@@ -284,6 +274,7 @@ setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 	first := len(e.particles)
 	set_first := len(e.particle_sets.input)
 	resize(&e.particles, first + count)
+	reserve(&e.updates, cap(e.particles))
 	resize(&e.particle_sets.input, set_first + count)
 	written := 0
 	// Wrap by walking the original cells. No copied lines or retained suffixes.
@@ -303,14 +294,19 @@ setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 			if cell.symbol == ' ' && !input_style_has_color(cell.style) {
 				continue
 			}
-			sym := rune_to_string(cell.symbol)
 			id := first + written
-			e.particles.initial_coord[id] = coord(column, input_height - row_index)
-			e.particles.current_coord[id] = e.particles.initial_coord[id]
 			initial := cell.style
-			initial.symbol = sym
-			e.particles.preserve_initial_colors[id] = e.cfg.existing_color_handling == .Always
-			init_particle_visual(e, Particle_Id(id), initial)
+			if e.cfg.existing_color_handling == .Always do e.particles.flags[id] += {.Preserve_Initial_Colors}
+			init_particle(
+				e,
+				Particle_Id(id),
+				cell.symbol,
+				prepare_appearance(e, initial),
+				coord(column, input_height - row_index),
+			)
+			// Input starts with the glyph alone; its original style remains available
+			// to the configured color policy and effect transitions.
+			set_appearance(e, Particle_Id(id), Appearance{})
 			e.particle_sets.input[set_first + written] = Particle_Id(id)
 			written += 1
 		}

@@ -139,31 +139,24 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		if s.config.expand_direction == .Horizontal do mid = engine.coord(e.canvas.center_column, c.row)
 		s.center_targets[i] = mid
 		s.center_max_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(e.canvas.center, mid, true) / s.config.center_movement_speed,
 			),
 			1,
 		)
 		s.full_max_steps[i] = max(
-			engine.round_half_even(
-				engine.line_length(mid, c, true) / s.config.full_movement_speed,
-			),
+			engine.round_to_int(engine.line_length(mid, c, true) / s.config.full_movement_speed),
 			1,
 		)
 		s.center_limit = max(s.center_limit, s.center_max_steps[i])
 		s.full_limit = max(s.full_limit, s.full_max_steps[i])
-		style := engine.get_initial_visual(e, engine.Particle_Id(id))
-		fade_ticks := s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 6 : 66
+		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+		fade_ticks :=
+			s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 6 : 66
 		s.full_limit = max(s.full_limit, fade_ticks)
-		engine.set_visual(
-			e,
-			id,
-			engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				fg = s.config.starting_color,
-			},
-		)
-		e.particles.is_visible[id] = true
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_appearance(e, id, engine.Appearance{colors = {fg = s.config.starting_color}})
+		e.particles.flags[id] += {.Visible}
 	}
 }
 
@@ -184,30 +177,30 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
 		engine.set_particle(
 			e,
 			id,
-			coord = engine.coord_on_line(origin, target, ease.ease(easing, progress)),
+			engine.coord_on_line(origin, target, ease.ease(easing, progress)),
 		)
 	}
 	if s.phase_full && s.phase_tick <= 60 && s.phase_tick % 6 == 0 {
 		gradient_step := s.phase_tick / 6
 		for id, i in s.characters {
-			visual := engine.get_visual(e, id)
+			appearance := engine.get_appearance(e, id)
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					s.config.starting_color,
-					engine.get_initial_visual(e, id),
+					engine.get_initial_appearance(e, id),
 					10,
 					gradient_step,
 				)
 			} else {
-				visual.fg = engine.gradient_between_step(
+				appearance.colors.fg = engine.gradient_between_step(
 					s.config.starting_color,
 					s.final_colors[i],
 					10,
 					gradient_step,
 				)
 			}
-			engine.set_visual(e, id, visual)
+			engine.set_appearance(e, id, appearance)
 		}
 	}
 	s.phase_tick += 1

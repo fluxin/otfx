@@ -150,7 +150,7 @@ laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 			visited[current] = true
 			append(&stack, current)
 			id := cells[current]
-			if !e.particles.is_fill[id] do append(&s.pending, id)
+			if (.Fill not_in e.particles.flags[id]) do append(&s.pending, id)
 		}
 		neighbors: [dynamic; 4]int
 		column := current % width
@@ -222,7 +222,7 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	s.spark_spectrum = engine.gradient_make(s.config.spark_gradient_stops[:], []int{3, 8}, false)
 
 	initial_coords := e.particles.initial_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(
@@ -231,28 +231,29 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 			initial_coords[id],
 		)
 		s.source_starts[i] = -1
-		visible[id] = false
+		visible_flags[id] -= {.Visible}
 	}
 
 	// Create all generated rows after no storage column is borrowed. There is one
 	// spark row per source glyph, the exact upper bound for this one-strike-per-
 	// glyph effect; branch wrap remains free of hot-path division.
+	plain := engine.prepare_appearance(e, engine.Appearance{})
+	symbols := [3]rune{'.', ',', '*'}
 	characters := engine.particle_batch(e, e.canvas.top + 1 + n)
 	for row in 0 ..= e.canvas.top {
-		symbol := row == 0 ? "*" : "/"
-		id := engine.add_particle(&characters, symbol, engine.coord(0, 0))
-		e.particles.is_visible[id] = true
+		id := engine.add_particle(&characters, row == 0 ? '*' : '/', plain, engine.coord(0, 0))
+		e.particles.flags[id] += {.Visible}
 		e.particles.layer[id] = 2
 		append(&s.beam_ids, id)
 	}
 	for i in 0 ..< n {
-		symbols := [3]string{".", ",", "*"}
 		id := engine.add_particle(
 			&characters,
 			symbols[rand.int_max(len(symbols))],
+			plain,
 			engine.coord(0, 0),
 		)
-		e.particles.is_visible[id] = false
+		e.particles.flags[id] -= {.Visible}
 		e.particles.layer[id] = 2
 		append(&s.spark_ids, id)
 		append(&s.spark_starts, -1)
@@ -272,11 +273,11 @@ laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: en
 	s.spark_starts[i] = s.tick
 	s.spark_origins[i], s.spark_controls[i], s.spark_targets[i] = origin, control, target
 	s.spark_steps[i] = max(
-		engine.round_half_even(engine.quadratic_bezier_length(origin, control, target) / 0.3),
+		engine.round_to_int(engine.quadratic_bezier_length(origin, control, target) / 0.3),
 		1,
 	)
 	append(&s.active_sparks, i)
-	engine.set_particle(e, s.spark_ids[i], visible = true)
+	engine.set_particle(e, s.spark_ids[i], engine.Visible(true))
 }
 
 laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
@@ -296,7 +297,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 				s.source_starts[i] = s.tick
 				append(&s.active_sources, i)
 				s.laser_position = e.particles.initial_coord[id]
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 				laseretch_spawn_spark(s, e, s.laser_position)
 			}
 			s.delay = s.config.etch_delay
@@ -306,7 +307,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 	}
 
 	// Only the short cooling tail needs updates. Completed source glyphs retain
-	// their final visual, so scanning the full input every frame is wasted work.
+	// their final appearance, so scanning the full input every frame is wasted work.
 	source_write := 0
 	for i in s.active_sources {
 		id := s.characters[i]
@@ -315,19 +316,19 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 		source_lifetime := 3 + (len(s.cool_spectrum) + 8) * 3
 		if s.color_handling == .Dynamic {
 			has_style :=
-				engine.get_initial_visual(e, engine.Particle_Id(id)).fg != nil ||
-				engine.get_initial_visual(e, engine.Particle_Id(id)).bg != nil
+				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg != nil ||
+				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg != nil
 			source_lifetime = 3 + len(s.cool_spectrum) * 3 + (has_style ? 9 : 10) * 3
 		}
 		if age >= source_lifetime {
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_apply_input_colors(
-					&visual,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					&appearance,
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(e, id, s.final_colors[i])
 			}
@@ -336,7 +337,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 		engine.set_symbol(
 			e,
 			id,
-			age < 3 ? "^" : engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
+			age < 3 ? '^' : e.particles.initial_symbol[engine.Particle_Id(id)],
 		)
 		if age < 3 {
 			engine.set_foreground(e, id, engine.Color{0xFF, 0xE6, 0x80})
@@ -345,17 +346,17 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 		} else {
 			cool_age := age - 3 - len(s.cool_spectrum) * 3
 			if s.color_handling == .Dynamic {
-				style := engine.get_initial_visual(e, engine.Particle_Id(id))
-				if style.fg != nil || style.bg != nil {
-					visual := engine.get_visual(e, id)
+				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+				if style.colors.fg != nil || style.colors.bg != nil {
+					appearance := engine.get_appearance(e, id)
 					engine.dynamic_gradient_to_input(
-						&visual,
+						&appearance,
 						s.cool_spectrum[len(s.cool_spectrum) - 1],
 						style,
 						8,
 						min(cool_age / 3, 8),
 					)
-					engine.set_visual(e, id, visual)
+					engine.set_appearance(e, id, appearance)
 				} else if cool_age < 27 {
 					engine.set_foreground(
 						e,
@@ -390,23 +391,23 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 	}
 	resize(&s.active_sources, source_write)
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	if s.pending_head < len(s.pending) {
 		color_index := (s.tick / 3) % len(s.laser_spectrum)
 		for id, beam in s.beam_ids {
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord(s.laser_position.column + beam, s.laser_position.row + beam),
+				engine.coord(s.laser_position.column + beam, s.laser_position.row + beam),
 			)
 			engine.set_foreground(e, id, s.laser_spectrum[color_index])
-			engine.set_particle(e, id, visible = true)
+			engine.set_particle(e, id, engine.Visible(true))
 			color_index += 1
 			if color_index == len(s.laser_spectrum) do color_index = 0
 		}
 	} else {
 		for id in s.beam_ids {
-			engine.set_particle(e, id, visible = false)
+			engine.set_particle(e, id, engine.Visible(false))
 		}
 	}
 
@@ -420,7 +421,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 		age := s.tick - start
 		color_step := age / s.config.spark_cooling_frames
 		if color_step >= len(s.spark_spectrum) {
-			engine.set_particle(e, id, visible = false)
+			engine.set_particle(e, id, engine.Visible(false))
 			s.spark_starts[i] = -1
 			continue
 		}
@@ -428,7 +429,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_quadratic_bezier(
+				engine.coord_on_quadratic_bezier(
 					s.spark_origins[i],
 					s.spark_controls[i],
 					s.spark_targets[i],

@@ -18,7 +18,7 @@ middleout_finishes_color_and_motion :: proc(t: ^testing.T) {
 		cfg := engine.config_default()
 		cfg.ignore_terminal_dimensions = true
 		cfg.existing_color_handling = mode
-		e, err := engine.engine_make("X", cfg, context.allocator)
+		e, err := engine.engine_make("X", cfg)
 		testing.expect(t, err == .None)
 		s := effects.Middleout_State {
 			config = effects.middleout_config_default(),
@@ -27,7 +27,7 @@ middleout_finishes_color_and_motion :: proc(t: ^testing.T) {
 		free_all(context.temp_allocator)
 		frames := 0
 		for {
-			alive := effects.middleout_next(&s, &e)
+			alive := step_frame(effects.middleout_next, &s, &e)
 			if !alive do break
 			frames += 1
 			if frames > 1000 {testing.expect(t, false, "failed to complete"); break}
@@ -37,12 +37,12 @@ middleout_finishes_color_and_motion :: proc(t: ^testing.T) {
 		if mode == .Ignore {
 			testing.expect_value(
 				t,
-				engine.get_visual(&e, engine.Particle_Id(id)).fg,
+				engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
 				Maybe(engine.Color)(s.final_colors[0]),
 			)
 			testing.expect_value(t, s.full_limit, 66)
 		} else {
-			testing.expect(t, engine.get_visual(&e, engine.Particle_Id(id)).fg == nil)
+			testing.expect(t, engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg == nil)
 			testing.expect_value(t, s.full_limit, 6)
 		}
 	}
@@ -57,13 +57,13 @@ waves_stretch_each_wave :: proc(t: ^testing.T) {
 	for count in ([]int{2, 6}) {
 		cfg := engine.config_default()
 		cfg.ignore_terminal_dimensions = true
-		e, _ := engine.engine_make("X", cfg, context.allocator)
+		e, _ := engine.engine_make("X", cfg)
 		s := effects.Waves_State {
 			config = effects.waves_config_default(),
 		}
 		s.config.wave_count = 2
 		clear(&s.config.wave_symbols)
-		symbols := []string{"a", "b", "c", "d", "e", "f"}
+		symbols := []rune{'a', 'b', 'c', 'd', 'e', 'f'}
 		append(&s.config.wave_symbols, ..symbols[:count])
 		clear(&s.config.wave_gradient_stops)
 		append(&s.config.wave_gradient_stops, engine.Color{0, 0, 0}, engine.Color{255, 255, 255})
@@ -71,14 +71,13 @@ waves_stretch_each_wave :: proc(t: ^testing.T) {
 		append(&s.config.wave_gradient_steps, 3)
 		effects.waves_build(&s, &e)
 		free_all(context.temp_allocator)
-		expected := count == 2 ? []string{"a", "a", "b", "b"} : symbols
+		expected := count == 2 ? []rune{'a', 'a', 'b', 'b'} : symbols
 		testing.expect_value(t, s.wave_ticks, 2 * len(expected) * s.config.wave_length)
 		for code, age in s.wave_codes {
 			frame :=
 				engine.eased_timeline_index(age, s.wave_ticks, s.config.wave_easing) /
 				s.config.wave_length
-			visual := e.visuals[code - 1].visual
-			testing.expect_value(t, visual.symbol, expected[frame % len(expected)])
+			testing.expect_value(t, s.wave_symbols[age], expected[frame % len(expected)])
 		}
 		testing.expect_value(t, s.last_wave, engine.Color{255, 255, 255})
 	}
@@ -93,7 +92,7 @@ synthgrid_launches_one_block_per_tick :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	cfg.canvas_width, cfg.canvas_height = 84, 13
-	e, _ := engine.engine_make("X", cfg, context.allocator)
+	e, _ := engine.engine_make("X", cfg)
 	s := effects.Synthgrid_State {
 		config = effects.synthgrid_config_default(),
 	}
@@ -105,7 +104,7 @@ synthgrid_launches_one_block_per_tick :: proc(t: ^testing.T) {
 	s.phase = .Text
 	for tick in 0 ..< s.active_limit + 1 {
 		before := s.next_group
-		effects.synthgrid_next(&s, &e)
+		step_frame(effects.synthgrid_next, &s, &e)
 		testing.expect_value(t, s.next_group - before, tick < s.active_limit ? 1 : 0)
 	}
 }
@@ -119,7 +118,7 @@ spotlights_render_before_radius_increment :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	cfg.canvas_width, cfg.canvas_height = 9, 3
-	e, _ := engine.engine_make("X", cfg, context.allocator)
+	e, _ := engine.engine_make("X", cfg)
 	s := effects.Spotlights_State {
 		config = effects.spotlights_config_default(),
 	}
@@ -130,14 +129,14 @@ spotlights_render_before_radius_increment :: proc(t: ^testing.T) {
 	id := s.characters[0]
 	p := e.particles.initial_coord[id]
 	for &spot in s.spot_positions do spot = engine.coord(p.column + 3, p.row)
-	alive := effects.spotlights_next(&s, &e)
+	alive := step_frame(effects.spotlights_next, &s, &e)
 	testing.expect(t, alive)
 	testing.expect_value(
 		t,
-		engine.get_visual(&e, engine.Particle_Id(id)).fg,
+		engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
 		Maybe(engine.Color)(s.dark_colors[0]),
 	)
-	alive = effects.spotlights_next(&s, &e)
+	alive = step_frame(effects.spotlights_next, &s, &e)
 	testing.expect(t, !alive)
 }
 
@@ -150,7 +149,7 @@ bubbles_pop_motion_and_color_are_independent :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	cfg.canvas_width, cfg.canvas_height = 60, 30
-	e, _ := engine.engine_make("ABCDE", cfg, context.allocator)
+	e, _ := engine.engine_make("ABCDE", cfg)
 	s := effects.Bubbles_State {
 		config = effects.bubbles_config_default(),
 	}
@@ -161,10 +160,10 @@ bubbles_pop_motion_and_color_are_independent :: proc(t: ^testing.T) {
 	id := s.characters[0]
 	s.delay = 0
 	for tick in 0 ..< 5 {
-		effects.bubbles_next(&s, &e)
+		step_frame(effects.bubbles_next, &s, &e)
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Particle_Id(id)).fg,
+			engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
 			Maybe(engine.Color)(s.rainbow_palette[s.color_offsets[id] + tick / 4]),
 		)
 	}
@@ -179,16 +178,16 @@ bubbles_pop_motion_and_color_are_independent :: proc(t: ^testing.T) {
 		s.pop_steps[member] = 100
 	}
 	for tick in 0 ..< 19 {
-		effects.bubbles_next(&s, &e)
+		step_frame(effects.bubbles_next, &s, &e)
 		if tick == 0 {
 			testing.expect(t, e.particles.current_coord[id] != s.pop_targets[id])
-			testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).symbol, "*")
+			testing.expect_value(t, e.particles.symbol[engine.Particle_Id(id)], '*')
 		}
 	}
 	testing.expect_value(
 		t,
-		engine.get_visual(&e, engine.Particle_Id(id)).symbol,
-		engine.get_initial_visual(&e, engine.Particle_Id(id)).symbol,
+		e.particles.symbol[engine.Particle_Id(id)],
+		e.particles.initial_symbol[engine.Particle_Id(id)],
 	)
 	testing.expect(t, e.particles.current_coord[id] != e.particles.initial_coord[id])
 	testing.expect_value(t, s.bubble_states[0], effects.Bubbles_Bubble_State.Pop)
@@ -202,24 +201,24 @@ blackhole_pulses_before_explosion :: proc(t: ^testing.T) {
 	context.allocator = mem.dynamic_arena_allocator(&arena)
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
-	e, _ := engine.engine_make("BLACK HOLE", cfg, context.allocator)
+	e, _ := engine.engine_make("BLACK HOLE", cfg)
 	s := effects.Blackhole_State {
 		config = effects.blackhole_config_default(),
 	}
 	effects.blackhole_build(&s, &e)
 	free_all(context.temp_allocator)
 	frames, pulses := 0, 0
-	symbols := []string{"◦", "◎", "◉", "●", "◉", "◎", "◦"}
+	symbols := []rune{'◦', '◎', '◉', '●', '◉', '◎', '◦'}
 	id := s.characters[s.ring_sources[0]]
 	for {
-		alive := effects.blackhole_next(&s, &e)
+		alive := step_frame(effects.blackhole_next, &s, &e)
 		if !alive do break
 		frames += 1
 		if frames > 5000 {testing.expect(t, false, "failed to complete"); break}
 		if s.phase == .Collapsing && e.particles.layer[id] == 3 && pulses < 63 {
 			testing.expect_value(
 				t,
-				engine.get_visual(&e, engine.Particle_Id(id)).symbol,
+				e.particles.symbol[engine.Particle_Id(id)],
 				symbols[(pulses / 3) % 7],
 			)
 			testing.expect_value(t, e.particles.current_coord[id], e.canvas.center)
@@ -231,7 +230,7 @@ blackhole_pulses_before_explosion :: proc(t: ^testing.T) {
 		testing.expect_value(t, e.particles.current_coord[char], e.particles.initial_coord[char])
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Particle_Id(char)).fg,
+			engine.get_appearance(&e, engine.Particle_Id(char)).colors.fg,
 			Maybe(engine.Color)(s.final_colors[i]),
 		)
 	}
@@ -246,7 +245,7 @@ bubbles_mixed_styles_finish_the_longest_scene :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	cfg.existing_color_handling = .Dynamic
-	e, _ := engine.engine_make("ABCD\x1b[31mE\x1b[0m", cfg, context.allocator)
+	e, _ := engine.engine_make("ABCD\x1b[31mE\x1b[0m", cfg)
 	s := effects.Bubbles_State {
 		config = effects.bubbles_config_default(),
 	}
@@ -260,13 +259,13 @@ bubbles_mixed_styles_finish_the_longest_scene :: proc(t: ^testing.T) {
 		s.expand_steps[id], s.pop_steps[id] = 1, 1
 	}
 	for tick in 0 ..< 72 {
-		alive := effects.bubbles_next(&s, &e)
+		alive := step_frame(effects.bubbles_next, &s, &e)
 		testing.expect(t, alive)
 		if tick < 71 do testing.expect_value(t, s.bubble_states[0], effects.Bubbles_Bubble_State.Pop)
 	}
-	alive := effects.bubbles_next(&s, &e)
+	alive := step_frame(effects.bubbles_next, &s, &e)
 	testing.expect(t, !alive)
-	for id in s.characters do testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).fg, engine.get_initial_visual(&e, engine.Particle_Id(id)).fg)
+	for id in s.characters do testing.expect_value(t, engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg, engine.get_initial_appearance(&e, engine.Particle_Id(id)).colors.fg)
 }
 
 @(test)
@@ -278,7 +277,7 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	cfg.canvas_width, cfg.canvas_height = 40, 12
-	e, _ := engine.engine_make(strings.repeat("X", 23), cfg, context.allocator)
+	e, _ := engine.engine_make(strings.repeat("X", 23), cfg)
 	s := effects.Swarm_State {
 		config = effects.swarm_config_default(),
 	}
@@ -313,7 +312,7 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 	frames := 0
 	saw_inner_motion := false
 	for {
-		alive := effects.swarm_next(&s, &e)
+		alive := step_frame(effects.swarm_next, &s, &e)
 		if !alive do break
 		frames += 1
 		for i in s.active_indexes {
@@ -322,7 +321,7 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 				saw_inner_motion = true
 				testing.expect_value(
 					t,
-					engine.get_visual(&e, engine.Particle_Id(s.characters[i])).fg,
+					engine.get_appearance(&e, engine.Particle_Id(s.characters[i])).colors.fg,
 					Maybe(engine.Color)(s.flash_colors[s.group_by_index[i] * 26]),
 				)
 			}
@@ -331,11 +330,11 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, saw_inner_motion)
 	for id, i in s.characters {
-		testing.expect(t, e.particles.is_visible[id])
+		testing.expect(t, (.Visible in e.particles.flags[id]))
 		testing.expect_value(t, e.particles.current_coord[id], e.particles.initial_coord[id])
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Particle_Id(id)).fg,
+			engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
 			Maybe(engine.Color)(s.final_colors[i]),
 		)
 	}
@@ -349,7 +348,7 @@ waves_support_long_timelines :: proc(t: ^testing.T) {
 	context.allocator = mem.dynamic_arena_allocator(&arena)
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
-	e, _ := engine.engine_make("X", cfg, context.allocator)
+	e, _ := engine.engine_make("X", cfg)
 	s := effects.Waves_State {
 		config = effects.waves_config_default(),
 	}
@@ -357,7 +356,7 @@ waves_support_long_timelines :: proc(t: ^testing.T) {
 	s.config.wave_length = 1
 	s.config.wave_easing = .Linear
 	clear(&s.config.wave_symbols)
-	append(&s.config.wave_symbols, "a", "b", "c")
+	append(&s.config.wave_symbols, 'a', 'b', 'c')
 	clear(&s.config.wave_gradient_stops)
 	append(&s.config.wave_gradient_stops, engine.Color{1, 2, 3})
 	clear(&s.config.wave_gradient_steps)
@@ -366,8 +365,7 @@ waves_support_long_timelines :: proc(t: ^testing.T) {
 	testing.expect(t, len(s.wave_codes) > 65536)
 	for age in 65534 ..< len(s.wave_codes) {
 		frame := engine.eased_timeline_index(age, s.wave_ticks, .Linear)
-		visual := e.visuals[s.wave_codes[age] - 1].visual
-		testing.expect_value(t, visual.symbol, s.config.wave_symbols[frame % 3])
+		testing.expect_value(t, s.wave_symbols[age], s.config.wave_symbols[frame % 3])
 	}
 }
 
@@ -380,7 +378,7 @@ decrypt_supports_large_color_palettes :: proc(t: ^testing.T) {
 	rand.reset_u64(42)
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
-	e, _ := engine.engine_make("ABCDEFGHIJKLMNOPQRSTUVWXYZ", cfg, context.allocator)
+	e, _ := engine.engine_make("ABCDEFGHIJKLMNOPQRSTUVWXYZ", cfg)
 	s := effects.Decrypt_State {
 		config = effects.decrypt_config_default(),
 	}
@@ -390,12 +388,12 @@ decrypt_supports_large_color_palettes :: proc(t: ^testing.T) {
 	}
 	effects.decrypt_build(&s, &e)
 	s.phase = .Decrypting
-	effects.decrypt_next(&s, &e)
+	step_frame(effects.decrypt_next, &s, &e)
 	used_large_index := false
 	for id, row in s.characters {
 		index := s.color_index[row]
 		used_large_index ||= index > 255
-		color, ok := engine.get_visual(&e, engine.Particle_Id(id)).fg.?
+		color, ok := engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg.?
 		testing.expect(t, ok)
 		testing.expect_value(t, color, s.config.ciphertext_colors[index])
 	}

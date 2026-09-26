@@ -110,21 +110,23 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		e.particles.current_coord[id] = start
 		s.origins[i] = start
 		s.max_steps[i] = max(
-			engine.round_half_even(engine.line_length(start, c, true) / s.config.movement_speed),
+			engine.round_to_int(engine.line_length(start, c, true) / s.config.movement_speed),
 			1,
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
 		e.particles.layer[id] = 1
-		engine.set_visual(
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				fg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).fg : spectrum[0],
-				bg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).bg : nil,
+			engine.Appearance {
+				colors = {
+					fg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg : spectrum[0],
+					bg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg : nil,
+				},
 			},
 		)
-		e.particles.is_visible[id] = true
+		e.particles.flags[id] += {.Visible}
 	}
 	s.initial_hold = 25
 }
@@ -143,19 +145,19 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 		engine.set_particle(
 			e,
 			id,
-			coord = engine.coord_on_line(
+			engine.coord_on_line(
 				s.origins[i],
 				e.particles.initial_coord[id],
 				ease.ease(s.config.movement_easing, progress),
 			),
 		)
 		if s.color_handling == .Dynamic {
-			visual := engine.get_visual(e, id)
+			appearance := engine.get_appearance(e, id)
 			engine.dynamic_apply_input_colors(
-				&visual,
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
+				&appearance,
+				engine.get_initial_appearance(e, engine.Particle_Id(id)),
 			)
-			engine.set_visual(e, id, visual)
+			engine.set_appearance(e, id, appearance)
 		} else {
 			engine.set_foreground(
 				e,
@@ -164,23 +166,23 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 					s.config.final_gradient_stops[0],
 					s.final_colors[i],
 					10,
-					min(engine.round_half_even(progress * 9), 10),
+					min(engine.round_to_int(progress * 9), 10),
 				),
 			)
 		}
 		if s.tick + 1 >= steps {
-			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
+			engine.set_particle(e, id, e.particles.initial_coord[id])
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_apply_input_colors(
-					&visual,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					&appearance,
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(e, id, s.final_colors[i])
 			}
-			engine.set_particle(e, id, layer = 0)
+			engine.set_particle(e, id, engine.Layer(0))
 		}
 	}
 	s.tick += 1

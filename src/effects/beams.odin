@@ -10,8 +10,8 @@ import "core:fmt"
 // final wipe brightens everything into place.
 
 Beams_Config :: struct {
-	beam_row_symbols:         [dynamic]string,
-	beam_column_symbols:      [dynamic]string,
+	beam_row_symbols:         [dynamic]rune,
+	beam_column_symbols:      [dynamic]rune,
 	beam_delay:               int,
 	beam_row_speed_range:     Int_Range_Value,
 	beam_column_speed_range:  Int_Range_Value,
@@ -35,8 +35,8 @@ beams_config_default :: proc() -> Beams_Config {
 		final_gradient_direction = .Vertical,
 		final_wipe_speed         = 3,
 	}
-	append(&cfg.beam_row_symbols, ..[]string{"▂", "▁", "_"})
-	append(&cfg.beam_column_symbols, ..[]string{"▌", "▍", "▎", "▏"})
+	append(&cfg.beam_row_symbols, ..[]rune{'▂', '▁', '_'})
+	append(&cfg.beam_column_symbols, ..[]rune{'▌', '▍', '▎', '▏'})
 	append(
 		&cfg.beam_gradient_stops,
 		..[]engine.Color {
@@ -125,8 +125,8 @@ Beams_State :: struct {
 	beam_modes:        [dynamic]Beam_Direction,
 	wipe_start_ticks:  [dynamic]int,
 	beam_palette:      [dynamic]engine.Color,
-	row_symbols:       [dynamic]string,
-	column_symbols:    [dynamic]string,
+	row_symbols:       [dynamic]rune,
+	column_symbols:    [dynamic]rune,
 	group_chars:       [dynamic]engine.Particle_Id,
 	groups:            [dynamic]Beam_Group,
 	pending:           [dynamic]int, // group handles
@@ -141,8 +141,8 @@ Beams_State :: struct {
 }
 
 // Expand symbols into the build-time lane; playback indexes the flat row.
-beams_expand_symbols :: proc(symbols: []string, count: int) -> [dynamic]string {
-	out := make([dynamic]string, count)
+beams_expand_symbols :: proc(symbols: []rune, count: int) -> [dynamic]rune {
+	out := make([dynamic]rune, count)
 	repeat_factor := count / len(symbols)
 	overflow_count := count % len(symbols)
 	symbol_index, current_repeat := 0, 0
@@ -239,7 +239,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 
 	black := engine.Color{0x00, 0x00, 0x00}
 	for id in s.characters {
-		if e.particles.is_fill[id] {
+		if (.Fill in e.particles.flags[id]) {
 			s.final_colors[id] = black
 			s.faded_colors[id] = black
 			continue
@@ -298,7 +298,7 @@ beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Grou
 	group.head += 1
 	s.beam_start_ticks[next] = s.tick
 	s.beam_modes[next] = group.direction
-	engine.set_particle(e, next, visible = true)
+	engine.set_particle(e, next, engine.Visible(true))
 }
 
 beams_beam_active :: proc(s: Beams_State) -> bool {
@@ -319,7 +319,7 @@ beams_wipe_active :: proc(s: Beams_State) -> bool {
 	return false
 }
 
-beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
+beams_update_appearances :: proc(s: Beams_State, e: ^engine.Engine) {
 	beam_ticks := len(s.beam_palette) * s.config.beam_gradient_frames + 22
 	for id in s.characters {
 		beam_start := s.beam_start_ticks[id]
@@ -332,18 +332,14 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 					engine.set_symbol(e, id, symbols[palette_index])
 					engine.set_foreground(e, id, s.beam_palette[palette_index])
 				} else {
-					engine.set_symbol(
-						e,
-						id,
-						engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-					)
+					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 					step := min(
 						(age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2,
 						10,
 					)
-					if s.color_handling == .Dynamic && !e.particles.is_fill[id] {
-						style := engine.get_initial_visual(e, engine.Particle_Id(id))
-						if fg, ok := style.fg.?; ok {
+					if s.color_handling == .Dynamic && (.Fill not_in e.particles.flags[id]) {
+						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+						if fg, ok := style.colors.fg.?; ok {
 							engine.set_foreground(
 								e,
 								id,
@@ -357,7 +353,7 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 						} else {
 							engine.set_foreground(e, id, nil)
 						}
-						if bg, ok := style.bg.?; ok {
+						if bg, ok := style.colors.bg.?; ok {
 							engine.set_background(
 								e,
 								id,
@@ -391,15 +387,11 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 		if wipe_start >= 0 {
 			age := s.tick - wipe_start
 			if age < 11 * s.config.final_gradient_frames {
-				engine.set_symbol(
-					e,
-					id,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				)
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				step := min(age / s.config.final_gradient_frames, 10)
-				if s.color_handling == .Dynamic && !e.particles.is_fill[id] {
-					style := engine.get_initial_visual(e, engine.Particle_Id(id))
-					if fg, ok := style.fg.?; ok {
+				if s.color_handling == .Dynamic && (.Fill not_in e.particles.flags[id]) {
+					style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+					if fg, ok := style.colors.fg.?; ok {
 						engine.set_foreground(
 							e,
 							id,
@@ -413,7 +405,7 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 					} else {
 						engine.set_foreground(e, id, nil)
 					}
-					if bg, ok := style.bg.?; ok {
+					if bg, ok := style.colors.bg.?; ok {
 						engine.set_background(
 							e,
 							id,
@@ -495,7 +487,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 				s.final_wipe_idx += 1
 				for id in g {
 					s.wipe_start_ticks[id] = s.tick
-					engine.set_particle(e, id, visible = true)
+					engine.set_particle(e, id, engine.Visible(true))
 				}
 			}
 		} else {
@@ -503,7 +495,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 		}
 	case .Complete:
 	}
-	beams_update_visuals(s^, e)
+	beams_update_appearances(s^, e)
 	s.tick += 1
 	return true
 }

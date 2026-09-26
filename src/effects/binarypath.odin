@@ -4,7 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math/rand"
-import "core:unicode/utf8"
 
 Binarypath_Config :: struct {
 	final_gradient_stops:     [dynamic]engine.Color,
@@ -142,14 +141,15 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	s.codes = make([dynamic]u32, n)
 	s.starts = make([dynamic]int, n)
 	s.states = make([dynamic]Binarypath_Rep_State, n)
+	s.pending = make([dynamic]int, n)
 
 	initial_coords := e.particles.initial_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		target := initial_coords[id]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], target)
 		s.final_colors_by_id[id] = s.final_colors[i]
-		visible[id] = false
+		visible_flags[id] -= {.Visible}
 		origin := engine.canvas_random_coord(e.canvas, true, false)
 		turn :=
 			rand.int_max(2) == 0 ? engine.coord(origin.column, target.row) : engine.coord(target.column, origin.row)
@@ -157,30 +157,35 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		total := first + engine.line_length(turn, target, true)
 		s.origins[i], s.turns[i] = origin, turn
 		s.first_lengths[i], s.total_lengths[i] = first, total
-		s.travel_steps[i] = max(engine.round_half_even(total / s.config.movement_speed), 1)
+		s.travel_steps[i] = max(engine.round_to_int(total / s.config.movement_speed), 1)
 		s.starts[i] = -1
-		append(&s.pending, i)
+		s.pending[i] = i
 		// ttfx formats the source Unicode code point as eight binary digits.
-		r, _ := utf8.decode_rune(engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+		r := e.particles.initial_symbol[engine.Particle_Id(id)]
 		s.codes[i] = u32(r)
 	}
 	// No character-storage column is held across add_particle: it can grow and
 	// relocate each SoA field. The prep pass above owns all source data needed
 	// to create the virtual bit rows below.
+	plain := engine.prepare_appearance(e, engine.Appearance{})
 	characters := engine.particle_batch(e, 8 * n)
 	for i in 0 ..< n {
 		for bit in 0 ..< 8 {
-			symbol := ((s.codes[i] >> u32(7 - bit)) & 1) == 0 ? "0" : "1"
-			bit_id := engine.add_particle(&characters, symbol, s.origins[i])
+			bit_id := engine.add_particle(
+				&characters,
+				((s.codes[i] >> u32(7 - bit)) & 1) == 0 ? '0' : '1',
+				plain,
+				s.origins[i],
+			)
 			color := s.config.binary_colors[rand.int_max(len(s.config.binary_colors))]
 			s.bit_ids[i * 8 + bit] = bit_id
 			s.bit_colors[i * 8 + bit] = color
-			e.particles.is_visible[bit_id] = false
+			e.particles.flags[bit_id] -= {.Visible}
 			e.particles.layer[bit_id] = 1
 			engine.set_foreground(e, bit_id, color)
 		}
 	}
-	s.max_active = max(engine.round_half_even(s.config.active_binary_groups * f64(n)), 1)
+	s.max_active = max(engine.round_to_int(s.config.active_binary_groups * f64(n)), 1)
 	reserve(&s.active, min(n, s.max_active))
 }
 
@@ -202,26 +207,22 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 		if s.wipe_group >= groups do return false
 
 
-		visible := e.particles.is_visible
+		visible_flags := e.particles.flags
 		for _ in 0 ..< 2 {
 			if s.wipe_group == groups do break
 			for id in engine.group_members(s.final_wipe, s.wipe_group) {
-				engine.set_symbol(
-					e,
-					id,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				)
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				if s.color_handling == .Dynamic {
-					visual := engine.get_visual(e, id)
+					appearance := engine.get_appearance(e, id)
 					engine.dynamic_apply_input_colors(
-						&visual,
-						engine.get_initial_visual(e, engine.Particle_Id(id)),
+						&appearance,
+						engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					)
-					engine.set_visual(e, id, visual)
+					engine.set_appearance(e, id, appearance)
 				} else {
 					engine.set_foreground(e, id, s.final_colors_by_id[id])
 				}
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 			}
 			s.wipe_group += 1
 		}
@@ -239,7 +240,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 		append(&s.active, rep)
 	}
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 
 
 	any_collapse := false
@@ -256,19 +257,20 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 					id,
 					coord = binarypath_coord_at(s, e, rep, bit_age),
 					visible = true,
+					layer = e.particles[id].layer,
 				)
 			}
 			s.active[write] = rep
 			write += 1
 		} else {
 			for bit in 0 ..< 8 {
-				engine.set_particle(e, s.bit_ids[rep * 8 + bit], visible = false)
+				engine.set_particle(e, s.bit_ids[rep * 8 + bit], engine.Visible(false))
 			}
 			s.states[rep] = .Collapse
 			s.starts[rep] = s.tick
 			id := s.characters[rep]
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
-			engine.set_particle(e, id, visible = true)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			engine.set_particle(e, id, engine.Visible(true))
 		}
 	}
 	resize(&s.active, write)
@@ -278,17 +280,17 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 		age := s.tick - s.starts[i]
 		if age < 21 {
 			if s.color_handling == .Dynamic {
-				style := engine.get_initial_visual(e, engine.Particle_Id(id))
-				visual := engine.get_visual(e, id)
+				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_gradient_to_dimmed_input(
-					&visual,
+					&appearance,
 					engine.Color{0xFF, 0xFF, 0xFF},
 					style,
 					0.5,
 					6,
 					age / 3,
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
 				engine.set_foreground(

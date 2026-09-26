@@ -94,10 +94,10 @@ slice_schedule :: proc(
 	slot := slots[id]
 	assert(slot >= 0)
 	destination := e.particles.initial_coord[id]
-	engine.set_particle(e, id, coord = origin)
+	engine.set_particle(e, id, origin)
 	s.motion_origins[slot] = origin
 	s.motion_max_steps[slot] = max(
-		engine.round_half_even(engine.line_length(origin, destination, true) / speed),
+		engine.round_to_int(engine.line_length(origin, destination, true) / speed),
 		1,
 	)
 }
@@ -126,13 +126,15 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	for id in characters {
 		color := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
-		engine.set_visual(
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				fg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).fg : color,
-				bg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).bg : nil,
+			engine.Appearance {
+				colors = {
+					fg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg : color,
+					bg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg : nil,
+				},
 			},
 		)
 	}
@@ -282,7 +284,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 		}
 	}
 	for id in s.motion_ids {
-		e.particles.is_visible[id] = true
+		e.particles.flags[id] += {.Visible}
 	}
 }
 
@@ -299,11 +301,7 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
 		step := steps[read] + 1
 		maximum := max_steps[read]
 		factor := ease.ease(s.config.movement_easing, f64(step) / f64(maximum))
-		engine.set_particle(
-			e,
-			id,
-			coord = engine.coord_on_line(origins[read], initial_coords[id], factor),
-		)
+		engine.set_particle(e, id, engine.coord_on_line(origins[read], initial_coords[id], factor))
 		if step == maximum do continue
 		if write != read {
 			ids[write] = id

@@ -17,7 +17,7 @@ coord :: proc(column, row: int) -> Coord {
 	return {column, row}
 }
 
-round_half_even :: #force_inline proc(x: f64) -> int {
+round_to_int :: #force_inline proc(x: f64) -> int {
 	return int(simd.extract(simd.nearest(#simd[2]f64{x, 0}), 0))
 }
 
@@ -73,7 +73,7 @@ find_coords_on_circle :: proc(
 ) -> [dynamic]Coord {
 	points: [dynamic]Coord
 	if radius == 0 do return points
-	limit := coords_limit != 0 ? coords_limit : round_half_even(math.TAU * f64(radius))
+	limit := coords_limit != 0 ? coords_limit : round_to_int(math.TAU * f64(radius))
 	seen: [dynamic]Coord
 	angle_step := math.TAU / f64(limit)
 	radial := linalg.Vector2f64{f64(radius), 0}
@@ -84,7 +84,7 @@ find_coords_on_circle :: proc(
 		q := rot * radial
 		q.x *= 2
 		p := origin_v + q
-		point := coord(round_half_even(p.x), round_half_even(p.y))
+		point := coord(round_to_int(p.x), round_to_int(p.y))
 		if unique {
 			dup := false
 			for q2 in seen {
@@ -99,18 +99,6 @@ find_coords_on_circle :: proc(
 		append(&points, point)
 	}
 	return points
-}
-
-find_coords_in_rect :: proc(origin: Coord, distance: int) -> [dynamic]Coord {
-	coords: [dynamic]Coord
-	if distance == 0 do return coords
-	reserve(&coords, (2 * distance + 1) * (2 * distance + 1))
-	for column in origin.column - distance ..= origin.column + distance {
-		for row in origin.row - distance ..= origin.row + distance {
-			append(&coords, coord(column, row))
-		}
-	}
-	return coords
 }
 
 // TerminalTextEffects calls this a circle; terminal cell aspect makes it an

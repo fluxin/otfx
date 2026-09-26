@@ -8,7 +8,7 @@ import "core:mem"
 import "core:os"
 import "core:strings"
 
-// Capture real renderer cells for cross-language visual review. Separate from
+// Capture real renderer cells for cross-language appearance review. Separate from
 // the product: no effect can write a review-only frame or bypass its renderer.
 Cell :: struct {
 	x, y:           int,
@@ -68,18 +68,17 @@ main :: proc() {
 						tick = tick,
 					}
 					e := &run.engine_state
-					for id, cell in e.frame_particles {
+					for entry, cell in e.cells {
+						id := entry.top
 						if id < 0 do continue
-						v := engine.get_render_visual(e, engine.Particle_Id(id))
+						v := engine.get_render_appearance(e, engine.Particle_Id(id))
 						c := Cell {
 							x      = cell % width,
 							y      = cell / width,
-							symbol = v.symbol,
+							symbol = fmt.aprintf("%c", e.particles[id].symbol) if e.particles[id].symbol != 0 else "",
 						}
-						// Copy symbols: the run arena is released after this pass.
-						c.symbol = strings.clone(c.symbol)
-						if color, set := v.fg.?; set do c.fg = fmt.aprintf("#%02x%02x%02x", color.r, color.g, color.b)
-						if color, set := v.bg.?; set do c.bg = fmt.aprintf("#%02x%02x%02x", color.r, color.g, color.b)
+						if color, set := v.colors.fg.?; set do c.fg = fmt.aprintf("#%02x%02x%02x", color.r, color.g, color.b)
+						if color, set := v.colors.bg.?; set do c.bg = fmt.aprintf("#%02x%02x%02x", color.r, color.g, color.b)
 						append(&snapshot.cells, c)
 					}
 					append(&result.frames, snapshot)

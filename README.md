@@ -29,7 +29,7 @@ job: a small shell-friendly binary that turns piped text into an animation.
 The design is data-oriented from the renderer through the effects:
 
 - `#soa[dynamic]Particle` keeps hot particle columns contiguous.
-- Effects publish through `set_particle`, `set_visual`, and field setters.
+- Effects publish through `set_particle`, `set_appearance`, and field setters.
   The engine handles clipping, cell ownership, and dirty tracking.
 - Persistent row bytes are patched for sparse changes or rebuilt for dense
   changes, then submitted as row slices through `writev`.

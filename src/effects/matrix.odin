@@ -13,7 +13,7 @@ import "core:fmt"
 Matrix_Config :: struct {
 	highlight_color:          engine.Color,
 	rain_color_gradient:      [dynamic]engine.Color,
-	rain_symbols:             [dynamic]string,
+	rain_symbols:             [dynamic]rune,
 	rain_fall_delay_range:    Int_Range_Value,
 	rain_column_delay_range:  Int_Range_Value,
 	rain_time:                int,
@@ -44,57 +44,57 @@ matrix_config_default :: proc() -> Matrix_Config {
 	)
 	append(
 		&cfg.rain_symbols,
-		..[]string {
-			"2",
-			"5",
-			"9",
-			"8",
-			"Z",
-			"*",
-			")",
-			":",
-			".",
-			"\"",
-			"=",
-			"+",
-			"-",
-			"¦",
-			"|",
-			"_",
-			"ｦ",
-			"ｱ",
-			"ｳ",
-			"ｴ",
-			"ｵ",
-			"ｶ",
-			"ｷ",
-			"ｹ",
-			"ｺ",
-			"ｻ",
-			"ｼ",
-			"ｽ",
-			"ｾ",
-			"ｿ",
-			"ﾀ",
-			"ﾂ",
-			"ﾃ",
-			"ﾅ",
-			"ﾆ",
-			"ﾇ",
-			"ﾈ",
-			"ﾊ",
-			"ﾋ",
-			"ﾎ",
-			"ﾏ",
-			"ﾐ",
-			"ﾑ",
-			"ﾒ",
-			"ﾓ",
-			"ﾔ",
-			"ﾕ",
-			"ﾗ",
-			"ﾘ",
-			"ﾜ",
+		..[]rune {
+			'2',
+			'5',
+			'9',
+			'8',
+			'Z',
+			'*',
+			')',
+			':',
+			'.',
+			'"',
+			'=',
+			'+',
+			'-',
+			'¦',
+			'|',
+			'_',
+			'ｦ',
+			'ｱ',
+			'ｳ',
+			'ｴ',
+			'ｵ',
+			'ｶ',
+			'ｷ',
+			'ｹ',
+			'ｺ',
+			'ｻ',
+			'ｼ',
+			'ｽ',
+			'ｾ',
+			'ｿ',
+			'ﾀ',
+			'ﾂ',
+			'ﾃ',
+			'ﾅ',
+			'ﾆ',
+			'ﾇ',
+			'ﾈ',
+			'ﾊ',
+			'ﾋ',
+			'ﾎ',
+			'ﾏ',
+			'ﾐ',
+			'ﾑ',
+			'ﾒ',
+			'ﾓ',
+			'ﾔ',
+			'ﾕ',
+			'ﾗ',
+			'ﾘ',
+			'ﾜ',
 		},
 	)
 	append(
@@ -234,7 +234,13 @@ matrix_setup_column :: proc(
 	c.full = false
 	c.phase = phase
 	for id in characters {
-		engine.set_particle(e, id, visible = false, coord = e.particles.initial_coord[id])
+		engine.set_particle(
+			e,
+			id,
+			visible = false,
+			coord = e.particles.initial_coord[id],
+			layer = e.particles[id].layer,
+		)
 	}
 	if phase == .Fill {
 		c.base_delay = rand.int_range(
@@ -267,17 +273,14 @@ matrix_trim :: proc(
 	popped := visible_characters[c.characters.start + c.visible_head]
 	c.visible_head += 1
 	c.visible_count -= 1
-	engine.set_particle(e, popped, visible = false)
+	engine.set_particle(e, popped, engine.Visible(false))
 	if c.visible_count > 1 {
 		// fade the new head to a darker tail color
 		tail := rain_colors[max(len(rain_colors) - 3, 0):]
 		darker := engine.adjust_color_brightness(tail[rand.int_max(len(tail))], 0.65)
 		target := visible_characters[c.characters.start + c.visible_head]
-		engine.set_visual(
-			e,
-			target,
-			engine.Visual{symbol = engine.get_visual(e, target).symbol, fg = darker},
-		)
+
+		engine.set_appearance(e, target, engine.Appearance{colors = {fg = darker}})
 	}
 }
 
@@ -292,9 +295,9 @@ matrix_drop_column :: proc(
 	for id in visible {
 		p := e.particles.current_coord[id]
 		p.row -= 1
-		engine.set_particle(e, id, coord = p)
+		engine.set_particle(e, id, p)
 		if p.row < canvas_bottom {
-			engine.set_particle(e, id, visible = false)
+			engine.set_particle(e, id, engine.Visible(false))
 		} else {
 			visible[write] = id
 			write += 1
@@ -307,7 +310,7 @@ matrix_tick_column :: proc(
 	c: ^Matrix_Rain_Column,
 	characters: []engine.Particle_Id,
 	visible_characters: []engine.Particle_Id,
-	rain_symbols: []string,
+	rain_symbols: []rune,
 	rain_colors: []engine.Color,
 	highlight_color: engine.Color,
 	symbol_swap_chance, color_swap_chance: f64,
@@ -323,30 +326,25 @@ matrix_tick_column :: proc(
 			next := characters[c.pending_head]
 			c.pending_head += 1
 			sym := rain_symbols[rand.int_max(len(rain_symbols))]
-			engine.set_visual(e, next, engine.Visual{symbol = sym, fg = highlight_color})
+			engine.set_symbol(e, next, sym)
+			engine.set_appearance(e, next, engine.Appearance{colors = {fg = highlight_color}})
 			if c.visible_count > 0 {
 				prev :=
 					visible_characters[c.characters.start + c.visible_head + c.visible_count - 1]
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				engine.set_visual(
-					e,
-					prev,
-					engine.Visual{symbol = engine.get_visual(e, prev).symbol, fg = col},
-				)
+
+				engine.set_appearance(e, prev, engine.Appearance{colors = {fg = col}})
 			}
-			engine.set_particle(e, next, visible = true)
+			engine.set_particle(e, next, engine.Visible(true))
 			visible_characters[c.characters.start + c.visible_head + c.visible_count] = next
 			c.visible_count += 1
 		} else if c.visible_count > 0 {
 			last := visible_characters[c.characters.start + c.visible_head + c.visible_count - 1]
-			last_fg := engine.get_visual(e, last).fg
+			last_fg := engine.get_appearance(e, last).colors.fg
 			if last_fg != nil && last_fg.? == highlight_color {
 				col := rain_colors[rand.int_max(len(rain_colors))]
-				engine.set_visual(
-					e,
-					last,
-					engine.Visual{symbol = engine.get_visual(e, last).symbol, fg = col},
-				)
+
+				engine.set_appearance(e, last, engine.Appearance{colors = {fg = col}})
 			}
 			if c.hold_time != 0 {
 				c.hold_time -= 1
@@ -366,23 +364,15 @@ matrix_tick_column :: proc(
 	// random symbol/color swaps
 	visible := matrix_column_visible(visible_characters, c^)
 	for id in visible {
-		next_symbol := ""
+		next_symbol: rune
 		next_color: engine.Color
 		swap_symbol := rand.float64() < symbol_swap_chance
 		swap_color := rand.float64() < color_swap_chance
 		if swap_symbol do next_symbol = rain_symbols[rand.int_max(len(rain_symbols))]
 		if swap_color do next_color = rain_colors[rand.int_max(len(rain_colors))]
 		if !swap_symbol && !swap_color do continue
-		current_symbol := engine.get_visual(e, id).symbol
-		current_fg := engine.get_visual(e, id).fg
-		if swap_symbol &&
-		   next_symbol == current_symbol &&
-		   (!swap_color || (current_fg != nil && current_fg.? == next_color)) {
-			continue
-		}
-		col := swap_color ? next_color : (current_fg != nil ? current_fg.? : highlight_color)
-		sym := swap_symbol ? next_symbol : current_symbol
-		engine.set_visual(e, id, engine.Visual{symbol = sym, fg = col})
+		if swap_symbol do engine.set_symbol(e, id, next_symbol)
+		if swap_color do engine.set_foreground(e, id, next_color)
 	}
 }
 
@@ -468,17 +458,17 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	for id in s.resolve_active {
 		tick := s.resolve_ticks[id]
 		step := min(tick / s.config.final_gradient_frames, 8)
-		engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 		if s.color_handling == .Dynamic {
-			visual := engine.get_visual(e, id)
+			appearance := engine.get_appearance(e, id)
 			engine.dynamic_gradient_to_input(
-				&visual,
+				&appearance,
 				s.config.highlight_color,
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
+				engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				8,
 				step,
 			)
-			engine.set_visual(e, id, visual)
+			engine.set_appearance(e, id, appearance)
 		} else {
 			engine.set_foreground(
 				e,
@@ -494,8 +484,8 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 		tick += 1
 		limit := 9 * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic &&
-		   engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil &&
-		   engine.get_initial_visual(e, engine.Particle_Id(id)).bg == nil {
+		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil &&
+		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg == nil {
 			limit = s.config.final_gradient_frames
 		}
 		if tick == limit {
@@ -637,24 +627,28 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> bool {
 						next := visible[idx]
 						visible[idx] = visible[len(visible) - 1]
 						column.visible_count -= 1
-						if engine.get_initial_visual(e, engine.Particle_Id(next)).symbol != " " ||
-						   engine.get_initial_visual(e, engine.Particle_Id(next)).fg != nil ||
-						   engine.get_initial_visual(e, engine.Particle_Id(next)).bg != nil {
+						if e.particles.initial_symbol[engine.Particle_Id(next)] != ' ' ||
+						   engine.get_initial_appearance(e, engine.Particle_Id(next)).colors.fg !=
+							   nil ||
+						   engine.get_initial_appearance(e, engine.Particle_Id(next)).colors.bg !=
+							   nil {
 							if s.resolve_active_ids[next] == 0 {
 								s.resolve_active_ids[next] = 1
 								s.resolve_ticks[next] = 0
-								engine.set_visual(
+								engine.set_symbol(
 									e,
 									next,
-									engine.Visual {
-										symbol = engine.get_initial_visual(e, engine.Particle_Id(next)).symbol,
-										fg = s.config.highlight_color,
-									},
+									e.particles.initial_symbol[engine.Particle_Id(next)],
+								)
+								engine.set_appearance(
+									e,
+									next,
+									engine.Appearance{colors = {fg = s.config.highlight_color}},
 								)
 								append(&s.resolve_active, next)
 							}
 						} else {
-							engine.set_particle(e, next, visible = false)
+							engine.set_particle(e, next, engine.Visible(false))
 						}
 					}
 					s.resolve_delay = s.config.resolve_delay

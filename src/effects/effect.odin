@@ -429,6 +429,7 @@ run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> 
 	engine.prep_canvas(ctx.cfg.reuse_canvas, ctx.layout.visible_right, ctx.layout.visible_top)
 	frames := 0
 	for ctx.cfg.max_frames == nil || frames < ctx.cfg.max_frames.? {
+		defer free_all(context.temp_allocator)
 		if resize_aware && engine.resize_settled(ctx) {
 			engine.reset_canvas_area()
 			return .Terminal_Resized
@@ -617,7 +618,7 @@ parse_group_flag :: proc(
 }
 
 parse_symbol_flag :: proc(
-	ptr: ^string,
+	ptr: ^rune,
 	args: []string,
 	i: ^int,
 	value: string,
@@ -625,14 +626,14 @@ parse_symbol_flag :: proc(
 ) -> bool {
 	v, ok := opt_value(args, i, value, has_value)
 	if !ok do return false
-	_, rune_bytes := utf8.decode_rune(v)
-	if rune_bytes == 0 || rune_bytes != len(v) do return false
-	ptr^ = v
+	symbol, rune_bytes := utf8.decode_rune(v)
+	if rune_bytes == 0 || rune_bytes != len(v) || !utf8.valid_string(v) do return false
+	ptr^ = symbol
 	return true
 }
 
 parse_symbols_flag :: proc(
-	list: ^[dynamic]string,
+	list: ^[dynamic]rune,
 	args: []string,
 	i: ^int,
 	value: string,
@@ -642,9 +643,9 @@ parse_symbols_flag :: proc(
 	if len(fields) == 0 do return false
 	clear(list)
 	for field in fields {
-		_, rune_bytes := utf8.decode_rune(field)
-		if rune_bytes == 0 || rune_bytes != len(field) do return false
-		append(list, field)
+		symbol, rune_bytes := utf8.decode_rune(field)
+		if rune_bytes == 0 || rune_bytes != len(field) || !utf8.valid_string(field) do return false
+		append(list, symbol)
 	}
 	return true
 }

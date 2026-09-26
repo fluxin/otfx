@@ -10,7 +10,7 @@ import "core:fmt"
 // lands the final gradient.
 
 Sweep_Config :: struct {
-	sweep_symbols:            [dynamic]string,
+	sweep_symbols:            [dynamic]rune,
 	first_sweep_direction:    engine.Particle_Group,
 	second_sweep_direction:   engine.Particle_Group,
 	final_gradient_stops:     [dynamic]engine.Color,
@@ -24,7 +24,7 @@ sweep_config_default :: proc() -> Sweep_Config {
 		second_sweep_direction   = .Column_L2R,
 		final_gradient_direction = .Vertical,
 	}
-	append(&cfg.sweep_symbols, ..[]string{"█", "▓", "▒", "░"})
+	append(&cfg.sweep_symbols, ..[]rune{'█', '▓', '▒', '░'})
 	append(
 		&cfg.final_gradient_stops,
 		..[]engine.Color {
@@ -125,9 +125,9 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	switch s.color_handling {
 	case .Dynamic:
 		for id in e.particle_sets.input {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
-			if fg, ok := style.fg.?; ok do append(&s.dynamic_second_sweep_palette, fg)
-			if bg, ok := style.bg.?; ok do append(&s.dynamic_second_sweep_palette, bg)
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			if fg, ok := style.colors.fg.?; ok do append(&s.dynamic_second_sweep_palette, fg)
+			if bg, ok := style.colors.bg.?; ok do append(&s.dynamic_second_sweep_palette, bg)
 		}
 		if len(s.dynamic_second_sweep_palette) == 0 {
 			append(&s.dynamic_second_sweep_palette, ..spectrum[:])
@@ -139,9 +139,9 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		final: engine.Color_Pair
 		switch s.color_handling {
 		case .Dynamic:
-			if !e.particles.is_fill[id] do final = {engine.get_initial_visual(e, engine.Particle_Id(id)).fg, engine.get_initial_visual(e, engine.Particle_Id(id)).bg}
+			if (.Fill not_in e.particles.flags[id]) do final = engine.get_initial_appearance(e, engine.Particle_Id(id)).colors
 		case .Ignore, .Always:
-			if e.particles.is_fill[id] {
+			if (.Fill in e.particles.flags[id]) {
 				final = {
 					fg = engine.Color{0x00, 0x00, 0x00},
 					bg = nil,
@@ -157,14 +157,24 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 				}
 			}
 		}
-		sym := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
+		sym := e.particles.initial_symbol[engine.Particle_Id(id)]
 
 		first_start := len(s.frames)
 		for symbol in s.config.sweep_symbols {
 			gray := gray_shades[rand.int_max(5)]
-			engine.timeline_append_frame(&s.frames, {symbol, gray, nil, false}, 5)
+			engine.timeline_append_frame(
+				&s.frames,
+				symbol,
+				engine.Appearance{colors = {fg = gray}},
+				5,
+			)
 		}
-		engine.timeline_append_frame(&s.frames, {sym, gray_shades[1], nil, false}, 1)
+		engine.timeline_append_frame(
+			&s.frames,
+			sym,
+			engine.Appearance{colors = {fg = gray_shades[1]}},
+			1,
+		)
 		s.first_frame_spans[id] = {first_start, len(s.config.sweep_symbols) + 1}
 
 		second_start := len(s.frames)
@@ -172,9 +182,14 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 			colors :=
 				s.color_handling == .Dynamic ? s.dynamic_second_sweep_palette[:] : spectrum[:]
 			col := colors[rand.int_max(len(colors))]
-			engine.timeline_append_frame(&s.frames, {symbol, col, nil, false}, 5)
+			engine.timeline_append_frame(
+				&s.frames,
+				symbol,
+				engine.Appearance{colors = {fg = col}},
+				5,
+			)
 		}
-		engine.timeline_append_frame(&s.frames, {sym, final.fg, final.bg, false}, 1)
+		engine.timeline_append_frame(&s.frames, sym, engine.Appearance{colors = final}, 1)
 		s.second_frame_spans[id] = {second_start, len(s.config.sweep_symbols) + 1}
 	}
 
@@ -209,7 +224,7 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
 	for gi in change.added.start ..< change.added.start + change.added.len {
 		for id in engine.group_members(s.reveal.groups, gi) {
 			if s.first_phase {
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 			}
 			phase: i8 = 0
 			if !s.first_phase {
@@ -237,7 +252,8 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
 		span := phase == 0 ? s.first_frame_spans[id] : s.second_frame_spans[id]
 		age := s.tick - s.start_ticks[id]
 		frame := age / 5
-		engine.set_visual(e, id, s.frames[span.start + frame].visual)
+		engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
+		engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
 		if age + 1 == (span.len - 1) * 5 + 1 {
 			s.active_phase[id] = -1
 		} else {

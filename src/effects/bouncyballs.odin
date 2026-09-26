@@ -8,7 +8,7 @@ import "core:math/rand"
 
 Bouncyballs_Config :: struct {
 	ball_colors:              [dynamic]engine.Color,
-	ball_symbols:             [dynamic]string,
+	ball_symbols:             [dynamic]rune,
 	ball_delay:               int,
 	movement_speed:           f64,
 	movement_easing:          ease.Ease,
@@ -32,7 +32,7 @@ bouncyballs_config_default :: proc() -> Bouncyballs_Config {
 			engine.Color{0x5a, 0xcd, 0xa9},
 		},
 	)
-	append(&cfg.ball_symbols, ..[]string{"*", "o", "O", "0", "."})
+	append(&cfg.ball_symbols, ..[]rune{'*', 'o', 'O', '0', '.'})
 	append(
 		&cfg.final_gradient_stops,
 		..[]engine.Color{engine.Color{0xf8, 0xff, 0xae}, engine.Color{0x43, 0xc6, 0xac}},
@@ -75,7 +75,7 @@ Bouncyballs_State :: struct {
 	index_by_id:    [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	ball_colors:    [dynamic]engine.Color,
-	ball_symbols:   [dynamic]string,
+	ball_symbols:   [dynamic]rune,
 	origins:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
@@ -122,7 +122,7 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.ball_colors = make([dynamic]engine.Color, n)
-	s.ball_symbols = make([dynamic]string, n)
+	s.ball_symbols = make([dynamic]rune, n)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
@@ -137,7 +137,7 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 		s.origins[i] = engine.coord(initial_coord.column, drop_row)
 		e.particles.current_coord[id] = s.origins[i]
 		s.max_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(s.origins[i], initial_coord, true) / s.config.movement_speed,
 			),
 			1,
@@ -164,7 +164,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 				slot := s.index_by_id[id]
 				s.start_ticks[slot] = s.tick
 				append(&s.active_slots, slot)
-				engine.set_particle(e, id, visible = true)
+				engine.set_particle(e, id, engine.Visible(true))
 			}
 			s.ball_delay = s.config.ball_delay
 		} else {
@@ -181,7 +181,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 			engine.set_particle(
 				e,
 				id,
-				coord = engine.coord_on_line(
+				engine.coord_on_line(
 					s.origins[slot],
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -190,20 +190,20 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 			engine.set_symbol(e, id, s.ball_symbols[slot])
 			engine.set_foreground(e, id, s.ball_colors[slot])
 		} else {
-			engine.set_particle(e, id, coord = e.particles.initial_coord[id])
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_particle(e, id, e.particles.initial_coord[id])
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			fade_tick := age - (s.max_steps[slot] - 1)
 			fade_step := min(fade_tick / 6, 10)
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					s.ball_colors[slot],
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					10,
 					fade_step,
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(
 					e,

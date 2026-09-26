@@ -46,7 +46,7 @@ run_make :: proc(
 ) {
 	rand.reset_u64(seed)
 	input_error: engine.Input_Error
-	run.engine_state, input_error = engine.engine_make(input, cfg, context.allocator)
+	run.engine_state, input_error = engine.engine_make(input, cfg)
 	if input_error != .None do return {}, false
 	effect_ok: bool
 	run.effect, effect_ok = effects.make_effect(kind, args)

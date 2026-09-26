@@ -88,8 +88,7 @@ Colorshift_State :: struct {
 	gradient:          [dynamic]engine.Color, // one shared palette
 	shifts:            [dynamic]int, // indexed like particle_sets.input
 	final_colors:      [dynamic]engine.Color, // indexed like particle_sets.input
-	symbol_codes:      [dynamic]engine.Visual_Id, // [distinct input symbol][gradient index]
-	symbol_index:      [dynamic]int, // Particle_Id -> distinct symbol row
+	appearances:       [dynamic]engine.Appearance_Id,
 	tick:              int,
 	palette_index:     int,
 	palette_tick:      int,
@@ -125,13 +124,13 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		s.final_colors = make([dynamic]engine.Color, len(ids))
 	}
 	initial_coords := e.particles.initial_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 
 	n := len(s.gradient)
 
 	for id, i in ids {
 		c := initial_coords[id]
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 
 		// A rotation is two contiguous slices of the shared gradient. Keep the
 		// offset scalar instead of allocating one color array per character.
@@ -166,38 +165,15 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 			s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
 		}
 		if s.color_handling == .Dynamic &&
-		   (engine.get_initial_visual(e, engine.Particle_Id(id)).fg != nil ||
-				   engine.get_initial_visual(e, engine.Particle_Id(id)).bg != nil) {
+		   (engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg != nil ||
+				   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg != nil) {
 			s.dynamic_has_color = true
 		}
 	}
 
-	// The cycling phase only ever shows (input symbol, gradient color) pairs.
-	// Intern that product once and index it per character, so a frame assigns
-	// ids instead of rebuilding SGR bytes for every cell.
-	symbols: [dynamic]string
-	defer delete(symbols)
-	s.symbol_index = make([dynamic]int, len(e.particles))
-	rows := make(map[string]int)
-	defer delete(rows)
-	for id in ids {
-		sym := engine.get_initial_visual(e, engine.Particle_Id(id)).symbol
-		row, ok := rows[sym]
-		if !ok {
-			row = len(symbols)
-			rows[sym] = row
-			append(&symbols, sym)
-		}
-		s.symbol_index[id] = row
-	}
-	resize(&s.symbol_codes, len(symbols) * n)
-	for sym, row in symbols {
-		for color, k in s.gradient {
-			s.symbol_codes[row * n + k] = engine.prepare_visual(
-				e,
-				engine.Visual{symbol = sym, fg = color},
-			)
-		}
+	s.appearances = make([dynamic]engine.Appearance_Id, n)
+	for color, k in s.gradient {
+		s.appearances[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
 	}
 }
 
@@ -209,16 +185,14 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 	if s.config.cycles == 0 || s.tick < cycle_ticks {
 		for base := 0; base < len(ids); base += 8 {
 			count := min(8, len(ids) - base)
-			codes: [8]engine.Visual_Id
+			codes: [8]engine.Appearance_Id
 			for lane in 0 ..< count {
 				i := base + lane
-				id := ids[i]
-				row := s.symbol_index[id]
 				index := s.shifts[i] + s.palette_index
 				if index >= n do index -= n
-				codes[lane] = s.symbol_codes[row * n + index]
+				codes[lane] = s.appearances[index]
 			}
-			engine.set_visuals(e, ids[base:base + count], codes[:count])
+			engine.set_appearances(e, ids[base:base + count], codes[:count])
 		}
 		s.palette_tick += 1
 		if s.palette_tick == frames {
@@ -234,29 +208,29 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 		transition_steps :: 8
 		if transition_step > transition_steps do return false
 		for id, i in ids {
-			visual := engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-			}
+			appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
+			appearance := engine.Appearance{}
 			start_index := s.shifts[i] - 1
 			if start_index < 0 do start_index += n
 			start := s.gradient[start_index]
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
-					&visual,
+					&appearance,
 					start,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					transition_steps,
 					transition_step,
 				)
 			} else {
-				visual.fg = engine.gradient_between_step(
+				appearance.colors.fg = engine.gradient_between_step(
 					start,
 					s.final_colors[i],
 					transition_steps,
 					transition_step,
 				)
 			}
-			engine.set_visual(e, id, visual)
+			engine.set_symbol(e, id, appearance_symbol)
+			engine.set_appearance(e, id, appearance)
 		}
 	}
 	s.tick += 1

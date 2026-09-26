@@ -121,7 +121,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		c := e.particles.initial_coord[id]
 		base := engine.gradient_sample(sampler, spectrum[:], c)
 		if s.color_handling == .Dynamic {
-			if fg, ok := engine.get_initial_visual(e, engine.Particle_Id(id)).fg.?; ok do base = fg
+			if fg, ok := engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg.?; ok do base = fg
 		}
 		// base -> bright -> bright -> base with widths 3/width/3
 		bright := engine.adjust_color_brightness(base, s.config.highlight_brightness)
@@ -133,16 +133,18 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		if i == 0 do s.palette_len = len(hl)
 		append(&s.palette, ..hl[:])
 		delete(hl[:])
-		engine.set_visual(
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				fg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).fg : base,
-				bg = s.color_handling == .Dynamic ? engine.get_initial_visual(e, engine.Particle_Id(id)).bg : nil,
+			engine.Appearance {
+				colors = {
+					fg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg : base,
+					bg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg : nil,
+				},
 			},
 		)
-		e.particles.is_visible[id] = true
+		e.particles.flags[id] += {.Visible}
 	}
 }
 
@@ -163,14 +165,14 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
 		age := s.tick - s.start_ticks[slot]
 		id := s.characters[slot]
 		limit := s.palette_len * 2
-		if s.color_handling == .Dynamic && engine.get_initial_visual(e, engine.Particle_Id(id)).fg == nil do limit = 2
+		if s.color_handling == .Dynamic && engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil do limit = 2
 		if age >= limit do continue
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
-			if style.fg != nil {
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			if style.colors.fg != nil {
 				engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
 			}
-			engine.set_background(e, id, style.bg)
+			engine.set_background(e, id, style.colors.bg)
 		} else {
 			engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
 		}

@@ -1,244 +1,183 @@
 package engine
 
 import "core:strings"
+import "core:unicode/utf8"
 
-// Visual storage, appearance setters, and cached ANSI packet encoding.
+// Appearance storage, setters, and cell packet encoding.
 
 Color_Pair :: struct {
 	fg: Maybe(Color),
 	bg: Maybe(Color),
 }
 
-Visual :: struct {
-	symbol: string,
-	fg, bg: Maybe(Color),
+// A shared appearance describes styling only; each particle owns its glyph.
+Appearance :: struct {
+	colors: Color_Pair,
 	bold:   bool,
+	bytes:  [43]byte, // encoded style prefix; prepared lazily during rendering
+	dirty:  bool, // prefix needs encoding on its next render
 }
 
-Visual_Id :: distinct u32
+Appearance_Id :: distinct u32 // one-based index into shared_appearances
+NO_APPEARANCE :: Appearance_Id(0)
 
-NO_VISUAL :: Visual_Id(0)
-
-Visual_Entry :: struct {
-	visual: Visual,
-	packet: Packet,
+get_appearance :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Appearance {
+	shared := e.particles[id].shared_appearance_id
+	if shared != NO_APPEARANCE do return e.shared_appearances[shared - 1]
+	return e.particles.private_appearance[id]
 }
 
-symbol_equal :: #force_inline proc(a, b: string) -> bool {
-	return len(a) == len(b) && (raw_data(a) == raw_data(b) || a == b)
+get_initial_appearance :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Appearance {
+	return e.shared_appearances[e.particles[id].initial_appearance_id - 1]
 }
 
-get_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
-	return e.visuals[e.particles[id].visual_id - 1].visual
+get_render_appearance :: #force_inline proc(e: ^Engine, id: Particle_Id) -> ^Appearance {
+	shared := e.particles[id].shared_appearance_id
+	if (.Preserve_Initial_Colors in e.particles[id].flags) do shared = e.particles[id].initial_appearance_id
+	if shared != NO_APPEARANCE do return &e.shared_appearances[shared - 1]
+	return &e.particles.private_appearance[id]
 }
 
-get_initial_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
-	return e.visuals[e.particles[id].initial_visual_id - 1].visual
+dirty_appearance :: #force_inline proc(appearance: ^Appearance) {
+	appearance.dirty = true
 }
 
-// Cold consumers can request the resolved value; the frame writer borrows bytes.
-get_render_visual :: proc(e: ^Engine, id: Particle_Id) -> Visual {
-	v := get_visual(e, id)
-	if e.particles[id].preserve_initial_colors {
-		initial := get_initial_visual(e, id)
-		v.fg, v.bg, v.bold = initial.fg, initial.bg, initial.bold
+// Creation always appends. Sharing is explicit reuse of the returned ID.
+prepare_appearance :: proc(e: ^Engine, appearance: Appearance) -> Appearance_Id {
+	prepared := Appearance {
+		colors = appearance.colors,
+		bold   = appearance.bold,
+		dirty  = true,
 	}
-	return v
+	append(&e.shared_appearances, prepared)
+	assert(u64(len(e.shared_appearances)) <= u64(max(u32)))
+	return Appearance_Id(len(e.shared_appearances))
 }
 
-visual_pool_init :: proc(e: ^Engine) {
-	e.visual_ids = make(map[Visual]Visual_Id, 64)
-	reserve(&e.visuals, max(e.canvas.top * e.canvas.right * 2, 64))
+set_appearance_prepared :: #force_inline proc(
+	e: ^Engine,
+	id: Particle_Id,
+	appearance_id: Appearance_Id,
+) {
+	assert(appearance_id != NO_APPEARANCE && int(appearance_id) <= len(e.shared_appearances))
+	if e.particles[id].shared_appearance_id == appearance_id && !e.shared_appearances[appearance_id - 1].dirty do return
+	queue_particle(e, id)
+	e.particles[id].shared_appearance_id = appearance_id
 }
 
-prepare_visual :: proc(e: ^Engine, visual: Visual) -> Visual_Id {
-	if id, ok := e.visual_ids[visual]; ok do return id
-	entry := Visual_Entry {
-		visual = visual,
+// A local style edit detaches only appearance; glyph edits keep sharing intact.
+edit_appearance :: #force_inline proc(e: ^Engine, id: Particle_Id) -> ^Appearance {
+	shared := e.particles[id].shared_appearance_id
+	if shared != NO_APPEARANCE {
+		e.particles.private_appearance[id] = e.shared_appearances[shared - 1]
+		e.particles[id].shared_appearance_id = NO_APPEARANCE
 	}
-	packet_update(&entry.packet, &entry.visual, &e.cfg, All_Packet_Fields)
-	append(&e.visuals, entry)
-	assert(u64(len(e.visuals)) <= u64(max(u32)))
-	id := Visual_Id(len(e.visuals))
-	e.visual_ids[visual] = id
-	return id
+	return &e.particles.private_appearance[id]
 }
 
-// Each particle owns one mutable entry. Prepared and initial entries may be
-// shared, but editing one particle never mutates another particle's bytes.
-init_particle_visual :: proc(e: ^Engine, id: Particle_Id, initial: Visual) {
-	e.particles[id].initial_visual_id = prepare_visual(e, initial)
-	append(&e.visuals, Visual_Entry{visual = Visual{symbol = initial.symbol}})
-	e.particles[id].visual_id = Visual_Id(len(e.visuals))
-	e.particles[id].mutable_visual_id = e.particles[id].visual_id
-	update_packet(e, id, All_Packet_Fields)
+set_appearance_value :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Appearance) {
+	old := get_appearance(e, id)
+	if old.colors == value.colors && old.bold == value.bold do return
+	queue_particle(e, id)
+	e.particles[id].shared_appearance_id = NO_APPEARANCE
+	appearance := &e.particles.private_appearance[id]
+	appearance.colors, appearance.bold = value.colors, value.bold
+	dirty_appearance(appearance)
 }
 
-update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
-	entry := &e.visuals[e.particles[id].visual_id - 1]
-	colors := &entry.visual
-	if e.particles[id].preserve_initial_colors do colors = &e.visuals[e.particles[id].initial_visual_id - 1].visual
-	packet_update(&entry.packet, &entry.visual, &e.cfg, fields, colors)
-	dirty_visual(e, id)
-}
-
-// Switching a prepared appearance changes only the reference.
-set_visual_prepared :: #force_inline proc(e: ^Engine, id: Particle_Id, visual_id: Visual_Id) {
-	assert(visual_id != NO_VISUAL)
-	if e.particles[id].visual_id == visual_id do return
-	if e.particles[id].preserve_initial_colors {
-		source := &e.visuals[visual_id - 1].visual
-		target := &e.visuals[e.particles[id].mutable_visual_id - 1].visual
-		target^ = source^
-		e.particles[id].visual_id = e.particles[id].mutable_visual_id
-		update_packet(e, id, All_Packet_Fields)
-	} else {
-		e.particles[id].visual_id = visual_id
-		dirty_visual(e, id)
-	}
-}
-
-// A shared palette entry is immutable. Independent edits reuse the particle's
-// preallocated mutable slot; ordinary edits never copy a whole visual/packet.
-edit_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> (^Visual_Entry, Packet_Fields) {
-	own := e.particles[id].mutable_visual_id
-	entry := &e.visuals[own - 1]
-	if e.particles[id].visual_id == own do return entry, {}
-	entry.visual = e.visuals[e.particles[id].visual_id - 1].visual
-	e.particles[id].visual_id = own
-	return entry, All_Packet_Fields
-}
-
-set_visual_value :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Visual) {
-	old := &e.visuals[e.particles[id].visual_id - 1].visual
-	fields: Packet_Fields
-	if !symbol_equal(old.symbol, value.symbol) do fields |= {.Symbol}
-	if old.fg != value.fg do fields |= {.Foreground}
-	if old.bg != value.bg do fields |= {.Background}
-	if old.bold != value.bold do fields |= {.Bold}
-	if fields == {} do return
-	entry, inherited := edit_visual(e, id)
-	entry.visual = value
-	update_packet(e, id, fields | inherited)
-}
-
-set_visual :: proc {
-	set_visual_prepared,
-	set_visual_value,
-}
-
-set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: string) {
-	if symbol_equal(e.visuals[e.particles[id].visual_id - 1].visual.symbol, value) do return
-	entry, fields := edit_visual(e, id)
-	entry.visual.symbol = value
-	update_packet(e, id, fields | {.Symbol})
+set_appearance :: proc {
+	set_appearance_prepared,
+	set_appearance_value,
 }
 
 set_foreground :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
-	if e.visuals[e.particles[id].visual_id - 1].visual.fg == value do return
-	entry, fields := edit_visual(e, id)
-	entry.visual.fg = value
-	update_packet(e, id, fields | {.Foreground})
+	if get_appearance(e, id).colors.fg == value do return
+	queue_particle(e, id)
+	appearance := edit_appearance(e, id)
+	appearance.colors.fg = value
+	dirty_appearance(appearance)
 }
 
 set_background :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
-	if e.visuals[e.particles[id].visual_id - 1].visual.bg == value do return
-	entry, fields := edit_visual(e, id)
-	entry.visual.bg = value
-	update_packet(e, id, fields | {.Background})
+	if get_appearance(e, id).colors.bg == value do return
+	queue_particle(e, id)
+	appearance := edit_appearance(e, id)
+	appearance.colors.bg = value
+	dirty_appearance(appearance)
 }
 
 set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
-	if e.visuals[e.particles[id].visual_id - 1].visual.bold == value do return
-	entry, fields := edit_visual(e, id)
-	entry.visual.bold = value
-	update_packet(e, id, fields | {.Bold})
+	if get_appearance(e, id).bold == value do return
+	queue_particle(e, id)
+	appearance := edit_appearance(e, id)
+	appearance.bold = value
+	dirty_appearance(appearance)
 }
 
-// Repeated IDs retain their ordered scalar semantics.
-set_visuals :: proc(e: ^Engine, ids: []Particle_Id, visuals: []Visual_Id) {
-	assert(len(ids) == len(visuals))
-	for id, i in ids do set_visual(e, id, visuals[i])
+set_appearances :: proc(e: ^Engine, ids: []Particle_Id, appearances: []Appearance_Id) {
+	assert(len(ids) == len(appearances))
+	for id, i in ids do set_appearance(e, id, appearances[i])
 }
 
 // Dynamic color handling is an input-style data transform, not a timeline.
 // Effects own when they call these helpers; they simply avoid repeating the
 // same nullable FG/BG writes in every direct next loop.
-dynamic_apply_input_colors :: #force_inline proc(visual: ^Visual, input: Visual) {
-	visual.fg = input.fg
-	visual.bg = input.bg
+dynamic_apply_input_colors :: #force_inline proc(appearance: ^Appearance, input: Appearance) {
+	appearance.colors = input.colors
 }
 
 // Lerp both source colour lanes with the established, stepped gradient rule.
 // The caller owns the tick-to-step conversion and all phase lifetime policy.
 dynamic_gradient_to_input :: #force_inline proc(
-	visual: ^Visual,
+	appearance: ^Appearance,
 	start: Color,
-	input: Visual,
+	input: Appearance,
 	steps, step: int,
 ) {
-	if fg, ok := input.fg.?; ok {
-		visual.fg = gradient_between_step(start, fg, steps, step)
+	if fg, ok := input.colors.fg.?; ok {
+		appearance.colors.fg = gradient_between_step(start, fg, steps, step)
 	} else {
-		visual.fg = nil
+		appearance.colors.fg = nil
 	}
-	if bg, ok := input.bg.?; ok {
-		visual.bg = gradient_between_step(start, bg, steps, step)
+	if bg, ok := input.colors.bg.?; ok {
+		appearance.colors.bg = gradient_between_step(start, bg, steps, step)
 	} else {
-		visual.bg = nil
+		appearance.colors.bg = nil
 	}
 }
 
 // Binarypath's collapse target is the source style darkened in both lanes.
 // Keep that exceptional transform here rather than open-coding nullable lanes.
 dynamic_gradient_to_dimmed_input :: #force_inline proc(
-	visual: ^Visual,
+	appearance: ^Appearance,
 	start: Color,
-	input: Visual,
+	input: Appearance,
 	brightness: f64,
 	steps, step: int,
 ) {
-	if fg, ok := input.fg.?; ok {
-		visual.fg = gradient_between_step(
+	if fg, ok := input.colors.fg.?; ok {
+		appearance.colors.fg = gradient_between_step(
 			start,
 			adjust_color_brightness(fg, brightness),
 			steps,
 			step,
 		)
 	} else {
-		visual.fg = nil
+		appearance.colors.fg = nil
 	}
-	if bg, ok := input.bg.?; ok {
-		visual.bg = gradient_between_step(
+	if bg, ok := input.colors.bg.?; ok {
+		appearance.colors.bg = gradient_between_step(
 			start,
 			adjust_color_brightness(bg, brightness),
 			steps,
 			step,
 		)
 	} else {
-		visual.bg = nil
+		appearance.colors.bg = nil
 	}
 }
 
-// Complete writable ANSI packet for the common one-rune appearance. Long
-// symbols borrow their string between the same prefix and reset slices.
-Packet :: struct {
-	bytes:          [52]byte,
-	prefix, length: u8,
-}
-
-Packet_Field :: enum {
-	Symbol,
-	Foreground,
-	Background,
-	Bold,
-}
-
-Packet_Fields :: bit_set[Packet_Field]
-
-All_Packet_Fields :: Packet_Fields{.Symbol, .Foreground, .Background, .Bold}
-
-// Fixed-width SGR fields allow setters to overwrite bytes without shifting.
+// Fixed-width SGR fields encode colors without shifting subsequent bytes.
 Packet_Template :: "\x1b[22m\x1b[0000000000000039m\x1b[0000000000000049m"
 #assert(len(Packet_Template) == 43)
 
@@ -267,74 +206,59 @@ packet_color :: proc(bytes: []byte, color: Maybe(Color), background, xterm: bool
 	}
 }
 
-packet_update :: #force_inline proc(
-	p: ^Packet,
-	v: ^Visual,
+// Rendering resolves a stale prefix once, after all pending style edits.
+encode_appearance :: proc(appearance: ^Appearance, cfg: ^Terminal_Config) {
+	appearance.dirty = false
+	if cfg.no_color ||
+	   (!appearance.bold && appearance.colors.fg == nil && appearance.colors.bg == nil) {
+		appearance.bytes = {}
+		return
+	}
+	bytes := appearance.bytes[:]
+	copy(bytes, Packet_Template)
+	if appearance.bold do bytes[2], bytes[3] = '0', '1'
+	packet_color(bytes[5:24], appearance.colors.fg, false, cfg.xterm_colors)
+	packet_color(bytes[24:43], appearance.colors.bg, true, cfg.xterm_colors)
+}
+
+// The caller supplies the cell's slot. No complete packet is stored on a particle.
+encode_particle :: proc(e: ^Engine, id: Particle_Id, bytes: []byte) -> int {
+	appearance := get_render_appearance(e, id)
+	if appearance.dirty do encode_appearance(appearance, &e.cfg)
+	return packet_write(bytes, e.particles[id].symbol, appearance, &e.cfg)
+}
+
+packet_write :: #force_inline proc(
+	bytes: []byte,
+	symbol: rune,
+	appearance: ^Appearance,
 	cfg: ^Terminal_Config,
-	fields: Packet_Fields,
-	colors: ^Visual = nil,
-) {
-	colors := v if colors == nil else colors
-	fields := fields
-	styled := !cfg.no_color && (colors.bold || colors.fg != nil || colors.bg != nil)
-	prefix := 43 if styled else 0
-	if int(p.prefix) != prefix {
-		if styled do copy(p.bytes[:], Packet_Template)
-		p.prefix = u8(prefix)
-		fields = All_Packet_Fields
+) -> int {
+	prefix := 0
+	if !cfg.no_color &&
+	   (appearance.bold || appearance.colors.fg != nil || appearance.colors.bg != nil) {
+		prefix = len(appearance.bytes)
 	}
-	if styled {
-		if .Bold in fields {
-			p.bytes[2], p.bytes[3] = '0', '1'
-			if !colors.bold do p.bytes[2], p.bytes[3] = '2', '2'
-		}
-		if .Foreground in fields do packet_color(p.bytes[5:24], colors.fg, false, cfg.xterm_colors)
-		if .Background in fields do packet_color(p.bytes[24:43], colors.bg, true, cfg.xterm_colors)
+	copy(bytes[:prefix], appearance.bytes[:prefix])
+	end := prefix
+	if symbol != 0 {
+		encoded, width := utf8.encode_rune(symbol)
+		copy(bytes[end:end + width], encoded[:width])
+		end += width
 	}
-	if .Symbol in fields {
-		count := len(v.symbol) if len(v.symbol) <= 4 else 0
-		copy(p.bytes[prefix:prefix + count], v.symbol[:count])
-		end := prefix + count
-		if styled {
-			copy(p.bytes[end:end + 4], "\x1b[0m")
-			end += 4
-		}
-		p.length = u8(end)
+	if prefix != 0 {
+		copy(bytes[end:end + 4], "\x1b[0m")
+		end += 4
 	}
+	for &b in bytes[end:] do b = 0
+	return end
 }
 
-append_packet :: #force_inline proc(
-	e: ^Engine,
-	visual: Visual_Id,
-	out: ^[dynamic]byte,
-	used: ^int,
-) {
-	entry := &e.visuals[visual - 1]
-	p := &entry.packet
-	if len(entry.visual.symbol) <= 4 {
-		when FRAME_STATS_ENABLED {e.stats.packet_bytes_copied += 52}
-		end := used^ + len(p.bytes)
-		if end > len(out^) do non_zero_resize(out, max(end, 2 * len(out^)))
-		copy(out^[used^:][:52], p.bytes[:])
-		used^ += int(p.length)
-	} else {
-		when FRAME_STATS_ENABLED {e.stats.packet_bytes_copied +=
-				int(p.prefix) + len(entry.visual.symbol) + (4 if p.prefix != 0 else 0)}
-		if p.prefix != 0 do write_output(out, used, p.bytes[:int(p.prefix)])
-		write_output(out, used, transmute([]byte)entry.visual.symbol)
-		if p.prefix != 0 do write_output(out, used, transmute([]byte)string("\x1b[0m"))
-	}
-}
-
-// Preview borrows the same packet used by frame output.
+// Preview encodes a local copy; it does not change retained prefixes or dirty state.
 write_particle :: proc(e: ^Engine, id: Particle_Id, b: ^strings.Builder) {
-	p := &e.visuals[e.particles[id].visual_id - 1].packet
-	symbol := e.visuals[e.particles[id].visual_id - 1].visual.symbol
-	if len(symbol) <= 4 {
-		strings.write_bytes(b, p.bytes[:int(p.length)])
-	} else {
-		strings.write_bytes(b, p.bytes[:int(p.prefix)])
-		strings.write_string(b, symbol)
-		if p.prefix != 0 do strings.write_string(b, "\x1b[0m")
-	}
+	bytes: [51]byte
+	appearance := get_render_appearance(e, id)^
+	if appearance.dirty do encode_appearance(&appearance, &e.cfg)
+	length := packet_write(bytes[:], e.particles[id].symbol, &appearance, &e.cfg)
+	strings.write_bytes(b, bytes[:length])
 }

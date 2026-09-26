@@ -56,7 +56,7 @@ smoke_symbols_span_the_gradient :: proc(t: ^testing.T) {
 	for symbol_count in ([]int{3, 6}) {
 		cfg := engine.config_default()
 		cfg.ignore_terminal_dimensions = true
-		e, err := engine.engine_make("X", cfg, context.allocator)
+		e, err := engine.engine_make("X", cfg)
 		testing.expect(t, err == .None)
 		s := effects.Smoke_State {
 			config = effects.smoke_config_default(),
@@ -66,32 +66,28 @@ smoke_symbols_span_the_gradient :: proc(t: ^testing.T) {
 		clear(&s.config.final_gradient_stops)
 		append(&s.config.final_gradient_stops, engine.Color{255, 255, 255})
 		clear(&s.config.smoke_symbols)
-		symbols := []string{"a", "b", "c", "d", "e", "f"}
+		symbols := []rune{'a', 'b', 'c', 'd', 'e', 'f'}
 		append(&s.config.smoke_symbols, ..symbols[:symbol_count])
 		effects.smoke_build(&s, &e)
 		free_all(context.temp_allocator)
 		expected :=
-			symbol_count == 3 ? []string{"a", "a", "b", "c"} : []string{"a", "b", "c", "d", "e", "f"}
+			symbol_count == 3 ? []rune{'a', 'a', 'b', 'c'} : []rune{'a', 'b', 'c', 'd', 'e', 'f'}
 		id := s.characters[0]
 		for symbol in expected {
 			for _ in 0 ..< 3 {
-				alive := effects.smoke_next(&s, &e)
+				alive := step_frame(effects.smoke_next, &s, &e)
 				testing.expect(t, alive)
-				testing.expect_value(
-					t,
-					engine.get_visual(&e, engine.Particle_Id(id)).symbol,
-					symbol,
-				)
+				testing.expect_value(t, e.particles.symbol[engine.Particle_Id(id)], symbol)
 			}
 		}
-		for s.tick < s.last_tick do effects.smoke_next(&s, &e)
-		testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).symbol, "X")
+		for s.tick < s.last_tick do step_frame(effects.smoke_next, &s, &e)
+		testing.expect_value(t, e.particles.symbol[engine.Particle_Id(id)], 'X')
 		testing.expect_value(
 			t,
-			engine.get_visual(&e, engine.Particle_Id(id)).fg,
+			engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
 			Maybe(engine.Color)(engine.Color{255, 255, 255}),
 		)
-		alive := effects.smoke_next(&s, &e)
+		alive := step_frame(effects.smoke_next, &s, &e)
 		testing.expect(t, !alive)
 	}
 }
@@ -105,7 +101,7 @@ laseretch_order_is_spatial :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	for input in ([]string{"X", "A   B\n     \nC   D", strings.repeat("1234567890\n", 10)}) {
-		e, err := engine.engine_make(input, cfg, context.allocator)
+		e, err := engine.engine_make(input, cfg)
 		testing.expect(t, err == .None)
 		s := effects.Laseretch_State {
 			config = effects.laseretch_config_default(),
@@ -117,7 +113,7 @@ laseretch_order_is_spatial :: proc(t: ^testing.T) {
 		testing.expect_value(t, len(s.pending), len(e.particle_sets.input))
 		adjacent := 0
 		for id, i in s.pending {
-			testing.expect(t, !seen[id] && !e.particles.is_fill[id])
+			testing.expect(t, !seen[id] && (.Fill not_in e.particles.flags[id]))
 			seen[id] = true
 			if i == 0 do continue
 			p, prev := e.particles.initial_coord[id], e.particles.initial_coord[s.pending[i - 1]]
@@ -125,17 +121,17 @@ laseretch_order_is_spatial :: proc(t: ^testing.T) {
 		}
 		if len(s.pending) == 100 do testing.expect(t, adjacent > 80, "depth-first etching must follow neighboring cells, not a shuffled population")
 	}
-	e, err := engine.engine_make("ABC\nDEF", cfg, context.allocator)
+	e, err := engine.engine_make("ABC\nDEF", cfg)
 	testing.expect(t, err == .None)
 	s := effects.Laseretch_State {
 		config = effects.laseretch_config_default(),
 	}
 	s.config.etch_pattern = .Row_T2B
 	effects.laseretch_build(&s, &e)
-	for expected, i in ([]string{"A", "B", "C", "F", "E", "D"}) {
+	for expected, i in ([]rune{'A', 'B', 'C', 'F', 'E', 'D'}) {
 		testing.expect_value(
 			t,
-			engine.get_initial_visual(&e, engine.Particle_Id(s.pending[i])).symbol,
+			e.particles.initial_symbol[engine.Particle_Id(s.pending[i])],
 			expected,
 		)
 	}
@@ -150,7 +146,7 @@ burn_grows_a_connected_front :: proc(t: ^testing.T) {
 	context.allocator = mem.dynamic_arena_allocator(&arena)
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make(strings.repeat("0123456789\n", 10), cfg, context.allocator)
+	e, err := engine.engine_make(strings.repeat("0123456789\n", 10), cfg)
 	testing.expect(t, err == .None)
 	s := effects.Burn_State {
 		config = effects.burn_config_default(),
@@ -204,7 +200,7 @@ laseretch_sparks_cool_during_flight :: proc(t: ^testing.T) {
 	cfg.canvas_width, cfg.canvas_height = 40, 50
 	cfg.anchor_text = .N
 	cfg.ignore_terminal_dimensions = true
-	e, err := engine.engine_make("AB", cfg, context.allocator)
+	e, err := engine.engine_make("AB", cfg)
 	testing.expect(t, err == .None)
 	s := effects.Laseretch_State {
 		config = effects.laseretch_config_default(),
@@ -213,16 +209,16 @@ laseretch_sparks_cool_during_flight :: proc(t: ^testing.T) {
 	rand.reset_u64(42)
 	effects.laseretch_build(&s, &e)
 	free_all(context.temp_allocator)
-	for _ in 0 ..< 3 do effects.laseretch_next(&s, &e)
+	for _ in 0 ..< 3 do step_frame(effects.laseretch_next, &s, &e)
 	id := s.spark_ids[0]
 	testing.expect(t, s.spark_steps[0] > 3)
 	testing.expect_value(
 		t,
-		engine.get_visual(&e, engine.Particle_Id(id)).fg,
+		engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
 		Maybe(engine.Color)(s.spark_spectrum[1]),
 	)
 	// Reclaim on color-scene completion even if the movement path is longer.
-	for s.tick <= len(s.spark_spectrum) * 2 do effects.laseretch_next(&s, &e)
-	testing.expect(t, !e.particles.is_visible[id])
+	for s.tick <= len(s.spark_spectrum) * 2 do step_frame(effects.laseretch_next, &s, &e)
+	testing.expect(t, (.Visible not_in e.particles.flags[id]))
 	testing.expect_value(t, len(s.active_sparks), 0)
 }

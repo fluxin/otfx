@@ -70,8 +70,8 @@ Blackhole_Phase :: enum {
 	Exploding,
 }
 
-Blackhole_Star_Symbols :: [7]string{"*", "'", "`", "¤", "•", "°", "·"}
-Blackhole_Pulse_Symbols :: [7]string{"◦", "◎", "◉", "●", "◉", "◎", "◦"}
+Blackhole_Star_Symbols :: [7]rune{'*', '\'', '`', '¤', '•', '°', '·'}
+Blackhole_Pulse_Symbols :: [7]rune{'◦', '◎', '◉', '●', '◉', '◎', '◦'}
 
 // Ring membership is a dense source-index column; ring source indices and
 // circle positions are compact slices. There is no set, map, path, scene, or
@@ -81,7 +81,7 @@ Blackhole_State :: struct {
 	characters:          [dynamic]engine.Particle_Id,
 	final_colors:        [dynamic]engine.Color,
 	star_colors:         [dynamic]engine.Color,
-	star_symbols:        [dynamic]string,
+	star_symbols:        [dynamic]rune,
 	star_coords:         [dynamic]engine.Coord,
 	consume_steps:       [dynamic]int,
 	consume_durations:   [dynamic]int,
@@ -170,7 +170,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.star_colors = make([dynamic]engine.Color, n)
-	s.star_symbols = make([dynamic]string, n)
+	s.star_symbols = make([dynamic]rune, n)
 	s.star_coords = make([dynamic]engine.Coord, n)
 	s.consume_steps = make([dynamic]int, n)
 	s.ring_slot_by_source = make([dynamic]int, n)
@@ -182,8 +182,8 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 
 	s.radius = max(
 		min(
-			engine.round_half_even(f64(e.canvas.width) * 0.3),
-			engine.round_half_even(f64(e.canvas.height) * 0.2),
+			engine.round_to_int(f64(e.canvas.width) * 0.3),
+			engine.round_to_int(f64(e.canvas.height) * 0.2),
 		),
 		3,
 	)
@@ -205,7 +205,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 
 	initial_coords := e.particles.initial_coord
 	current_coords := e.particles.current_coord
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 
 
 	available := make([dynamic]int, n, context.temp_allocator)
@@ -219,8 +219,8 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	}
 	for id, i in s.characters {
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
-		if engine.get_initial_visual(e, engine.Particle_Id(id)).fg != nil ||
-		   engine.get_initial_visual(e, engine.Particle_Id(id)).bg != nil {
+		if engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg != nil ||
+		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg != nil {
 			s.dynamic_has_style = true
 		}
 		s.star_colors[i] = engine.gradient_between_step(
@@ -234,10 +234,10 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		current_coords[id] = s.star_coords[i]
 		engine.set_symbol(e, id, s.star_symbols[i])
 		engine.set_foreground(e, id, s.star_colors[i])
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 		available[i] = i
 		s.consume_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(s.star_coords[i], e.canvas.center, true) /
 				rand.float64_range(0.17, 0.30),
 			),
@@ -255,14 +255,14 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		append(
 			&s.ring_steps,
 			max(
-				engine.round_half_even(
+				engine.round_to_int(
 					engine.line_length(s.star_coords[source], s.ring_positions[slot], true) / 0.7,
 				),
 				1,
 			),
 		)
 		s.collapse_steps[slot] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(s.expanded_positions[slot], e.canvas.center, true) / 0.3,
 			),
 			1,
@@ -276,21 +276,22 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		)
 		s.explode_targets[i] = target
 		s.explode_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(e.canvas.center, target, true) / rand.float64_range(0.3, 0.4),
 			),
 			1,
 		)
 		s.return_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(target, initial_coords[id], true) /
 				rand.float64_range(0.04, 0.06),
 			),
 			1,
 		)
 		s.explode_colors[i] = s.config.star_colors[rand.int_max(len(s.config.star_colors))]
-		style := engine.get_initial_visual(e, engine.Particle_Id(id))
-		cool_ticks := s.color_handling == .Dynamic && style.fg == nil && style.bg == nil ? 1 : 220
+		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+		cool_ticks :=
+			s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 1 : 220
 		s.explode_limit = max(
 			s.explode_limit,
 			s.explode_steps[i] + max(s.return_steps[i], cool_ticks),
@@ -305,10 +306,9 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 
 blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 	pulse_symbols := Blackhole_Pulse_Symbols
-	current_coords := e.particles.current_coord
 	initial_coords := e.particles.initial_coord
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 
 	for {
 		switch s.phase {
@@ -335,15 +335,15 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				engine.set_particle(
 					e,
 					id,
-					coord = engine.coord_on_line(
+					engine.coord_on_line(
 						s.star_coords[source],
 						s.ring_positions[slot],
 						ease.ease(.Sine_In_Out, f64(min(age + 1, steps)) / f64(steps)),
 					),
 				)
-				engine.set_symbol(e, id, "*")
+				engine.set_symbol(e, id, '*')
 				engine.set_foreground(e, id, s.config.blackhole_color)
-				engine.set_particle(e, id, layer = 1)
+				engine.set_particle(e, id, engine.Layer(1))
 				if age < steps do formed = false
 			}
 			if formed {
@@ -365,8 +365,8 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 			for id, i in s.characters {
 				slot := s.ring_slot_by_source[i]
 				if slot >= 0 {
-					engine.set_particle(e, id, coord = blackhole_ring_position(s, slot))
-					engine.set_symbol(e, id, "*")
+					engine.set_particle(e, id, blackhole_ring_position(s, slot))
+					engine.set_symbol(e, id, '*')
 					engine.set_foreground(e, id, s.config.blackhole_color)
 					continue
 				}
@@ -376,11 +376,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				engine.set_particle(
 					e,
 					id,
-					coord = engine.coord_on_line(
-						s.star_coords[i],
-						e.canvas.center,
-						distance_fraction,
-					),
+					engine.coord_on_line(s.star_coords[i], e.canvas.center, distance_fraction),
 				)
 				engine.set_foreground(
 					e,
@@ -389,11 +385,11 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						s.star_colors[i],
 						engine.Color{0x00, 0x00, 0x00},
 						10,
-						min(engine.round_half_even(11 * distance_fraction), 10),
+						min(engine.round_to_int(11 * distance_fraction), 10),
 					),
 				)
-				engine.set_symbol(e, id, s.phase_tick + 1 >= steps ? " " : s.star_symbols[i])
-				engine.set_particle(e, id, layer = 2)
+				engine.set_symbol(e, id, s.phase_tick + 1 >= steps ? ' ' : s.star_symbols[i])
+				engine.set_particle(e, id, engine.Layer(2))
 				if s.phase_tick < steps do complete = false
 			}
 			s.rotation += 1
@@ -402,10 +398,14 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				// Capture the actual rotating ring once. Only these few paths
 				// depend on the consumption duration; playback uses flat lanes.
 				for source, slot in s.ring_sources {
-					origin := current_coords[s.characters[source]]
+					// Use the ring position
+					// submitted above, before rotation advanced for the next tick.
+					index :=
+						(slot + s.rotation + len(s.ring_positions) - 1) % len(s.ring_positions)
+					origin := s.ring_positions[index]
 					s.collapse_origins[slot] = origin
 					s.expand_steps[slot] = max(
-						engine.round_half_even(
+						engine.round_to_int(
 							engine.line_length(origin, s.expanded_positions[slot], true) / 0.2,
 						),
 						1,
@@ -424,9 +424,9 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 		case .Collapsing:
 			if s.phase_tick >= s.collapse_limit {
 				for id, _ in s.characters {
-					engine.set_particle(e, id, coord = e.canvas.center)
-					engine.set_particle(e, id, visible = true)
-					engine.set_particle(e, id, layer = 0)
+					engine.set_particle(e, id, e.canvas.center)
+					engine.set_particle(e, id, engine.Visible(true))
+					engine.set_particle(e, id, engine.Layer(0))
 				}
 				s.phase = .Exploding
 				s.phase_tick = 0
@@ -435,7 +435,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 			for id, i in s.characters {
 				slot := s.ring_slot_by_source[i]
 				if slot < 0 {
-					engine.set_particle(e, id, visible = false)
+					engine.set_particle(e, id, engine.Visible(false))
 					continue
 				}
 				expand_steps, collapse_steps := s.expand_steps[slot], s.collapse_steps[slot]
@@ -443,7 +443,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					engine.set_particle(
 						e,
 						id,
-						coord = engine.coord_on_line(
+						engine.coord_on_line(
 							s.collapse_origins[slot],
 							s.expanded_positions[slot],
 							ease.ease(.Exponential_In, f64(s.phase_tick + 1) / f64(expand_steps)),
@@ -453,7 +453,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					engine.set_particle(
 						e,
 						id,
-						coord = engine.coord_on_line(
+						engine.coord_on_line(
 							s.expanded_positions[slot],
 							e.canvas.center,
 							ease.ease(
@@ -464,14 +464,14 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						),
 					)
 				}
-				engine.set_symbol(e, id, "*")
+				engine.set_symbol(e, id, '*')
 				engine.set_foreground(e, id, s.config.blackhole_color)
 				pulse_age := s.phase_tick - expand_steps - collapse_steps
 				if slot == 0 && pulse_age >= 0 {
 					entry := min(pulse_age / 3, len(s.pulse_colors) - 1)
 					engine.set_symbol(e, id, pulse_symbols[entry % len(pulse_symbols)])
 					engine.set_foreground(e, id, s.pulse_colors[entry])
-					engine.set_particle(e, id, layer = 3)
+					engine.set_particle(e, id, engine.Layer(3))
 				}
 			}
 			s.phase_tick += 1
@@ -487,16 +487,12 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 			}
 			for id, i in s.characters {
 				age := s.phase_tick
-				engine.set_symbol(
-					e,
-					id,
-					engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				)
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				if age < s.explode_steps[i] {
 					engine.set_particle(
 						e,
 						id,
-						coord = engine.coord_on_line(
+						engine.coord_on_line(
 							e.canvas.center,
 							s.explode_targets[i],
 							s.explode_progress[s.explode_steps[i]],
@@ -509,7 +505,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						engine.set_particle(
 							e,
 							id,
-							coord = engine.coord_on_line(
+							engine.coord_on_line(
 								s.explode_targets[i],
 								initial_coords[id],
 								ease.ease(.Cubic_In, f64(return_age + 1) / f64(s.return_steps[i])),
@@ -518,20 +514,20 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					}
 					if return_age % 20 != 0 do continue
 					if s.color_handling == .Dynamic {
-						style := engine.get_initial_visual(e, engine.Particle_Id(id))
-						if style.fg == nil && style.bg == nil {
+						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+						if style.colors.fg == nil && style.colors.bg == nil {
 							engine.set_foreground(e, id, nil)
 							engine.set_background(e, id, nil)
 						} else {
-							visual := engine.get_visual(e, id)
+							appearance := engine.get_appearance(e, id)
 							engine.dynamic_gradient_to_input(
-								&visual,
+								&appearance,
 								s.explode_colors[i],
 								style,
 								10,
 								min(return_age / 20, 10),
 							)
-							engine.set_visual(e, id, visual)
+							engine.set_appearance(e, id, appearance)
 						}
 					} else {
 						engine.set_foreground(

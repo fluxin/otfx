@@ -102,7 +102,7 @@ font_chain_face :: proc(chain: ^Font_Chain, ch: rune) -> ^Font_Face {
 }
 
 font_glyph :: proc(chain: ^Font_Chain, ch: rune) -> (Glyph, bool) {
-	if emitted_visual, ok := chain.cache[ch]; ok do return emitted_visual, emitted_visual.coverage != nil
+	if emitted_appearance, ok := chain.cache[ch]; ok do return emitted_appearance, emitted_appearance.coverage != nil
 
 	glyph: Glyph
 	if face := font_chain_face(chain, ch); face != nil {

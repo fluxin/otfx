@@ -7,7 +7,7 @@ import "core:math/rand"
 
 Smoke_Config :: struct {
 	starting_color:           engine.Color,
-	smoke_symbols:            [dynamic]string,
+	smoke_symbols:            [dynamic]rune,
 	smoke_gradient_stops:     [dynamic]engine.Color,
 	use_whole_canvas:         bool,
 	final_gradient_stops:     [dynamic]engine.Color,
@@ -20,7 +20,7 @@ smoke_config_default :: proc() -> Smoke_Config {
 		starting_color           = engine.Color{0x7A, 0x7A, 0x7A},
 		final_gradient_direction = .Vertical,
 	}
-	append(&cfg.smoke_symbols, ..[]string{"░", "▒", "▓", "▒", "░"})
+	append(&cfg.smoke_symbols, ..[]rune{'░', '▒', '▓', '▒', '░'})
 	append(
 		&cfg.smoke_gradient_stops,
 		engine.Color{0x24, 0x24, 0x24},
@@ -76,7 +76,7 @@ Smoke_State :: struct {
 	samples:        [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	smoke_palette:  [dynamic]engine.Color,
-	smoke_symbols:  [dynamic]string,
+	smoke_symbols:  [dynamic]rune,
 	paint_pairs:    [dynamic]int,
 	paint_steps:    [dynamic]int,
 	tick:           int,
@@ -218,7 +218,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	smoke_arrivals(s.arrivals[:], width)
 	initial_coords := e.particles.initial_coord
 
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		p := initial_coords[id]
 		s.last_tick = max(s.last_tick, s.arrivals[i])
@@ -229,7 +229,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 		} else {
 			engine.set_foreground(e, id, s.config.starting_color)
 		}
-		visible[id] = true
+		visible_flags[id] += {.Visible}
 	}
 
 	// smoke frames last 3 ticks; final paint is a 5-tick gradient across every
@@ -297,25 +297,25 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
 		if sample < smoke_count {
 			if s.color_handling == .Dynamic {
 				engine.set_symbol(e, id, s.config.smoke_symbols[sample])
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_apply_input_colors(
-					&visual,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					&appearance,
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_symbol(e, id, s.smoke_symbols[sample])
 				engine.set_foreground(e, id, s.smoke_palette[sample])
 			}
 		} else {
-			engine.set_symbol(e, id, engine.get_initial_visual(e, engine.Particle_Id(id)).symbol)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			if s.color_handling == .Dynamic {
-				visual := engine.get_visual(e, id)
+				appearance := engine.get_appearance(e, id)
 				engine.dynamic_apply_input_colors(
-					&visual,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					&appearance,
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				)
-				engine.set_visual(e, id, visual)
+				engine.set_appearance(e, id, appearance)
 			} else {
 				paint_entry := sample - smoke_count
 				engine.set_foreground(

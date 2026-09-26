@@ -58,7 +58,8 @@ expand_parse :: proc(cfg: ^Expand_Config, args: []string) -> bool {
 Expand_State :: struct {
 	config:         Expand_Config,
 	characters:     [dynamic]engine.Particle_Id,
-	final_colors:   [dynamic]engine.Color,
+	colors:         [dynamic][11]engine.Color_Pair,
+	active_indexes: [dynamic]int,
 	max_steps:      [dynamic]int,
 	step_limit:     int,
 	tick:           int,
@@ -91,63 +92,72 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.colors = make([dynamic][11]engine.Color_Pair, n)
+	s.active_indexes = make([dynamic]int, n)
 	s.max_steps = make([dynamic]int, n)
 
 	for id, i in s.characters {
 		c := e.particles.initial_coord[id]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
+		final_color := engine.gradient_sample(sampler, spectrum[:], c)
+		input := engine.get_initial_appearance(e, id)
+		for step in 0 ..< 11 {
+			appearance := engine.get_appearance(e, id)
+			if s.color_handling == .Dynamic {
+				engine.dynamic_gradient_to_input(
+					&appearance,
+					s.config.final_gradient_stops[0],
+					input,
+					10,
+					step,
+				)
+			} else {
+				appearance.colors.fg = engine.gradient_between_step(
+					s.config.final_gradient_stops[0],
+					final_color,
+					10,
+					step,
+				)
+			}
+			s.colors[i][step] = appearance.colors
+		}
+		s.active_indexes[i] = i
 		e.particles.current_coord[id] = e.canvas.center
 		s.max_steps[i] = max(
-			engine.round_half_even(
+			engine.round_to_int(
 				engine.line_length(e.canvas.center, c, true) / s.config.movement_speed,
 			),
 			1,
 		)
 		s.step_limit = max(s.step_limit, s.max_steps[i])
-		e.particles.is_visible[id] = true
+		e.particles.flags[id] += {.Visible}
 		e.particles.layer[id] = 1
 	}
 }
 
 expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 	if s.tick == s.step_limit do return false
-	for id, i in s.characters {
+	write := 0
+	for i in s.active_indexes {
+		id := s.characters[i]
 		maximum := s.max_steps[i]
-		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
+		progress := f64(s.tick + 1) / f64(maximum)
 		factor := ease.ease(s.config.expand_easing, progress)
-		visual := engine.get_visual(e, id)
-		layer := e.particles.layer[id]
 		position := engine.coord_on_line(e.canvas.center, e.particles.initial_coord[id], factor)
-		step := min(engine.round_half_even(factor * 10), 10)
-		if s.color_handling == .Dynamic {
-			engine.dynamic_gradient_to_input(
-				&visual,
-				s.config.final_gradient_stops[0],
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
-				10,
-				step,
-			)
-		} else {
-			visual.fg = engine.gradient_between_step(
-				s.config.final_gradient_stops[0],
-				s.final_colors[i],
-				10,
-				step,
-			)
-		}
-		if s.tick + 1 >= maximum {
+		step := min(engine.round_to_int(factor * 10), 10)
+		if s.tick + 1 == maximum {
 			position = e.particles.initial_coord[id]
-			if s.color_handling == .Dynamic {
-				visual.fg = engine.get_initial_visual(e, engine.Particle_Id(id)).fg
-				visual.bg = engine.get_initial_visual(e, engine.Particle_Id(id)).bg
-			} else {
-				visual.fg = s.final_colors[i]
-			}
-			layer = 0
+			step = 10
+			engine.set_particle(e, id, engine.Layer(0))
+		} else {
+			s.active_indexes[write] = i
+			write += 1
 		}
-		engine.set_particle(e, id, coord = position, layer = layer, visual = visual)
+		engine.set_particle(e, id, position)
+		appearance := engine.get_appearance(e, id)
+		appearance.colors = s.colors[i][step]
+		engine.set_appearance(e, id, appearance)
 	}
+	resize(&s.active_indexes, write)
 	s.tick += 1
 	return true
 }

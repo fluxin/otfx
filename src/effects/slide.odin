@@ -143,13 +143,11 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		c := e.particles.initial_coord[id]
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		engine.set_visual(
+		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_appearance(
 			e,
 			id,
-			engine.Visual {
-				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				fg = s.config.final_gradient_stops[0],
-			},
+			engine.Appearance{colors = {fg = s.config.final_gradient_stops[0]}},
 		)
 	}
 
@@ -235,7 +233,7 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 			i := s.index_by_id[id]
 			s.origins[i] = e.particles.current_coord[id]
 			s.max_steps[i] = max(
-				engine.round_half_even(
+				engine.round_to_int(
 					engine.line_length(s.origins[i], e.particles.initial_coord[id], true) /
 					s.config.movement_speed,
 				),
@@ -262,7 +260,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 		if s.heads[gi] < len(g) {
 			next := g[s.heads[gi]]
 			s.heads[gi] += 1
-			engine.set_particle(e, next, visible = true)
+			engine.set_particle(e, next, engine.Visible(true))
 			append(&s.active_slots, s.index_by_id[next])
 		}
 	}
@@ -281,7 +279,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 	for i in s.active_slots {
 		id := s.characters[i]
 		position := e.particles.current_coord[id]
-		visual := engine.get_visual(e, id)
+		appearance := engine.get_appearance(e, id)
 		step := s.steps[i]
 		if step < s.max_steps[i] {
 			progress := f64(step + 1) / f64(s.max_steps[i])
@@ -293,12 +291,12 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 		}
 		if s.color_handling == .Dynamic {
 			engine.dynamic_apply_input_colors(
-				&visual,
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
+				&appearance,
+				engine.get_initial_appearance(e, engine.Particle_Id(id)),
 			)
 		} else {
 			gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
-			visual.fg = engine.gradient_between_step(
+			appearance.colors.fg = engine.gradient_between_step(
 				base_color,
 				s.final_colors[i],
 				10,
@@ -313,14 +311,15 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 			position = e.particles.initial_coord[id]
 			if s.color_handling == .Dynamic {
 				engine.dynamic_apply_input_colors(
-					&visual,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					&appearance,
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 				)
 			} else {
-				visual.fg = s.final_colors[i]
+				appearance.colors.fg = s.final_colors[i]
 			}
 		}
-		engine.set_particle(e, id, coord = position, visual = visual)
+		engine.set_particle(e, id, position)
+		engine.set_appearance(e, id, appearance)
 	}
 	resize(&s.active_slots, write)
 	return true

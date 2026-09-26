@@ -9,7 +9,7 @@ import "core:math/ease"
 // a direct per-character transition into the final gradient.
 
 Waves_Config :: struct {
-	wave_symbols:             [dynamic]string,
+	wave_symbols:             [dynamic]rune,
 	wave_gradient_stops:      [dynamic]engine.Color,
 	wave_gradient_steps:      [dynamic]int,
 	wave_count:               int,
@@ -31,22 +31,22 @@ waves_config_default :: proc() -> Waves_Config {
 	}
 	append(
 		&cfg.wave_symbols,
-		..[]string {
-			"▁",
-			"▂",
-			"▃",
-			"▄",
-			"▅",
-			"▆",
-			"▇",
-			"█",
-			"▇",
-			"▆",
-			"▅",
-			"▄",
-			"▃",
-			"▂",
-			"▁",
+		..[]rune {
+			'▁',
+			'▂',
+			'▃',
+			'▄',
+			'▅',
+			'▆',
+			'▇',
+			'█',
+			'▇',
+			'▆',
+			'▅',
+			'▄',
+			'▃',
+			'▂',
+			'▁',
 		},
 	)
 	append(
@@ -107,11 +107,12 @@ waves_parse :: proc(cfg: ^Waves_Config, args: []string) -> bool {
 Waves_State :: struct {
 	config:         Waves_Config,
 	pending_cols:   engine.Particle_Groups,
-	wave_codes:     [dynamic]engine.Visual_Id, // age -> encoded visual
+	wave_symbols:   [dynamic]rune,
+	wave_codes:     [dynamic]engine.Appearance_Id, // age -> shared appearance
 	last_wave:      engine.Color,
 	final_colors:   [dynamic]engine.Color, // indexed by Particle_Id
 	start_ticks:    [dynamic]int, // -1 pending, -2 complete
-	final_step:     [dynamic]int, // -1 until the final visual is published
+	final_step:     [dynamic]int, // -1 until the final appearance is published
 	active:         [dynamic]engine.Particle_Id, // revealed, not yet complete
 	col_idx:        int,
 	tick:           int,
@@ -144,21 +145,22 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	symbols := engine.sequence_expand(s.config.wave_symbols[:], entries)
 	defer delete(colors)
 	defer delete(symbols)
-	// Compile the shared eased timeline directly to code IDs. Repeated waves
-	// reuse one cycle; playback retains neither expanded symbols nor colors.
-	cycle := make([]engine.Visual_Id, entries)
+	// Resolve the eased timeline into separate glyph and shared-appearance lanes.
+	cycle := make([]engine.Appearance_Id, entries)
 	defer delete(cycle)
-	for symbol, i in symbols {
-		cycle[i] = engine.prepare_visual(e, engine.Visual{symbol = symbol, fg = colors[i]})
+	for _, i in symbols {
+		cycle[i] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = colors[i]}})
 	}
 	wave_frames := entries * s.config.wave_count
 	wave_length := max(s.config.wave_length, 1)
 	s.wave_ticks = wave_frames * wave_length
 	s.last_wave = colors[entries - 1]
-	s.wave_codes = make([dynamic]engine.Visual_Id, max(s.wave_ticks - 1, 0))
+	s.wave_symbols = make([dynamic]rune, max(s.wave_ticks - 1, 0))
+	s.wave_codes = make([dynamic]engine.Appearance_Id, max(s.wave_ticks - 1, 0))
 	for age in 0 ..< len(s.wave_codes) {
 		eased := engine.eased_timeline_index(age, s.wave_ticks, s.config.wave_easing)
 		frame := min(eased / wave_length, wave_frames - 1)
+		s.wave_symbols[age] = symbols[frame % entries]
 		s.wave_codes[age] = cycle[frame % entries]
 	}
 
@@ -173,7 +175,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	)
 	defer delete(chars[:])
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
-	visible := e.particles.is_visible
+	visible_flags := e.particles.flags
 	s.final_colors = make([dynamic]engine.Color, len(e.particles))
 	s.color_handling = e.cfg.existing_color_handling
 	s.start_ticks = make([dynamic]int, len(e.particles))
@@ -184,7 +186,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	for id in chars {
 		c := initial_coords[id]
 		s.final_colors[id] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
-		visible[id] = false
+		visible_flags[id] -= {.Visible}
 	}
 
 	s.pending_cols = engine.get_particles_grouped(
@@ -205,7 +207,7 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 	}
 	if s.col_idx < group_count {
 		for id in engine.group_members(s.pending_cols, s.col_idx) {
-			engine.set_particle(e, id, visible = true)
+			engine.set_particle(e, id, engine.Visible(true))
 			s.start_ticks[id] = s.tick
 			append(&s.active, id)
 		}
@@ -222,27 +224,27 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 	for id in s.active {
 		age := s.tick - s.start_ticks[id]
 		if age < wave_ticks - 1 {
-			engine.set_visual(e, id, s.wave_codes[age])
+			engine.set_symbol(e, id, s.wave_symbols[age])
+			engine.set_appearance(e, id, s.wave_codes[age])
 		} else {
 			final_age := age - (wave_ticks - 1)
 			final_ticks := (final_steps + 1) * 10
-			style := engine.get_initial_visual(e, engine.Particle_Id(id))
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 			step := final_age == 0 ? 0 : min((final_age - 1) / 10, final_steps)
-			if s.color_handling == .Dynamic && style.fg == nil && style.bg == nil {
+			if s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil {
 				final_ticks = 10
 				step = 0
 			}
 			if step != s.final_step[id] {
-				visual := engine.Visual {
-					symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
-				}
+				appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
+				appearance := engine.Appearance{}
 				if s.color_handling == .Dynamic {
-					if style.fg == nil && style.bg == nil {
-						visual.fg = nil
-						visual.bg = nil
+					if style.colors.fg == nil && style.colors.bg == nil {
+						appearance.colors.fg = nil
+						appearance.colors.bg = nil
 					} else {
 						engine.dynamic_gradient_to_input(
-							&visual,
+							&appearance,
 							last_wave,
 							style,
 							final_steps,
@@ -250,14 +252,15 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 						)
 					}
 				} else {
-					visual.fg = engine.gradient_between_step(
+					appearance.colors.fg = engine.gradient_between_step(
 						last_wave,
 						s.final_colors[id],
 						final_steps,
 						step,
 					)
 				}
-				engine.set_visual(e, id, visual)
+				engine.set_symbol(e, id, appearance_symbol)
+				engine.set_appearance(e, id, appearance)
 				s.final_step[id] = step
 			}
 			if final_age == final_ticks {

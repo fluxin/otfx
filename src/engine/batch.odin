@@ -5,8 +5,9 @@ import "core:math/ease"
 // Frame timeline construction and batched sample updates.
 
 Frame :: struct {
-	visual:   Visual,
-	duration: int,
+	symbol:     rune,
+	appearance: Appearance,
+	duration:   int,
 }
 
 // Effect-owned frame lanes use this contiguous SoA storage. Construction is
@@ -15,27 +16,29 @@ Frame_Timeline :: #soa[dynamic]Frame
 
 timeline_append_frame :: #force_inline proc(
 	frames: ^Frame_Timeline,
-	visual: Visual,
+	symbol: rune,
+	appearance: Appearance,
 	duration: int,
 ) {
 	assert(duration >= 1)
-	append(frames, Frame{visual, duration})
+	append(frames, Frame{symbol, appearance, duration})
 }
 
 create_hold_timeline :: proc(
 	frames: ^Frame_Timeline,
-	visual: Visual,
+	symbol: rune,
+	appearance: Appearance,
 	duration, count: int,
 ) -> Span {
 	assert(count >= 1)
 	start := len(frames^)
-	for _ in 0 ..< count do timeline_append_frame(frames, visual, duration)
+	for _ in 0 ..< count do timeline_append_frame(frames, symbol, appearance, duration)
 	return {start, count}
 }
 
 create_gradient_timeline :: proc(
 	frames: ^Frame_Timeline,
-	symbol: string,
+	symbol: rune,
 	duration: int,
 	start, end: Color,
 	steps: int,
@@ -45,7 +48,8 @@ create_gradient_timeline :: proc(
 	for step in 0 ..= steps {
 		timeline_append_frame(
 			frames,
-			Visual{symbol, gradient_between_step(start, end, steps, step), nil, false},
+			symbol,
+			Appearance{colors = {fg = gradient_between_step(start, end, steps, step)}},
 			duration,
 		)
 	}
@@ -105,5 +109,5 @@ eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease
 	assert(total_steps >= 1)
 	ratio := f64(step) / f64(total_steps)
 	factor := ease.ease(fn, ratio)
-	return clamp(round_half_even(factor * f64(total_steps - 1)), 0, total_steps - 1)
+	return clamp(round_to_int(factor * f64(total_steps - 1)), 0, total_steps - 1)
 }
