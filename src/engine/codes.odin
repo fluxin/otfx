@@ -2,104 +2,48 @@ package engine
 
 import "core:strings"
 
+// Visual storage, appearance setters, and cached ANSI packet encoding.
+
+Color_Pair :: struct {
+	fg: Maybe(Color),
+	bg: Maybe(Color),
+}
+
+Visual :: struct {
+	symbol: string,
+	fg, bg: Maybe(Color),
+	bold:   bool,
+}
+
 Visual_Id :: distinct u32
+
 NO_VISUAL :: Visual_Id(0)
-
-// Complete writable ANSI packet for the common one-rune appearance. Long
-// symbols borrow their string between the same prefix and reset slices.
-Packet :: struct {
-	bytes:          [52]byte,
-	prefix, length: u8,
-}
-Packet_Field :: enum {
-	Symbol,
-	Foreground,
-	Background,
-	Bold,
-}
-Packet_Fields :: bit_set[Packet_Field]
-All_Packet_Fields :: Packet_Fields{.Symbol, .Foreground, .Background, .Bold}
-
-// Fixed-width SGR fields allow setters to overwrite bytes without shifting.
-Packet_Template :: "\x1b[22m\x1b[0000000000000039m\x1b[0000000000000049m"
-#assert(len(Packet_Template) == 43)
 
 Visual_Entry :: struct {
 	visual: Visual,
 	packet: Packet,
 }
 
+symbol_equal :: #force_inline proc(a, b: string) -> bool {
+	return len(a) == len(b) && (raw_data(a) == raw_data(b) || a == b)
+}
+
 get_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
 	return e.visuals[e.particles[id].visual_id - 1].visual
 }
 
-packet_decimal :: #force_inline proc(bytes: []byte, v: u8) {
-	bytes[0] = '0' + v / 100
-	bytes[1] = '0' + (v / 10) % 10
-	bytes[2] = '0' + v % 10
+get_initial_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
+	return e.visuals[e.particles[id].initial_visual_id - 1].visual
 }
 
-packet_color :: proc(bytes: []byte, color: Maybe(Color), background, xterm: bool) {
-	if c, ok := color.?; ok {
-		copy(bytes[:19], "\x1b[38;2;000;000;000m")
-		if background do bytes[2] = '4'
-		if xterm {
-			bytes[5] = '5'
-			for &b in bytes[7:18] do b = '0'
-			packet_decimal(bytes[15:18], color_to_xterm(c))
-		} else {
-			packet_decimal(bytes[7:10], c.r)
-			packet_decimal(bytes[11:14], c.g)
-			packet_decimal(bytes[15:18], c.b)
-		}
-	} else {
-		copy(bytes[:19], "\x1b[0000000000000039m")
-		if background do bytes[16] = '4'
+// Cold consumers can request the resolved value; the frame writer borrows bytes.
+get_render_visual :: proc(e: ^Engine, id: Particle_Id) -> Visual {
+	v := get_visual(e, id)
+	if e.particles[id].preserve_initial_colors {
+		initial := get_initial_visual(e, id)
+		v.fg, v.bg, v.bold = initial.fg, initial.bg, initial.bold
 	}
-}
-
-packet_update :: #force_inline proc(
-	p: ^Packet,
-	v: ^Visual,
-	cfg: ^Terminal_Config,
-	fields: Packet_Fields,
-	colors: ^Visual = nil,
-) {
-	colors := v if colors == nil else colors
-	fields := fields
-	styled := !cfg.no_color && (colors.bold || colors.fg != nil || colors.bg != nil)
-	prefix := 43 if styled else 0
-	if int(p.prefix) != prefix {
-		if styled do copy(p.bytes[:], Packet_Template)
-		p.prefix = u8(prefix)
-		fields = All_Packet_Fields
-	}
-	if styled {
-		if .Bold in fields {
-			p.bytes[2], p.bytes[3] = '0', '1'
-			if !colors.bold do p.bytes[2], p.bytes[3] = '2', '2'
-		}
-		if .Foreground in fields do packet_color(p.bytes[5:24], colors.fg, false, cfg.xterm_colors)
-		if .Background in fields do packet_color(p.bytes[24:43], colors.bg, true, cfg.xterm_colors)
-	}
-	if .Symbol in fields {
-		count := len(v.symbol) if len(v.symbol) <= 4 else 0
-		copy(p.bytes[prefix:prefix + count], v.symbol[:count])
-		end := prefix + count
-		if styled {
-			copy(p.bytes[end:end + 4], "\x1b[0m")
-			end += 4
-		}
-		p.length = u8(end)
-	}
-}
-
-update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
-	entry := &e.visuals[e.particles[id].visual_id - 1]
-	colors := &entry.visual
-	if e.particles[id].preserve_initial_colors do colors = &e.visuals[e.particles[id].initial_visual_id - 1].visual
-	packet_update(&entry.packet, &entry.visual, &e.cfg, fields, colors)
-	dirty_visual(e, id)
+	return v
 }
 
 visual_pool_init :: proc(e: ^Engine) {
@@ -118,6 +62,24 @@ prepare_visual :: proc(e: ^Engine, visual: Visual) -> Visual_Id {
 	id := Visual_Id(len(e.visuals))
 	e.visual_ids[visual] = id
 	return id
+}
+
+// Each particle owns one mutable entry. Prepared and initial entries may be
+// shared, but editing one particle never mutates another particle's bytes.
+init_particle_visual :: proc(e: ^Engine, id: Particle_Id, initial: Visual) {
+	e.particles[id].initial_visual_id = prepare_visual(e, initial)
+	append(&e.visuals, Visual_Entry{visual = Visual{symbol = initial.symbol}})
+	e.particles[id].visual_id = Visual_Id(len(e.visuals))
+	e.particles[id].mutable_visual_id = e.particles[id].visual_id
+	update_packet(e, id, All_Packet_Fields)
+}
+
+update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
+	entry := &e.visuals[e.particles[id].visual_id - 1]
+	colors := &entry.visual
+	if e.particles[id].preserve_initial_colors do colors = &e.visuals[e.particles[id].initial_visual_id - 1].visual
+	packet_update(&entry.packet, &entry.visual, &e.cfg, fields, colors)
+	dirty_visual(e, id)
 }
 
 // Switching a prepared appearance changes only the reference.
@@ -193,12 +155,152 @@ set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
 	update_packet(e, id, fields | {.Bold})
 }
 
-// Copy cached bytes into the frame; encoding remains in the appearance setters.
-write_output :: #force_inline proc(out: ^[dynamic]byte, used: ^int, bytes: []byte) {
-	end := used^ + len(bytes)
-	if end > len(out^) do non_zero_resize(out, max(end, 2 * len(out^)))
-	copy(out^[used^:end], bytes)
-	used^ = end
+// Repeated IDs retain their ordered scalar semantics.
+set_visuals :: proc(e: ^Engine, ids: []Particle_Id, visuals: []Visual_Id) {
+	assert(len(ids) == len(visuals))
+	for id, i in ids do set_visual(e, id, visuals[i])
+}
+
+// Dynamic color handling is an input-style data transform, not a timeline.
+// Effects own when they call these helpers; they simply avoid repeating the
+// same nullable FG/BG writes in every direct next loop.
+dynamic_apply_input_colors :: #force_inline proc(visual: ^Visual, input: Visual) {
+	visual.fg = input.fg
+	visual.bg = input.bg
+}
+
+// Lerp both source colour lanes with the established, stepped gradient rule.
+// The caller owns the tick-to-step conversion and all phase lifetime policy.
+dynamic_gradient_to_input :: #force_inline proc(
+	visual: ^Visual,
+	start: Color,
+	input: Visual,
+	steps, step: int,
+) {
+	if fg, ok := input.fg.?; ok {
+		visual.fg = gradient_between_step(start, fg, steps, step)
+	} else {
+		visual.fg = nil
+	}
+	if bg, ok := input.bg.?; ok {
+		visual.bg = gradient_between_step(start, bg, steps, step)
+	} else {
+		visual.bg = nil
+	}
+}
+
+// Binarypath's collapse target is the source style darkened in both lanes.
+// Keep that exceptional transform here rather than open-coding nullable lanes.
+dynamic_gradient_to_dimmed_input :: #force_inline proc(
+	visual: ^Visual,
+	start: Color,
+	input: Visual,
+	brightness: f64,
+	steps, step: int,
+) {
+	if fg, ok := input.fg.?; ok {
+		visual.fg = gradient_between_step(
+			start,
+			adjust_color_brightness(fg, brightness),
+			steps,
+			step,
+		)
+	} else {
+		visual.fg = nil
+	}
+	if bg, ok := input.bg.?; ok {
+		visual.bg = gradient_between_step(
+			start,
+			adjust_color_brightness(bg, brightness),
+			steps,
+			step,
+		)
+	} else {
+		visual.bg = nil
+	}
+}
+
+// Complete writable ANSI packet for the common one-rune appearance. Long
+// symbols borrow their string between the same prefix and reset slices.
+Packet :: struct {
+	bytes:          [52]byte,
+	prefix, length: u8,
+}
+
+Packet_Field :: enum {
+	Symbol,
+	Foreground,
+	Background,
+	Bold,
+}
+
+Packet_Fields :: bit_set[Packet_Field]
+
+All_Packet_Fields :: Packet_Fields{.Symbol, .Foreground, .Background, .Bold}
+
+// Fixed-width SGR fields allow setters to overwrite bytes without shifting.
+Packet_Template :: "\x1b[22m\x1b[0000000000000039m\x1b[0000000000000049m"
+#assert(len(Packet_Template) == 43)
+
+packet_decimal :: #force_inline proc(bytes: []byte, v: u8) {
+	bytes[0] = '0' + v / 100
+	bytes[1] = '0' + (v / 10) % 10
+	bytes[2] = '0' + v % 10
+}
+
+packet_color :: proc(bytes: []byte, color: Maybe(Color), background, xterm: bool) {
+	if c, ok := color.?; ok {
+		copy(bytes[:19], "\x1b[38;2;000;000;000m")
+		if background do bytes[2] = '4'
+		if xterm {
+			bytes[5] = '5'
+			for &b in bytes[7:18] do b = '0'
+			packet_decimal(bytes[15:18], color_to_xterm(c))
+		} else {
+			packet_decimal(bytes[7:10], c.r)
+			packet_decimal(bytes[11:14], c.g)
+			packet_decimal(bytes[15:18], c.b)
+		}
+	} else {
+		copy(bytes[:19], "\x1b[0000000000000039m")
+		if background do bytes[16] = '4'
+	}
+}
+
+packet_update :: #force_inline proc(
+	p: ^Packet,
+	v: ^Visual,
+	cfg: ^Terminal_Config,
+	fields: Packet_Fields,
+	colors: ^Visual = nil,
+) {
+	colors := v if colors == nil else colors
+	fields := fields
+	styled := !cfg.no_color && (colors.bold || colors.fg != nil || colors.bg != nil)
+	prefix := 43 if styled else 0
+	if int(p.prefix) != prefix {
+		if styled do copy(p.bytes[:], Packet_Template)
+		p.prefix = u8(prefix)
+		fields = All_Packet_Fields
+	}
+	if styled {
+		if .Bold in fields {
+			p.bytes[2], p.bytes[3] = '0', '1'
+			if !colors.bold do p.bytes[2], p.bytes[3] = '2', '2'
+		}
+		if .Foreground in fields do packet_color(p.bytes[5:24], colors.fg, false, cfg.xterm_colors)
+		if .Background in fields do packet_color(p.bytes[24:43], colors.bg, true, cfg.xterm_colors)
+	}
+	if .Symbol in fields {
+		count := len(v.symbol) if len(v.symbol) <= 4 else 0
+		copy(p.bytes[prefix:prefix + count], v.symbol[:count])
+		end := prefix + count
+		if styled {
+			copy(p.bytes[end:end + 4], "\x1b[0m")
+			end += 4
+		}
+		p.length = u8(end)
+	}
 }
 
 append_packet :: #force_inline proc(
@@ -235,33 +337,4 @@ write_particle :: proc(e: ^Engine, id: Particle_Id, b: ^strings.Builder) {
 		strings.write_string(b, symbol)
 		if p.prefix != 0 do strings.write_string(b, "\x1b[0m")
 	}
-}
-// Repeated IDs retain their ordered scalar semantics.
-set_visuals :: proc(e: ^Engine, ids: []Particle_Id, visuals: []Visual_Id) {
-	assert(len(ids) == len(visuals))
-	for id, i in ids do set_visual(e, id, visuals[i])
-}
-
-get_initial_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
-	return e.visuals[e.particles[id].initial_visual_id - 1].visual
-}
-
-// Each particle owns one mutable entry. Prepared and initial entries may be
-// shared, but editing one particle never mutates another particle's bytes.
-init_particle_visual :: proc(e: ^Engine, id: Particle_Id, initial: Visual) {
-	e.particles[id].initial_visual_id = prepare_visual(e, initial)
-	append(&e.visuals, Visual_Entry{visual = Visual{symbol = initial.symbol}})
-	e.particles[id].visual_id = Visual_Id(len(e.visuals))
-	e.particles[id].mutable_visual_id = e.particles[id].visual_id
-	update_packet(e, id, All_Packet_Fields)
-}
-
-// Cold consumers can request the resolved value; the frame writer borrows bytes.
-get_render_visual :: proc(e: ^Engine, id: Particle_Id) -> Visual {
-	v := get_visual(e, id)
-	if e.particles[id].preserve_initial_colors {
-		initial := get_initial_visual(e, id)
-		v.fg, v.bg, v.bold = initial.fg, initial.bg, initial.bold
-	}
-	return v
 }

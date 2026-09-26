@@ -4,6 +4,27 @@ Effects own choreography, random order, phase transitions, and completion. The
 engine owns clipping, overlap resolution, appearance encoding, dirty tracking,
 and terminal output. Effects use the same setters regardless of how they animate.
 
+## Source layout
+
+All files remain in the `engine` package. Keep related types and operations
+with their existing owner; file boundaries do not add runtime layers.
+
+| File | Responsibility |
+|---|---|
+| `engine.odin` | Engine state, construction, playback clock, and pacing |
+| `particle.odin` | Particle IDs/storage, population creation, batches, and placement setter |
+| `group.odin` | Queries, filters, ordering, spans, groups, and group reveal |
+| `codes.odin` | Visual types/storage, appearance setters, and cached ANSI encoding |
+| `batch.odin` | Frame timelines, hold expansion, and batched sample changes |
+| `render.odin` | Cell ownership, selection, dirtiness, and row construction |
+| `output.odin` | Terminal I/O, cursor lifecycle, resize signals, and capture |
+| `stats.odin` | Optional renderer instrumentation |
+| `config.odin` | Terminal settings and input-color policy |
+| `canvas.odin` | Canvas bounds, anchors, layout, and viewport clipping bounds |
+| `input.odin` | Input decoding, escape/SGR handling, and input-particle materialization |
+| `geometry.odin` | Coordinates, path geometry, rounding, and easing names |
+| `color.odin` | RGB/xterm conversion, gradients, and brightness |
+
 ## Effect API
 
 Build creates particles, reusable visuals, motion data, and schedules. During

@@ -4,6 +4,15 @@ import "core:container/bit_array"
 import "core:slice"
 import "core:time"
 
+// Cell ownership, dirty tracking, and retained row construction.
+
+// Renderer-owned admission state for an optional explicit particle selection.
+Frame_Selection :: enum u8 {
+	Absent,
+	Even,
+	Odd,
+}
+
 frame :: proc(e: ^Engine, selected: Maybe([]Particle_Id) = nil) {
 	enforce_framerate(e)
 	frame_build(e, selected)
