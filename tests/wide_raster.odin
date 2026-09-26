@@ -20,25 +20,25 @@ wide_raster_preserves_cursor_distances_and_long_symbols :: proc(t: ^testing.T) {
 	code := engine.prepare_visual(&e, {symbol = "A"})
 	for id in e.particle_sets.input do engine.set_particle(&e, id, visible = true, visual = code)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), input)
+	testing.expect_value(t, frame_text(&e), input)
 	// Sparse output needs the full distance, including values beyond u16.
 	last := e.particle_sets.input[len(e.particle_sets.input) - 1]
 	engine.set_symbol(&e, last, "B")
 	engine.frame_build(&e)
 	testing.expect_value(
 		t,
-		string(engine.frame_bytes(&e)[:len(input) - 1]),
+		frame_text(&e)[:len(input) - 1],
 		input[:len(input) - 1],
 	)
-	testing.expect_value(t, engine.frame_bytes(&e)[len(input) - 1], u8('B'))
+	testing.expect_value(t, frame_text(&e)[len(input) - 1], u8('B'))
 	engine.frame_build(&e)
-	testing.expect_value(t, len(engine.frame_bytes(&e)), 0)
+	testing.expect_value(t, len(frame_text(&e)), 0)
 	// Symbol bytes are not limited to a rune or a fixed per-cell byte capacity.
 	large := strings.repeat("x", 65537 * 65)
 	engine.set_symbol(&e, e.particle_sets.input[0], large)
 	engine.set_symbol(&e, e.particle_sets.input[1], "C")
 	engine.frame_build(&e)
-	testing.expect_value(t, len(engine.frame_bytes(&e)), len(large) + len(input) - 1)
-	testing.expect_value(t, string(engine.frame_bytes(&e)[:len(large)]), large)
-	testing.expect_value(t, engine.frame_bytes(&e)[len(large)], u8('C'))
+	testing.expect_value(t, len(frame_text(&e)), len(large) + len(input) - 1)
+	testing.expect_value(t, frame_text(&e)[:len(large)], large)
+	testing.expect_value(t, frame_text(&e)[len(large)], u8('C'))
 }

@@ -129,26 +129,26 @@ render_codes_preserve_logical_appearance_and_transitions :: proc(t: ^testing.T) 
 	code := engine.prepare_visual(&e, engine.Visual{symbol = "B"})
 	engine.set_visual(&e, id, code)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
+	testing.expect_value(t, frame_text(&e), "B")
 	testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).symbol, "B")
 	// This equals the original raw visual, but differs from the current code.
 	engine.set_visual(&e, id, engine.Visual{symbol = "A"})
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "A")
+	testing.expect_value(t, frame_text(&e), "A")
 	engine.set_visual(&e, id, code)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
+	testing.expect_value(t, frame_text(&e), "B")
 	// A different raw visual, then re-enter the same encoded appearance.
 	engine.set_particle(&e, id, visual = engine.Visual{symbol = "C"})
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "C")
+	testing.expect_value(t, frame_text(&e), "C")
 	engine.set_visual(&e, id, code)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
+	testing.expect_value(t, frame_text(&e), "B")
 	// Direct writers obey the same invalidation contract.
 	engine.set_symbol(&e, id, "D")
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "D")
+	testing.expect_value(t, frame_text(&e), "D")
 	engine.set_visual(&e, id, code)
 	engine.set_symbol(&e, id, "E")
 	engine.set_foreground(&e, id, engine.Color{1, 2, 3})
@@ -157,7 +157,7 @@ render_codes_preserve_logical_appearance_and_transitions :: proc(t: ^testing.T) 
 	engine.frame_build(&e)
 	testing.expect_value(
 		t,
-		string(engine.frame_bytes(&e)),
+		frame_text(&e),
 		"\x1b[01m\x1b[38;2;001;002;003m\x1b[48;2;004;005;006mE\x1b[0m",
 	)
 	engine.set_symbol(&e, id, "E")
@@ -168,7 +168,7 @@ render_codes_preserve_logical_appearance_and_transitions :: proc(t: ^testing.T) 
 	engine.set_background(&e, id, nil)
 	engine.set_bold(&e, id, false)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(engine.frame_bytes(&e)), "E")
+	testing.expect_value(t, frame_text(&e), "E")
 }
 
 @(test)
@@ -243,14 +243,14 @@ appearance_packet_survives_placement_changes :: proc(t: ^testing.T) {
 			}
 			builder := strings.builder_make(0, 64)
 			engine.write_particle(&e, id, &builder)
-			expected := strings.clone(strings.to_string(builder))
+			expected := without_nul(strings.to_string(builder))
 			// Writing a preview must not claim the bytes reached the terminal.
 			testing.expect_value(t, engine.get_render_visual(&e, id).symbol, visual.symbol)
 			engine.frame_build(&e)
-			bytes := engine.frame_bytes(&e)
+			bytes := transmute([]byte)frame_text(&e)
 			testing.expect_value(t, string(bytes[:len(expected)]), expected)
 			testing.expect_value(t, string(bytes[len(expected):]), " ")
-			cached_packet := e.visuals[e.particles.visual_id[id] - 1].packet
+			cached_visual := engine.get_visual(&e, id)
 			allocations := track.total_allocation_count
 			entries := len(e.visuals)
 			for tick in 0 ..< 20 {
@@ -263,19 +263,19 @@ appearance_packet_survives_placement_changes :: proc(t: ^testing.T) {
 				)
 				testing.expect_value(
 					t,
-					e.visuals[e.particles.visual_id[id] - 1].packet,
-					cached_packet,
+					engine.get_visual(&e, id),
+					cached_visual,
 				)
 				engine.frame_build(&e)
 				strings.builder_reset(&builder)
 				engine.write_particle(&e, id, &builder)
-				testing.expect_value(t, strings.to_string(builder), expected)
+				testing.expect_value(t, without_nul(strings.to_string(builder)), expected)
 			}
 			engine.set_symbol(&e, id, "C")
 			testing.expect_value(
 				t,
-				string(e.visuals[e.particles.visual_id[id] - 1].packet.bytes[:43]),
-				string(cached_packet.bytes[:43]),
+				engine.get_visual(&e, id).fg,
+				cached_visual.fg,
 			)
 			strings.builder_reset(&builder)
 			engine.write_particle(&e, id, &builder)
@@ -286,4 +286,16 @@ appearance_packet_survives_placement_changes :: proc(t: ^testing.T) {
 			testing.expect_value(t, track.total_allocation_count, allocations)
 		}
 	}
+}
+
+// Byte-exact assertions below ignore only the terminal's NUL fill character.
+// The row-slot tests check the padding and fixed offsets themselves.
+without_nul :: proc(s: string) -> string {
+	b := strings.builder_make(0, len(s), context.temp_allocator)
+	for byte in s do if byte != 0 do strings.write_rune(&b, byte)
+	return strings.to_string(b)
+}
+
+frame_text :: proc(e: ^engine.Engine) -> string {
+	return without_nul(string(engine.frame_bytes(e)))
 }

@@ -415,10 +415,9 @@ Engine :: struct {
 	particle_sets:     Particle_Sets,
 	layout:            Render_Layout,
 	frame_particles:   []Particle_Id,
-	dirty_rows:        []bool,
-	blank_row:         []byte,
+	rows:              []Row,
 	visual_ids:        map[Visual]Visual_Id,
-	visuals:           [dynamic]Visual_Entry,
+	visuals:           [dynamic]Visual,
 	output_parts:      [dynamic][]byte,
 	capture_buf:       [dynamic]byte,
 	last_print:        time.Tick,
@@ -495,11 +494,15 @@ engine_make :: proc(
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.frame_particles = make([]Particle_Id, width * height)
-	e.dirty_rows = make([]bool, height)
-	for &dirty in e.dirty_rows do dirty = true
-	e.blank_row = make([]byte, width)
-	for &b in e.blank_row do b = ' '
-	reserve(&e.output_parts, width * height * 4 + height)
+	for &id in e.frame_particles do id = -1
+	e.rows = make([]Row, height)
+	stride := width * cell_bytes(&e)
+	bytes := make([]byte, height * stride)
+	for &row, i in e.rows {
+		row.bytes = bytes[i * stride:(i + 1) * stride]
+		row.flags = {.Placement}
+	}
+	reserve(&e.output_parts, 2 * height)
 	visual_pool_init(&e)
 	setup_input_particles(&e, lines)
 	// drop characters that landed outside the canvas (same as upstream)
@@ -672,6 +675,10 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 	i := 0
 	for i < len(runes) {
 		r := runes[i]
+		if r == 0 {
+			i += 1
+			continue
+		}
 		if r == '\x1b' {
 			if i + 1 >= len(runes) || runes[i + 1] != '[' {
 				return nil, .Unsupported_Escape

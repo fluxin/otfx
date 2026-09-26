@@ -71,7 +71,7 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		testing.expect(t, err == .None)
 		for id in e.particle_sets.input do e.particles.is_visible[id] = true
 		engine.frame_build(&e)
-		testing.expect_value(t, string(engine.frame_bytes(&e)), "hello")
+		testing.expect_value(t, frame_text(&e), "hello")
 		engine.frame_build(&e)
 		testing.expect_value(t, len(engine.frame_bytes(&e)), 0)
 		id := e.particle_sets.input[0]
@@ -80,10 +80,10 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		expect_visible_draws(t, &e)
 		engine.set_symbol(&e, engine.Particle_Id(id), "X")
 		engine.frame_build(&e)
-		testing.expect(t, strings.contains(string(engine.frame_bytes(&e)), "X"))
+		testing.expect(t, strings.contains(frame_text(&e), "X"))
 		engine.set_particle(&e, id, visible = false)
 		engine.frame_build(&e)
-		testing.expect_value(t, string(engine.frame_bytes(&e)), " ello")
+		testing.expect_value(t, frame_text(&e), " ello")
 	}
 }
 

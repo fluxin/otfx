@@ -77,7 +77,7 @@ waves_stretch_each_wave :: proc(t: ^testing.T) {
 			frame :=
 				engine.eased_timeline_index(age, s.wave_ticks, s.config.wave_easing) /
 				s.config.wave_length
-			visual := e.visuals[code - 1].visual
+			visual := e.visuals[code - 1]
 			testing.expect_value(t, visual.symbol, expected[frame % len(expected)])
 		}
 		testing.expect_value(t, s.last_wave, engine.Color{255, 255, 255})
@@ -366,7 +366,7 @@ waves_support_long_timelines :: proc(t: ^testing.T) {
 	testing.expect(t, len(s.wave_codes) > 65536)
 	for age in 65534 ..< len(s.wave_codes) {
 		frame := engine.eased_timeline_index(age, s.wave_ticks, .Linear)
-		visual := e.visuals[s.wave_codes[age] - 1].visual
+		visual := e.visuals[s.wave_codes[age] - 1]
 		testing.expect_value(t, visual.symbol, s.config.wave_symbols[frame % 3])
 	}
 }
