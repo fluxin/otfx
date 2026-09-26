@@ -68,8 +68,8 @@ main :: proc() {
 						tick = tick,
 					}
 					e := &run.engine_state
-					for draw in e.draws {
-						id, cell := draw.particle, draw.cell
+					for id, cell in e.frame_particles {
+						if id < 0 do continue
 						v := engine.get_render_visual(e, engine.Particle_Id(id))
 						c := Cell {
 							x      = cell % width,

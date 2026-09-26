@@ -147,20 +147,20 @@ render_painter_creation_order :: proc(t: ^testing.T) {
 	}
 	// Selection order must not decide equal-layer collisions. Spaces between
 	// input glyphs, fills and added glyphs all retain creation-order priority.
-	engine.build_draws(&e, ids)
+	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(added))
-	engine.build_draws(&e)
+	engine.compose_frame(&e)
 	testing.expect_value(t, draw_at(&e, 0), i32(added))
 	e.particles.is_visible[added] = false
-	engine.build_draws(&e, ids)
+	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(fill))
 	e.particles.is_visible[fill] = false
-	engine.build_draws(&e, ids)
+	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(b))
 	e.particles.layer[a] = 1
-	engine.build_draws(&e, ids)
+	engine.compose_frame(&e, ids)
 	testing.expect_value(t, draw_at(&e, 0), i32(a))
-	engine.build_draws(&e)
+	engine.compose_frame(&e)
 	testing.expect_value(t, draw_at(&e, 0), i32(a))
 }
 

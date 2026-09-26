@@ -78,15 +78,9 @@ otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 	for id in e.particle_sets.input {
 		p := e.particles.initial_coord[id]
 		wanted := (e.layout.visible_top - p.row) * e.layout.visible_right + p.column - 1
-		found := false
-		for draw in e.draws {
-			if draw.cell != wanted do continue
-			found =
-				engine.get_visual(e, draw.particle).symbol ==
-				engine.get_initial_visual(e, id).symbol
-			break
-		}
-		if !found do return frames, false
+		if wanted < 0 || wanted >= len(e.frame_particles) do return frames, false
+		visible := e.frame_particles[wanted]
+		if visible < 0 || engine.get_visual(e, visible).symbol != engine.get_initial_visual(e, id).symbol do return frames, false
 	}
 	return frames, true
 }

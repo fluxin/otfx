@@ -199,9 +199,9 @@ raster_render_cells :: proc(
 	width, height: int,
 ) {
 	raster_fill(r, Background)
-	for draw in e.draws {
-		screen_row, column := draw.cell / width, draw.cell % width
-		id := draw.particle
+	for id, cell in e.frame_particles {
+		if id < 0 do continue
+		screen_row, column := cell / width, cell % width
 		visual := engine.get_render_visual(e, engine.Particle_Id(id))
 		cell_background := Background
 		if bg, ok := visual.bg.?; ok {

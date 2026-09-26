@@ -406,7 +406,7 @@ Engine :: struct {
 	mono_start:        time.Tick,
 	particle_sets:     Particle_Sets,
 	layout:            Render_Layout,
-	draws:             [dynamic]Draw,
+	frame_particles:   []Particle_Id,
 	blank_row:         []byte,
 	visual_ids:        map[Visual]Visual_Id,
 	visuals:           [dynamic]Visual_Entry,
@@ -485,6 +485,7 @@ engine_make :: proc(
 	e.terminal_width, e.terminal_height = term_w, term_h
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
+	e.frame_particles = make([]Particle_Id, width * height)
 	e.blank_row = make([]byte, width)
 	for &b in e.blank_row do b = ' '
 	reserve(&e.output_parts, width * height * 4 + height)
@@ -509,7 +510,6 @@ engine_make :: proc(
 	}
 	make_fill_particles(&e, occupied)
 	delete(occupied)
-	reserve(&e.draws, len(e.particles))
 	return e, .None
 }
 
@@ -1036,7 +1036,6 @@ particle_batch :: proc(e: ^Engine, count: int) -> Particle_Batch {
 	assert(count >= 0)
 	reserve(&e.particles, len(e.particles) + count)
 	reserve(&e.visuals, len(e.visuals) + count * 2)
-	reserve(&e.draws, len(e.particles) + count)
 	return {e, count}
 }
 
@@ -1062,7 +1061,6 @@ add_particle_single :: proc(e: ^Engine, symbol: string, position: Coord) -> Part
 	c.initial_coord = position
 	c.current_coord = position
 	append(&e.particles, c)
-	reserve(&e.draws, cap(e.particles))
 	id := Particle_Id(len(e.particles) - 1)
 	init_particle_visual(e, id, Visual{symbol = symbol})
 	return id

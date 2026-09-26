@@ -30,7 +30,7 @@ raster_expected :: proc(e: ^engine.Engine, selected: []engine.Particle_Id, all: 
 }
 
 @(test)
-draw_list_matches_full_paint :: proc(t: ^testing.T) {
+frame_composition_matches_full_paint :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -69,10 +69,10 @@ draw_list_matches_full_paint :: proc(t: ^testing.T) {
 			all := tick % 4 == 0
 			raster_expected(&e, selected[:], all, expected)
 			if all {
-				engine.build_draws(&e)
+				engine.compose_frame(&e)
 				engine.frame_build(&e)
 			} else {
-				engine.build_draws(&e, selected[:])
+				engine.compose_frame(&e, selected[:])
 				engine.frame_build(&e, selected[:])
 			}
 			for cell, index in expected do testing.expect_value(t, draw_at(&e, index), cell)
@@ -84,7 +84,7 @@ draw_list_matches_full_paint :: proc(t: ^testing.T) {
 }
 
 @(test)
-draw_list_keeps_pending_visual_changes :: proc(t: ^testing.T) {
+frame_composition_keeps_pending_visual_changes :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -102,7 +102,7 @@ draw_list_keeps_pending_visual_changes :: proc(t: ^testing.T) {
 	// Update without emission, then move again. Only the latest position is
 	// drawn, but the last emitted position must still be erased.
 	e.particles.current_coord[id] = {1, 1}
-	engine.build_draws(&e)
+	engine.compose_frame(&e)
 	e.particles.current_coord[id] = {2, 1}
 	engine.set_symbol(&e, engine.Particle_Id(id), "B")
 	engine.frame_build(&e)
@@ -138,7 +138,7 @@ particle_settings_preserve_omitted_values :: proc(t: ^testing.T) {
 		layer = 0,
 		visual = visual,
 	)
-	// Separate lanes share one queued entry. Omitted settings remain intact.
+	// Separate setter calls preserve omitted settings.
 	engine.set_particle(&e, id, coord = engine.Coord{2, 1})
 	engine.set_particle(&e, id, layer = 5)
 	visual.symbol = "B"
@@ -149,8 +149,7 @@ particle_settings_preserve_omitted_values :: proc(t: ^testing.T) {
 	engine.frame_build(&e)
 	testing.expect_value(t, draw_at(&e, 0), i32(-1))
 	testing.expect_value(t, draw_at(&e, 1), i32(id))
-	// Clearing a nullable color is an actual visual update. Appearance-only
-	// changes mark the winning cell directly instead of queueing membership.
+	// Clearing a nullable color is an actual visual update.
 	visual.fg = nil
 	engine.set_particle(&e, id, visual = visual)
 	engine.frame_build(&e)
@@ -161,7 +160,7 @@ particle_settings_preserve_omitted_values :: proc(t: ^testing.T) {
 }
 
 @(test)
-draw_list_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
+frame_composition_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -185,8 +184,7 @@ draw_list_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
 	engine.set_particle(&e, front, visible = false)
 	engine.frame_build(&e)
 	testing.expect_value(t, string(engine.frame_bytes(&e)), "Z")
-	// A visual-only tag followed by selection admission must synchronize
-	// membership even though the generation already contains that character.
+	// A hidden selection must not discard another particle's visual update.
 	engine.frame_build(&e, []engine.Particle_Id{front})
 	visual.symbol = "Y"
 	engine.set_particle(&e, back, visual = visual)
@@ -195,7 +193,7 @@ draw_list_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
 }
 
 @(test)
-draw_list_character_growth_is_amortized :: proc(t: ^testing.T) {
+frame_composition_character_growth_is_amortized :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)

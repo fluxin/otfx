@@ -10,19 +10,22 @@ prepared visual assigns an ID; independent edits use the particle's reserved
 mutable entry. A shared-to-mutable transition preserves logical fields before
 patching the packet. Long symbols are borrowed separately.
 
-Each frame collects visible particles, clips them, sorts by terminal cell, and
-resolves overlap by layer then particle ID. It emits complete rows, borrowing
+Each frame clears one reusable particle-ID slice, clips visible particles, and
+places them directly into terminal cells. Overlaps select the highest layer then
+particle ID. It emits complete rows, borrowing
 packet slices and blank spans. Linux `writev` submits these slices; `frame_bytes`
 provides an explicit contiguous capture for tests. Emit or capture a built frame
 before changing particles or growing the visual table: output slices borrow that
 storage and are not immutable frame snapshots.
 
 Deleted renderer state includes cell membership links, dirty and selection
-bitmaps, current/previous cell grids, emitted appearance snapshots, dynamic color
+bitmaps, previous-frame state, emitted appearance snapshots, dynamic color
 caches, and the concatenated CLI output buffer. There are no `raster_*` functions
 or `mem.copy` calls in the engine. This does not mean zero data movement: packet
 setters write fields, long symbols are borrowed, capture concatenates slices,
-and the kernel transfers output bytes.
+and the kernel transfers output bytes. The initial bare renderer used a sorted
+draw list; the current implementation replaces that list with one current-frame
+buffer and performs no render-time sorting.
 
 Also removed the unused added-particle query list and the old renderer visual
 comparison helper. Input, inner-fill, and outer-fill populations remain: Burn
@@ -41,7 +44,7 @@ capacity for Binarypath, Burn, Laseretch, and Thunderstorm.
   positions. It uses a terminal model, not a physical terminal emulator.
 - `odin check` passes for the docs, accuracy, and parity tools.
 
-## Performance screen
+## Initial sorted-renderer performance screen
 
 Both binaries use `-o:speed -microarch:native`. The CLI screen uses dense 190x46
 input, a 200x50 canvas, seed 1, unpaced output to `/dev/null`, CPU 2, three samples,
@@ -97,3 +100,40 @@ execution. These results identify sorting as the first optimization target witho
 establishing how fast a replacement will be. No rendering algorithm was changed
 during this profiling pass. Data, text reports, input, and timing results are saved
 under `/tmp/otfx-profile`; the symbolized binary is `/tmp/otfx-perf-debug`.
+
+## Removing the render sort
+
+The renderer now owns one `[]Particle_Id` sized to the viewport. `compose_frame`
+fills it with -1, then places each visible candidate directly at its terminal
+cell, comparing layer and particle ID only when that cell is occupied. Emission
+scans row slices, coalescing empty cells into blank spans. This removes `Draw`,
+the dynamic draw list, its capacity management, sorting, and deduplication.
+Composition plus emission is O(candidates + viewport cells), with no previous
+frame or dirty-state machinery.
+
+All 43 tests and the three tool checks pass. All 222 captures are byte-for-byte
+identical to the sorted renderer, including the timed effects under a virtual
+clock. These checks also cover selection order, empty selections, duplicate
+candidates, overlap priorities, offscreen positions, and population growth.
+
+Both comparison binaries use `-o:speed -microarch:native -debug`. The input,
+affinity, samples, and output destination are the same as the earlier screen.
+Best wall milliseconds:
+
+| Effect | Sorted | Direct placement | Speedup |
+| --- | ---: | ---: | ---: |
+| Colorshift | 95.6 | 26.1 | 3.67x |
+| Decrypt | 552.4 | 152.3 | 3.63x |
+| Waves | 101.4 | 28.7 | 3.53x |
+| Rings | 602.3 | 204.5 | 2.94x |
+| Middleout | 225.4 | 28.1 | 8.01x |
+| Binarypath | 1936.4 | 234.7 | 8.25x |
+| Burn | 2276.0 | 145.5 | 15.64x |
+| Laseretch | 7617.3 | 336.7 | 22.62x |
+
+Geometric speedup is 6.51x. Mean CPU time is 1713.4 versus 144.4 ms and average
+peak RSS is 11.9 versus 11.5 MiB. Frame counts match for all eight effects. This
+compares two full-frame renderers; it does not establish parity with the older
+incremental renderer or ttfx ASM. Captures, comparison harness, binaries, and
+raw results are under `/tmp/otfx-direct`. The harness's historical `rust` column
+means sorted Odin and its `odin` column means direct-placement Odin in this run.

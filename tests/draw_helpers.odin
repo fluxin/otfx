@@ -7,8 +7,7 @@ import "core:testing"
 draw_at :: proc(e: ^engine.Engine, cell: int) -> i32 {
 	width, height := e.layout.visible_right, e.layout.visible_top
 	top_down := (height - 1 - cell / width) * width + cell % width
-	for draw in e.draws do if draw.cell == top_down do return i32(draw.particle)
-	return -1
+	return i32(e.frame_particles[top_down])
 }
 
 expect_frame_cell :: proc(
@@ -33,9 +32,10 @@ expect_frame_cell :: proc(
 expect_visible_draws :: proc(t: ^testing.T, e: ^engine.Engine) {
 	lines, err := engine.preprocess_input(string(engine.frame_bytes(e)), 4)
 	testing.expect_value(t, err, engine.Input_Error.None)
-	for draw in e.draws {
-		row, col := draw.cell / e.layout.visible_right, draw.cell % e.layout.visible_right
-		expected := engine.get_render_visual(e, draw.particle)
+	for id, index in e.frame_particles {
+		if id < 0 do continue
+		row, col := index / e.layout.visible_right, index % e.layout.visible_right
+		expected := engine.get_render_visual(e, id)
 		if e.cfg.no_color do expected.fg, expected.bg, expected.bold = nil, nil, false
 		testing.expect(t, row < len(lines) && col < lines[row].width)
 		if row >= len(lines) || col >= lines[row].width do continue

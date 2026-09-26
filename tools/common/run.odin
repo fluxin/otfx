@@ -62,9 +62,9 @@ run_step :: proc(run: ^Run) -> (width, height: int, ok: bool) {
 	render_candidates, produced := effects.next_frame(&run.effect, &run.engine_state)
 	if !produced do return 0, 0, false
 	if render_candidates == nil {
-		width, height = engine.build_draws(&run.engine_state)
+		width, height = engine.compose_frame(&run.engine_state)
 	} else {
-		width, height = engine.build_draws(&run.engine_state, render_candidates)
+		width, height = engine.compose_frame(&run.engine_state, render_candidates)
 	}
 	return width, height, true
 }
