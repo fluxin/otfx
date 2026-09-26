@@ -62,3 +62,8 @@ it is not a demonstrated speedup. RGB/SGR encoding is under 1% in these profiles
 
 Source snapshots, binaries, assembly, tests, captures, and raw timings are under
 `/tmp/otfx-wide-clip-20260926`.
+
+The final unsigned-vector prototype is preserved at JJ revision `87b28d7f`.
+The original `ae5368b2` engine loop was restored afterward; its 44-test baseline
+was already validated, and the retained signed-extreme/empty-viewport test also
+passes against the restored implementation.
