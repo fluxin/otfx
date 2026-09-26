@@ -176,7 +176,7 @@ frame_composition_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
 	engine.set_particle(&e, back, visible = true)
 	engine.set_particle(&e, front, visible = true, layer = 1)
 	engine.frame_build(&e)
-	testing.expect_value(t, frame_text(&e), "B")
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "B")
 	visual := engine.get_visual(&e, engine.Particle_Id(back))
 	visual.symbol = "Z"
 	engine.set_particle(&e, back, visual = visual)
@@ -184,13 +184,13 @@ frame_composition_reveals_occluded_visual_changes :: proc(t: ^testing.T) {
 	expect_visible_draws(t, &e)
 	engine.set_particle(&e, front, visible = false)
 	engine.frame_build(&e)
-	testing.expect_value(t, frame_text(&e), "Z")
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "Z")
 	// A hidden selection must not discard another particle's visual update.
 	engine.frame_build(&e, []engine.Particle_Id{front})
 	visual.symbol = "Y"
 	engine.set_particle(&e, back, visual = visual)
 	engine.frame_build(&e)
-	testing.expect_value(t, frame_text(&e), "Y")
+	testing.expect_value(t, string(engine.frame_bytes(&e)), "Y")
 }
 
 @(test)

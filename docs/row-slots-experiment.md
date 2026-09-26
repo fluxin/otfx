@@ -3,7 +3,7 @@
 Decision: reject the row-slot renderer for the current engine. It works, but
 is about 19% slower by geometric mean in an eight-effect screen and adds
 placement/appearance/fallback bookkeeping. The smaller packet renderer remains
-the reference at `b0cb53df`. The experiment is preserved in JJ history and local
+the reference at `b0cb53df`. The experiment is preserved at JJ revision `88ba1d81` and local
 artifacts under `/tmp/otfx-row-slots-20260925`.
 
 ## Design tested
@@ -92,3 +92,22 @@ captures (40x12 canvas), plain input output grows from 15,127,459 to 61,117,655
 bytes (4.04x); no-color output grows 2.60x; xterm/Unicode grows 3.31x. These are
 byte counts, not emulator timing measurements, and use smaller inputs than the
 CPU benchmark. `/dev/null` timings do not account for parsing those extra bytes.
+
+## Retained change
+
+Restored the pre-experiment renderer and retained only the two exact 19-byte
+color-template destination slices in `packet_color`. This lets the compiler
+emit SIMD template stores without introducing another buffer, type, or renderer
+state. RGB decimal conversion remains scalar.
+
+A separate paired run over all 35 finite effects is effectively neutral:
+mean best wall 103.2 -> 102.8 ms, mean CPU 103.7 -> 103.2 ms, geometric speedup
+about 1.003x. All frame counts match. The flags, input, affinity, sampling, and
+output destination match the row experiment. This is a code-generation cleanup,
+not a meaningful end-to-end performance gain. Results are recorded in
+[color-store-benchmark.tsv](color-store-benchmark.tsv), with raw local artifacts
+under `/tmp/otfx-color-store-20260925`.
+
+The retained change passes all 44 baseline tests and 222/222 byte-exact CLI
+captures. Its geometric speedup from the rounded per-effect measurements is
+1.003x; any difference of that size should be treated as measurement noise.
