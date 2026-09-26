@@ -166,13 +166,7 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	reserve(&s.active, 2 * len(s.swapped))
 }
 
-errorcorrect_next :: proc(
-	s: ^Errorcorrect_State,
-	e: ^engine.Engine,
-) -> (
-	[]engine.Particle_Id,
-	bool,
-) {
+errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 	if s.swapped_head < len(s.swapped) && s.swap_delay == 0 {
 		pair := s.swapped[s.swapped_head]; s.swapped_head += 1
 		s.start_ticks[pair.first] = s.tick
@@ -180,7 +174,7 @@ errorcorrect_next :: proc(
 		append(&s.active, pair.first, pair.second)
 		s.swap_delay = s.config.swap_delay
 	} else if s.swap_delay != 0 do s.swap_delay -= 1
-	if len(s.active) == 0 do return nil, false
+	if len(s.active) == 0 do return false
 	white := engine.Color{0xff, 0xff, 0xff}
 	write := 0
 	for id in s.active {
@@ -262,5 +256,5 @@ errorcorrect_next :: proc(
 	}
 	resize(&s.active, write)
 	s.tick += 1
-	return nil, true
+	return true
 }

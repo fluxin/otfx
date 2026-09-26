@@ -164,9 +164,9 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 	reserve(&s.active_chars, len(s.row_chars))
 }
 
-print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 	white := engine.Color{0xff, 0xff, 0xff}
-	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return nil, false
+	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return false
 	if s.head_return_active {
 		// carriage return is still active
 	} else if s.typing {
@@ -291,5 +291,5 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 		}
 	}
 	s.tick += 1
-	return nil, true
+	return true
 }

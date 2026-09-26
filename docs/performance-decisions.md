@@ -1,9 +1,9 @@
 # Performance decisions
 
-Current production measurements and reproduction commands live in the
-[README](../README.md#performance) and [per-effect table](rust-benchmark.tsv).
-The observations below explain design choices; historical experiment results
-are not current production numbers.
+Current production measurements are in [row renderer](row-renderer.md), with
+[before/after](row-benchmark.tsv) and [ASM](row-asm-benchmark.tsv) tables. The
+observations below are historical unless the current report explicitly retains
+them; they are not an inventory of today's engine state.
 
 ## Retained
 
@@ -25,7 +25,7 @@ are not current production numbers.
 |---|---|
 | Runtime foreground/background palette and packed cell keys | Lookup/key maintenance made complete Bubbles/Laseretch runs roughly 20–40% slower and added about 1 MiB. Removed. This does not rule out IDs assigned during construction. |
 | Wider string comparison | An alignment fault was corrected, but the wider comparison provided no useful speed advantage. Removed; retain string-content comparison. |
-| Native scalar or paired SIMD rounding | Improved motion-heavy effects, but repeat checks retained Beams/Decrypt/Smoke regressions. Deferred; the shared scalar helper remains. The cause of those regressions was not established. |
+| Native scalar or paired SIMD rounding | Improved motion-heavy effects, but repeat checks retained Beams/Decrypt/Smoke regressions. Deferred in that earlier renderer. Revisited with the current row renderer and retained after full-suite validation; see the current report. The cause of the earlier regressions was not established. |
 | Grouped Blackhole motion arrays | Full-run best wall rose from 89.5 to 94.2 ms with native rounding on both sides; a preconverted variant also lost. Removed because of runtime cost, not its extra storage. |
 | Whole-animation/diff cache | Not pursued: frame-by-frame execution is already cheap enough to prefer lower memory use. Compact choreography tables remain appropriate. |
 

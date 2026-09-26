@@ -167,31 +167,35 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 	}
 }
 
-middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if len(s.characters) == 0 do return nil, false
-	if s.phase_full && s.phase_tick >= s.full_limit do return nil, false
+middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
+	if len(s.characters) == 0 do return false
+	if s.phase_full && s.phase_tick >= s.full_limit do return false
 	if !s.phase_full && s.phase_tick >= s.center_limit {
 		s.phase_full = true
 		s.phase_tick = 0
 	}
 	for id, i in s.characters {
-		position := e.particles.current_coord[id]
-		visual := engine.get_visual(e, id)
-		if s.phase_full {
-			if s.phase_tick < s.full_max_steps[i] {
-				progress := f64(s.phase_tick + 1) / f64(s.full_max_steps[i])
-				position = engine.coord_on_line(
-					s.center_targets[i],
-					e.particles.initial_coord[id],
-					ease.ease(s.config.full_easing, progress),
-				)
-			}
-			gradient_step := min(s.phase_tick / 6, 10)
+		maximum := s.full_max_steps[i] if s.phase_full else s.center_max_steps[i]
+		if s.phase_tick >= maximum do continue
+		progress := f64(s.phase_tick + 1) / f64(maximum)
+		origin := s.center_targets[i] if s.phase_full else e.canvas.center
+		target := e.particles.initial_coord[id] if s.phase_full else s.center_targets[i]
+		easing := s.config.full_easing if s.phase_full else s.config.center_easing
+		engine.set_particle(
+			e,
+			id,
+			coord = engine.coord_on_line(origin, target, ease.ease(easing, progress)),
+		)
+	}
+	if s.phase_full && s.phase_tick <= 60 && s.phase_tick % 6 == 0 {
+		gradient_step := s.phase_tick / 6
+		for id, i in s.characters {
+			visual := engine.get_visual(e, id)
 			if s.color_handling == .Dynamic {
 				engine.dynamic_gradient_to_input(
 					&visual,
 					s.config.starting_color,
-					engine.get_initial_visual(e, engine.Particle_Id(id)),
+					engine.get_initial_visual(e, id),
 					10,
 					gradient_step,
 				)
@@ -203,16 +207,9 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> ([]engine.Part
 					gradient_step,
 				)
 			}
-		} else if s.phase_tick < s.center_max_steps[i] {
-			progress := f64(s.phase_tick + 1) / f64(s.center_max_steps[i])
-			position = engine.coord_on_line(
-				e.canvas.center,
-				s.center_targets[i],
-				ease.ease(s.config.center_easing, progress),
-			)
+			engine.set_visual(e, id, visual)
 		}
-		engine.set_particle(e, id, coord = position, visual = visual)
 	}
 	s.phase_tick += 1
-	return nil, true
+	return true
 }

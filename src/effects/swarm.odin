@@ -417,9 +417,9 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	}
 }
 
-swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 	for s.next_launch_group >= 0 && s.tick >= s.group_start_ticks[s.next_launch_group] do swarm_launch_group(s, e)
-	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return nil, false
+	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return false
 
 
 	write := 0
@@ -533,5 +533,5 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 	}
 	resize(&s.active_indexes, write)
 	s.tick += 1
-	return s.characters[:], true
+	return true
 }

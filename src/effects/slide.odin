@@ -246,9 +246,9 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 	s.heads = make([dynamic]int, len(s.groups.spans))
 }
 
-slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 	if s.next_group >= len(s.groups.spans) && len(s.active_slots) == 0 {
-		return nil, false
+		return false
 	}
 	if s.current_gap == s.config.gap && s.next_group < len(s.groups.spans) {
 		s.next_group += 1
@@ -323,5 +323,5 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 		engine.set_particle(e, id, coord = position, visual = visual)
 	}
 	resize(&s.active_slots, write)
-	return nil, true
+	return true
 }

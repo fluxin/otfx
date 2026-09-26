@@ -221,7 +221,7 @@ crumble_vacuum_active :: proc(s: Crumble_State) -> bool {
 	return false
 }
 
-crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 	initial_coords := e.particles.initial_coord
 
 
@@ -313,7 +313,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Particle
 			}
 			resize(&s.fall_active, fall_write)
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Vacuuming:
 			if !crumble_vacuum_active(s^) {
@@ -352,10 +352,10 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Particle
 			}
 			resize(&s.vacuum_active, vacuum_write)
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Resetting:
-			if s.phase_tick == s.reset_max_ticks do return nil, false
+			if s.phase_tick == s.reset_max_ticks do return false
 			for id, i in s.characters {
 				input := initial_coords[id]
 				steps := s.reset_steps[i]
@@ -460,7 +460,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> ([]engine.Particle
 				}
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 		}
 	}
 }

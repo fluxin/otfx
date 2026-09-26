@@ -201,7 +201,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	}
 }
 
-colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 	ids := e.particle_sets.input[:]
 	n := len(s.gradient)
 	frames := s.config.gradient_frames
@@ -227,12 +227,12 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Pa
 			if s.palette_index == n do s.palette_index = 0
 		}
 	} else {
-		if s.config.skip_final_gradient do return nil, false
+		if s.config.skip_final_gradient do return false
 		transition_tick := s.tick - cycle_ticks
-		if s.color_handling == .Dynamic && transition_tick >= (s.dynamic_has_color ? 9 * frames : frames) do return nil, false
+		if s.color_handling == .Dynamic && transition_tick >= (s.dynamic_has_color ? 9 * frames : frames) do return false
 		transition_step := transition_tick / frames
 		transition_steps :: 8
-		if transition_step > transition_steps do return nil, false
+		if transition_step > transition_steps do return false
 		for id, i in ids {
 			visual := engine.Visual {
 				symbol = engine.get_initial_visual(e, engine.Particle_Id(id)).symbol,
@@ -260,5 +260,5 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> ([]engine.Pa
 		}
 	}
 	s.tick += 1
-	return nil, true
+	return true
 }

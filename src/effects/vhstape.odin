@@ -660,8 +660,8 @@ vhstape_start_redraw_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int)
 	}
 }
 
-vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if s.phase == .Complete && len(s.active_characters) == 0 do return nil, false
+vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
+	if s.phase == .Complete && len(s.active_characters) == 0 do return false
 	switch s.phase {
 	case .Glitching:
 		if len(s.active_wave_rows) == 0 || vhstape_rows_complete(s, s.active_wave_rows[:]) {
@@ -710,5 +710,5 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> ([]engine.Particle
 	case .Complete:
 	}
 	vhstape_update_active(s, e)
-	return s.characters[:], true
+	return true
 }

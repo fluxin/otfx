@@ -75,7 +75,7 @@ smoke_symbols_span_the_gradient :: proc(t: ^testing.T) {
 		id := s.characters[0]
 		for symbol in expected {
 			for _ in 0 ..< 3 {
-				_, alive := effects.smoke_next(&s, &e)
+				alive := effects.smoke_next(&s, &e)
 				testing.expect(t, alive)
 				testing.expect_value(
 					t,
@@ -91,7 +91,7 @@ smoke_symbols_span_the_gradient :: proc(t: ^testing.T) {
 			engine.get_visual(&e, engine.Particle_Id(id)).fg,
 			Maybe(engine.Color)(engine.Color{255, 255, 255}),
 		)
-		_, alive := effects.smoke_next(&s, &e)
+		alive := effects.smoke_next(&s, &e)
 		testing.expect(t, !alive)
 	}
 }

@@ -59,12 +59,8 @@ run_make :: proc(
 // Reports the rendered grid extent alongside liveness, so a caller can read the
 // cell grid without recomputing the canvas size.
 run_step :: proc(run: ^Run) -> (width, height: int, ok: bool) {
-	render_candidates, produced := effects.next_frame(&run.effect, &run.engine_state)
+	produced := effects.next_frame(&run.effect, &run.engine_state)
 	if !produced do return 0, 0, false
-	if render_candidates == nil {
-		width, height = engine.compose_frame(&run.engine_state)
-	} else {
-		width, height = engine.compose_frame(&run.engine_state, render_candidates)
-	}
+	width, height = engine.compose_frame(&run.engine_state)
 	return width, height, true
 }

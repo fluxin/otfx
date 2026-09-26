@@ -2,6 +2,7 @@ package engine
 
 import "base:intrinsics"
 import "core:c/libc"
+import "core:container/bit_array"
 import "core:fmt"
 import "core:math"
 import "core:math/rand"
@@ -313,7 +314,7 @@ create_timeline :: proc {
 	create_gradient_timeline,
 }
 
-// Renderer-owned admission state for effects that return a candidate slice.
+// Renderer-owned admission state for an optional explicit particle selection.
 Frame_Selection :: enum u8 {
 	Absent,
 	Even,
@@ -321,17 +322,19 @@ Frame_Selection :: enum u8 {
 }
 
 Particle :: struct {
-	initial_visual_id:       Visual_Id,
-	initial_coord:           Coord,
-	is_visible:              bool,
-	is_fill:                 bool,
-	layer:                   int,
-	current_coord:           Coord,
+	initial_visual_id:        Visual_Id,
+	initial_coord:            Coord,
+	is_visible:               bool,
+	is_fill:                  bool,
+	layer:                    int,
+	current_coord:            Coord,
 	// One logical appearance for both prepared and dynamic publication.
-	visual_id:               Visual_Id,
-	mutable_visual_id:       Visual_Id,
-	preserve_initial_colors: bool,
-	frame_selection:         Frame_Selection,
+	visual_id:                Visual_Id,
+	mutable_visual_id:        Visual_Id,
+	preserve_initial_colors:  bool,
+	frame_selection:          Frame_Selection,
+	frame_cell:               int,
+	cell_previous, cell_next: Particle_Id,
 }
 
 Particle_Storage :: #soa[dynamic]Particle
@@ -418,6 +421,13 @@ Engine :: struct {
 	frame_candidates:  [dynamic]Particle_Id,
 	frame_generation:  Frame_Selection,
 	dirty_rows:        []bool,
+	cell_heads:        []Particle_Id,
+	frame_visuals:     []Visual_Id,
+	row_bytes:         [][dynamic]byte,
+	row_valid:         []bool,
+	dirty_cells:       bit_array.Bit_Array,
+	row_changes:       []int,
+	cell_offsets:      []int,
 	blank_row:         []byte,
 	visual_ids:        map[Visual]Visual_Id,
 	visuals:           [dynamic]Visual_Entry,
@@ -425,6 +435,7 @@ Engine :: struct {
 	capture_buf:       [dynamic]byte,
 	last_print:        time.Tick,
 	logical_frame:     int,
+	stats:             Frame_Stats_State,
 }
 
 // Frames per second that logical time advances at when the clock is virtual and
@@ -497,11 +508,20 @@ engine_make :: proc(
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.frame_particles = make([]Particle_Id, width * height)
+	for &id in e.frame_particles do id = -1
 	e.dirty_rows = make([]bool, height)
+	e.cell_heads = make([]Particle_Id, width * height)
+	e.frame_visuals = make([]Visual_Id, width * height)
+	e.row_bytes = make([][dynamic]byte, height)
+	e.row_valid = make([]bool, height)
+	bit_array.init(&e.dirty_cells, width * height)
+	e.row_changes = make([]int, height)
+	e.cell_offsets = make([]int, (width + 1) * height)
+	for &bytes in e.row_bytes do reserve(&bytes, width * size_of(Packet) + 52)
 	for &dirty in e.dirty_rows do dirty = true
 	e.blank_row = make([]byte, width)
 	for &b in e.blank_row do b = ' '
-	reserve(&e.output_parts, width * height * 4 + height)
+	reserve(&e.output_parts, height * 2 + 1)
 	visual_pool_init(&e)
 	setup_input_particles(&e, lines)
 	// drop characters that landed outside the canvas (same as upstream)

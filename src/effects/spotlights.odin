@@ -204,7 +204,7 @@ spotlights_update_positions :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> 
 	return all_arrived
 }
 
-spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Search {
 		spotlights_update_positions(s, e)
 		s.phase_tick += 1
@@ -230,7 +230,7 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Pa
 			for i in 0 ..< len(s.spot_positions) do s.spot_positions[i] = e.canvas.center
 		}
 	} else {
-		if s.illuminate_range > s.expand_limit do return nil, false
+		if s.illuminate_range > s.expand_limit do return false
 	}
 
 	initial_coords := e.particles.initial_coord
@@ -274,5 +274,5 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> ([]engine.Pa
 		engine.set_particle(e, id, visual = visual)
 	}
 	if s.phase == .Expand do s.illuminate_range += 1
-	return nil, true
+	return true
 }

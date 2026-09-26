@@ -80,7 +80,6 @@ Slice_State :: struct {
 	motion_origins:   [dynamic]engine.Coord,
 	motion_steps:     [dynamic]int,
 	motion_max_steps: [dynamic]int,
-	render_ids:       [dynamic]engine.Particle_Id,
 	color_handling:   engine.Existing_Color_Handling,
 }
 
@@ -164,8 +163,6 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	s.motion_origins = make([dynamic]engine.Coord, n)
 	s.motion_steps = make([dynamic]int, n)
 	s.motion_max_steps = make([dynamic]int, n)
-	reserve(&s.render_ids, n)
-	append(&s.render_ids, ..s.motion_ids[:])
 	slots := make([dynamic]int, len(e.particles), context.temp_allocator)
 	for i in 0 ..< len(slots) do slots[i] = -1
 	for id, i in s.motion_ids do slots[id] = i
@@ -284,13 +281,13 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 			}
 		}
 	}
-	for id in s.render_ids {
+	for id in s.motion_ids {
 		e.particles.is_visible[id] = true
 	}
 }
 
-slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if len(s.motion_ids) == 0 do return nil, false
+slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
+	if len(s.motion_ids) == 0 do return false
 	ids := s.motion_ids[:]
 	origins := s.motion_origins[:]
 	steps := s.motion_steps[:]
@@ -320,5 +317,5 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 	resize(&s.motion_origins, write)
 	resize(&s.motion_steps, write)
 	resize(&s.motion_max_steps, write)
-	return s.render_ids[:], true
+	return true
 }

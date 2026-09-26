@@ -27,7 +27,7 @@ middleout_finishes_color_and_motion :: proc(t: ^testing.T) {
 		free_all(context.temp_allocator)
 		frames := 0
 		for {
-			_, alive := effects.middleout_next(&s, &e)
+			alive := effects.middleout_next(&s, &e)
 			if !alive do break
 			frames += 1
 			if frames > 1000 {testing.expect(t, false, "failed to complete"); break}
@@ -130,14 +130,14 @@ spotlights_render_before_radius_increment :: proc(t: ^testing.T) {
 	id := s.characters[0]
 	p := e.particles.initial_coord[id]
 	for &spot in s.spot_positions do spot = engine.coord(p.column + 3, p.row)
-	_, alive := effects.spotlights_next(&s, &e)
+	alive := effects.spotlights_next(&s, &e)
 	testing.expect(t, alive)
 	testing.expect_value(
 		t,
 		engine.get_visual(&e, engine.Particle_Id(id)).fg,
 		Maybe(engine.Color)(s.dark_colors[0]),
 	)
-	_, alive = effects.spotlights_next(&s, &e)
+	alive = effects.spotlights_next(&s, &e)
 	testing.expect(t, !alive)
 }
 
@@ -212,7 +212,7 @@ blackhole_pulses_before_explosion :: proc(t: ^testing.T) {
 	symbols := []string{"◦", "◎", "◉", "●", "◉", "◎", "◦"}
 	id := s.characters[s.ring_sources[0]]
 	for {
-		_, alive := effects.blackhole_next(&s, &e)
+		alive := effects.blackhole_next(&s, &e)
 		if !alive do break
 		frames += 1
 		if frames > 5000 {testing.expect(t, false, "failed to complete"); break}
@@ -260,11 +260,11 @@ bubbles_mixed_styles_finish_the_longest_scene :: proc(t: ^testing.T) {
 		s.expand_steps[id], s.pop_steps[id] = 1, 1
 	}
 	for tick in 0 ..< 72 {
-		_, alive := effects.bubbles_next(&s, &e)
+		alive := effects.bubbles_next(&s, &e)
 		testing.expect(t, alive)
 		if tick < 71 do testing.expect_value(t, s.bubble_states[0], effects.Bubbles_Bubble_State.Pop)
 	}
-	_, alive := effects.bubbles_next(&s, &e)
+	alive := effects.bubbles_next(&s, &e)
 	testing.expect(t, !alive)
 	for id in s.characters do testing.expect_value(t, engine.get_visual(&e, engine.Particle_Id(id)).fg, engine.get_initial_visual(&e, engine.Particle_Id(id)).fg)
 }
@@ -313,7 +313,7 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 	frames := 0
 	saw_inner_motion := false
 	for {
-		_, alive := effects.swarm_next(&s, &e)
+		alive := effects.swarm_next(&s, &e)
 		if !alive do break
 		frames += 1
 		for i in s.active_indexes {

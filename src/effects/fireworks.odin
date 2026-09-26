@@ -241,7 +241,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 	s.next_shell = shell_count - 1
 }
 
-fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 	active := s.next_shell >= 0
 	if !active {
 		for _, i in s.characters {
@@ -264,7 +264,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Part
 			}
 		}
 	}
-	if !active do return nil, false
+	if !active do return false
 
 	if s.next_shell >= 0 && s.launch_delay <= 0 {
 		shell := s.next_shell
@@ -409,5 +409,5 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> ([]engine.Part
 		launch_phases[shell] = phase == 3 ? 0 : phase
 	}
 	s.tick += 1
-	return nil, true
+	return true
 }

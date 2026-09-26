@@ -129,11 +129,11 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.initial_hold = 25
 }
 
-scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if s.tick == s.step_limit do return nil, false
+scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
+	if s.tick == s.step_limit do return false
 	if s.initial_hold > 0 {
 		s.initial_hold -= 1
-		return s.characters[:], true
+		return true
 	}
 	for id, i in s.characters {
 		steps := s.max_steps[i]
@@ -184,5 +184,5 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> ([]engine.Part
 		}
 	}
 	s.tick += 1
-	return s.characters[:], true
+	return true
 }

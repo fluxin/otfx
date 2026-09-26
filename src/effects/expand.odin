@@ -110,8 +110,8 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	}
 }
 
-expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if s.tick == s.step_limit do return nil, false
+expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
+	if s.tick == s.step_limit do return false
 	for id, i in s.characters {
 		maximum := s.max_steps[i]
 		progress := f64(min(s.tick + 1, maximum)) / f64(maximum)
@@ -149,5 +149,5 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> ([]engine.Particle_I
 		engine.set_particle(e, id, coord = position, layer = layer, visual = visual)
 	}
 	s.tick += 1
-	return nil, true
+	return true
 }

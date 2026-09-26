@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import "core:math/ease"
 import "core:math/linalg"
+import "core:simd"
 import "core:strconv"
 import "core:strings"
 import "core:terminal/ansi"
@@ -34,13 +35,14 @@ coord :: proc(column, row: int) -> Coord {
 	return {column, row}
 }
 
-round_half_even :: proc(x: f64) -> int {
-	whole := int(x)
-	diff := x - f64(whole)
-	odd := whole & 1 != 0
-	if diff > 0.5 || (diff == 0.5 && odd) do return whole + 1
-	if diff < -0.5 || (diff == -0.5 && odd) do return whole - 1
-	return whole
+round_half_even :: #force_inline proc(x: f64) -> int {
+	return int(simd.extract(simd.nearest(#simd[2]f64{x, 0}), 0))
+}
+
+// Round both terminal coordinates together, preserving signed ties to even.
+rounded_coord :: #force_inline proc(p: linalg.Vector2f64) -> Coord {
+	rounded := simd.nearest(#simd[2]f64{p.x, p.y})
+	return {int(simd.extract(rounded, 0)), int(simd.extract(rounded, 1))}
 }
 
 // Terminal cells are ~2:1; row deltas are doubled when requested.
@@ -56,7 +58,7 @@ coord_vec :: proc(c: Coord) -> linalg.Vector2f64 {
 
 coord_on_line :: #force_inline proc(start, end: Coord, t: f64) -> Coord {
 	p := linalg.lerp(coord_vec(start), coord_vec(end), t)
-	return {round_half_even(p.x), round_half_even(p.y)}
+	return rounded_coord(p)
 }
 
 // Every effect path currently uses at most one control point. Keep the
@@ -65,7 +67,7 @@ coord_on_quadratic_bezier :: #force_inline proc(start, control, end: Coord, t: f
 	a := linalg.lerp(coord_vec(start), coord_vec(control), t)
 	b := linalg.lerp(coord_vec(control), coord_vec(end), t)
 	p := linalg.lerp(a, b, t)
-	return {round_half_even(p.x), round_half_even(p.y)}
+	return rounded_coord(p)
 }
 
 quadratic_bezier_length :: proc(start, control, end: Coord) -> f64 {

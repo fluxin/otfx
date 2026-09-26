@@ -196,10 +196,10 @@ binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int
 	return engine.coord_on_line(s.turns[i], e.particles.initial_coord[s.characters[i]], t)
 }
 
-binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 	if s.wiping {
 		groups := len(s.final_wipe.spans)
-		if s.wipe_group >= groups do return nil, false
+		if s.wipe_group >= groups do return false
 
 
 		visible := e.particles.is_visible
@@ -225,7 +225,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Pa
 			}
 			s.wipe_group += 1
 		}
-		return nil, true
+		return true
 	}
 
 	for len(s.active) < s.max_active && len(s.pending) > 0 {
@@ -311,5 +311,5 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> ([]engine.Pa
 		return binarypath_next(s, e)
 	}
 	s.tick += 1
-	return nil, true
+	return true
 }

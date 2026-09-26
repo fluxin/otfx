@@ -11,18 +11,25 @@ set_particle :: #force_inline proc(
 		Visual_Id,
 	} = nil,
 ) {
-	if value, ok := coord.?; ok && value != e.particles[id].current_coord {
-		dirty_particle_row(e, id)
+	old_coord := e.particles[id].current_coord
+	old_visible := e.particles[id].is_visible
+	placement_changed := false
+	if value, ok := coord.?; ok && value != old_coord {
 		e.particles[id].current_coord = value
-		dirty_particle_row(e, id)
+		placement_changed = true
 	}
-	if value, ok := visible.?; ok && value != e.particles[id].is_visible {
-		dirty_row(e, e.particles[id].current_coord)
+	if value, ok := visible.?; ok && value != old_visible {
 		e.particles[id].is_visible = value
+		placement_changed = true
 	}
 	if value, ok := layer.?; ok && value != e.particles[id].layer {
 		e.particles[id].layer = value
-		dirty_particle_row(e, id)
+		placement_changed = true
+	}
+	if placement_changed {
+		if old_visible do dirty_row(e, old_coord)
+		if old_visible || e.particles[id].is_visible do dirty_row(e, e.particles[id].current_coord)
+		track_particle(e, id)
 	}
 	switch value in visual {
 	case Visual:

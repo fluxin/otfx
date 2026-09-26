@@ -201,12 +201,12 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	engine.groups_delete(&groups)
 }
 
-pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
 	spans := s.group_spans[:]
 	pool := s.pool[:]
 	visible := e.particles.is_visible[:]
 	if s.group_idx >= len(spans) && len(s.active_slots) == 0 {
-		return nil, false
+		return false
 	}
 	if s.group_idx < len(spans) {
 		cur := spans[s.group_idx]
@@ -286,5 +286,5 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	return s.revealed[:], true
+	return true
 }

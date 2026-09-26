@@ -509,7 +509,7 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	resize(&s.resolve_active, write)
 }
 
-matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> bool {
 	column_characters := s.column_characters[:]
 	visible_characters := s.visible_characters[:]
 	columns := s.columns[:]
@@ -679,12 +679,12 @@ matrix_next :: proc(s: ^Matrix_State, e: ^engine.Engine) -> ([]engine.Particle_I
 	   s.pending_columns.count > 0 ||
 	   !s.rain_complete {
 		matrix_step_resolve(s, e)
-		return nil, true
+		return true
 	}
 	if !s.final_frame_shown {
 		s.final_frame_shown = true
 		matrix_step_resolve(s, e)
-		return nil, true
+		return true
 	}
-	return nil, false
+	return false
 }

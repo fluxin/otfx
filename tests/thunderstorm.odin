@@ -113,8 +113,6 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 	before := track.total_allocation_count
 	for s.strike_pending_head + 3 < count {
 		effects.thunderstorm_reveal_strike(&s, &e)
-		ids := effects.thunderstorm_render_candidates(&s)
-		testing.expect_value(t, len(ids), len(s.characters) + s.strike_pending_head)
 		for id, i in s.strike_pending {
 			testing.expect_value(t, e.particles.current_coord[id], expected[i])
 			testing.expect_value(t, e.particles.is_visible[id], i < s.strike_pending_head)
@@ -135,6 +133,4 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 	testing.expect_value(t, s.strike_pending_head, 0)
 	testing.expect_value(t, len(s.strike_pending), 0)
 	for id in s.strike_ids do testing.expect(t, !e.particles.is_visible[id])
-	ids := effects.thunderstorm_render_candidates(&s)
-	testing.expect_value(t, len(ids), len(s.characters) + len(s.spark_active))
 }

@@ -201,9 +201,9 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	s.first_phase = true
 }
 
-sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
 	if len(s.active) == 0 && s.complete {
-		return nil, false
+		return false
 	}
 	change := engine.group_reveal_step(&s.reveal)
 	for gi in change.added.start ..< change.added.start + change.added.len {
@@ -247,5 +247,5 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 	}
 	resize(&s.active, write)
 	s.tick += 1
-	return nil, true
+	return true
 }

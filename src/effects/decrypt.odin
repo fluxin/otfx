@@ -74,6 +74,7 @@ Decrypt_State :: struct {
 	slow_symbols:        [dynamic]u16, // n * 15
 	slow_end_ticks:      [dynamic]int, // n * 15 cumulative ends
 	slow_counts:         [dynamic]u8,
+	slow_active:         [dynamic]int,
 	slow_frame:          [dynamic]u8,
 	slow_totals:         [dynamic]int,
 	typing_head:         int,
@@ -138,6 +139,8 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	s.slow_symbols = make([dynamic]u16, n * Decrypt_Slow_Max_Frames)
 	s.slow_end_ticks = make([dynamic]int, n * Decrypt_Slow_Max_Frames)
 	s.slow_counts = make([dynamic]u8, n)
+	s.slow_active = make([dynamic]int, n)
+	for &slot, i in s.slow_active do slot = i
 	s.slow_frame = make([dynamic]u8, n)
 	s.slow_totals = make([dynamic]int, n)
 
@@ -208,7 +211,7 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	}
 }
 
-decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Typing {
 		if s.typing_head == len(s.characters) && s.typing_tick >= s.typing_finish_tick {
 			s.phase = .Decrypting
@@ -243,11 +246,11 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Particle
 				s.typing_tail += 1
 			}
 			s.typing_tick += 1
-			return s.characters[:], true
+			return true
 		}
 	}
 	if s.phase == .Decrypting {
-		if s.decrypt_tick == s.decrypt_finish_tick do return nil, false
+		if s.decrypt_tick == s.decrypt_finish_tick do return false
 		palette := s.cipher_colors
 		if s.decrypt_tick < Decrypt_Fast_Ticks {
 			frame := s.decrypt_tick / 2
@@ -262,10 +265,12 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Particle
 				engine.set_visuals(e, s.characters[base:base + count], codes[:count])
 			}
 			s.decrypt_tick += 1
-			return s.characters[:], true
+			return true
 		}
 		slow_tick := s.decrypt_tick - Decrypt_Fast_Ticks
-		for id, i in s.characters {
+		write := 0
+		for i in s.slow_active {
+			id := s.characters[i]
 			base := i * Decrypt_Slow_Max_Frames
 			frame := int(s.slow_frame[i])
 			if frame < int(s.slow_counts[i]) && slow_tick >= s.slow_end_ticks[base + frame] {
@@ -275,6 +280,8 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Particle
 			if frame < int(s.slow_counts[i]) {
 				symbol := int(s.slow_symbols[base + frame])
 				engine.set_visual(e, id, s.cipher_codes[symbol * palette + int(s.color_index[i])])
+				s.slow_active[write] = i
+				write += 1
 				continue
 			}
 			discovered_tick := slow_tick - s.slow_totals[i]
@@ -303,9 +310,14 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> ([]engine.Particle
 				}
 			}
 			engine.set_visual(e, id, visual)
+			if discovered_tick < Decrypt_Discovered_Ticks {
+				s.slow_active[write] = i
+				write += 1
+			}
 		}
+		resize(&s.slow_active, write)
 		s.decrypt_tick += 1
-		return s.characters[:], true
+		return true
 	}
-	return nil, false
+	return false
 }

@@ -95,11 +95,11 @@ packet_update :: #force_inline proc(
 }
 
 update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
-	dirty_particle_row(e, id)
 	entry := &e.visuals[e.particles[id].visual_id - 1]
 	colors := &entry.visual
 	if e.particles[id].preserve_initial_colors do colors = &e.visuals[e.particles[id].initial_visual_id - 1].visual
 	packet_update(&entry.packet, &entry.visual, &e.cfg, fields, colors)
+	dirty_visual(e, id)
 }
 
 visual_pool_init :: proc(e: ^Engine) {
@@ -132,7 +132,7 @@ set_visual_prepared :: #force_inline proc(e: ^Engine, id: Particle_Id, visual_id
 		update_packet(e, id, All_Packet_Fields)
 	} else {
 		e.particles[id].visual_id = visual_id
-		dirty_particle_row(e, id)
+		dirty_visual(e, id)
 	}
 }
 
@@ -147,7 +147,7 @@ edit_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> (^Visual_Entry
 	return entry, All_Packet_Fields
 }
 
-set_visual_value :: proc(e: ^Engine, id: Particle_Id, value: Visual) {
+set_visual_value :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Visual) {
 	old := &e.visuals[e.particles[id].visual_id - 1].visual
 	fields: Packet_Fields
 	if !symbol_equal(old.symbol, value.symbol) do fields |= {.Symbol}
@@ -193,16 +193,34 @@ set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
 	update_packet(e, id, fields | {.Bold})
 }
 
-// Rendering borrows packets; it performs no appearance assembly or encoding.
-append_packet :: #force_inline proc(e: ^Engine, id: Particle_Id) {
-	p := &e.visuals[e.particles[id].visual_id - 1].packet
-	symbol := e.visuals[e.particles[id].visual_id - 1].visual.symbol
-	if len(symbol) <= 4 {
-		append(&e.output_parts, p.bytes[:int(p.length)])
+// Copy cached bytes into the frame; encoding remains in the appearance setters.
+write_output :: #force_inline proc(out: ^[dynamic]byte, used: ^int, bytes: []byte) {
+	end := used^ + len(bytes)
+	if end > len(out^) do non_zero_resize(out, max(end, 2 * len(out^)))
+	copy(out^[used^:end], bytes)
+	used^ = end
+}
+
+append_packet :: #force_inline proc(
+	e: ^Engine,
+	visual: Visual_Id,
+	out: ^[dynamic]byte,
+	used: ^int,
+) {
+	entry := &e.visuals[visual - 1]
+	p := &entry.packet
+	if len(entry.visual.symbol) <= 4 {
+		when FRAME_STATS_ENABLED {e.stats.packet_bytes_copied += 52}
+		end := used^ + len(p.bytes)
+		if end > len(out^) do non_zero_resize(out, max(end, 2 * len(out^)))
+		copy(out^[used^:][:52], p.bytes[:])
+		used^ += int(p.length)
 	} else {
-		if p.prefix != 0 do append(&e.output_parts, p.bytes[:int(p.prefix)])
-		append(&e.output_parts, transmute([]byte)symbol)
-		if p.prefix != 0 do append(&e.output_parts, transmute([]byte)string("\x1b[0m"))
+		when FRAME_STATS_ENABLED {e.stats.packet_bytes_copied +=
+				int(p.prefix) + len(entry.visual.symbol) + (4 if p.prefix != 0 else 0)}
+		if p.prefix != 0 do write_output(out, used, p.bytes[:int(p.prefix)])
+		write_output(out, used, transmute([]byte)entry.visual.symbol)
+		if p.prefix != 0 do write_output(out, used, transmute([]byte)string("\x1b[0m"))
 	}
 }
 

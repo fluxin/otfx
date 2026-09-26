@@ -120,6 +120,7 @@ Rings_State :: struct {
 	cycles_remaining:   int,
 	start_remaining:    int,
 	color_tick:         int,
+	color_sample:       int,
 	color_handling:     engine.Existing_Color_Handling,
 }
 
@@ -316,17 +317,24 @@ rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) {
 }
 
 rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
+	if s.color_handling == .Dynamic do return // applied once during build
+	sample := 0
+	switch s.phase {
+	case .Disperse:
+		sample = 1 + min(s.color_tick / 10, 8)
+	case .Spin:
+		sample = 10 + min(s.color_tick / 3, 8)
+	case .Final:
+		sample = 19
+	case .Start, .Complete:
+		return
+	}
+	if s.color_sample == sample do return
+	s.color_sample = sample
 	for slot in 0 ..< len(s.ids) {
 		id := s.ids[slot]
 		visual := engine.get_visual(e, id)
-		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(
-				&visual,
-				engine.get_initial_visual(e, engine.Particle_Id(id)),
-			)
-			engine.set_particle(e, id, visual = visual)
-			continue
-		}
+
 		ring_index := s.ring_by_slot[slot]
 		if ring_index < 0 {
 			if s.phase == .Final {
@@ -427,8 +435,8 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	}
 }
 
-rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if s.phase == .Complete do return nil, false
+rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool {
+	if s.phase == .Complete do return false
 	switch s.phase {
 	case .Start:
 		if s.start_remaining == 0 {
@@ -472,5 +480,5 @@ rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 	rings_update_colors(s, e)
 	rings_update_motion(s, e)
 	s.color_tick += 1
-	return nil, true
+	return true
 }

@@ -186,7 +186,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 	s.rumble_delay = 18
 }
 
-unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 	initial_coords := e.particles.initial_coord
 
 	for {
@@ -246,7 +246,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Partic
 				s.rumble_delay = max(s.rumble_delay - 1, 1)
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Explosion:
 			if s.phase_tick == s.explosion_max_steps {
@@ -265,7 +265,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Partic
 				engine.set_particle(e, id, coord = position)
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Explosion_Hold:
 			if s.phase_tick == 30 {
@@ -274,7 +274,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Partic
 				continue
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Reassembly:
 			// 13 gradient entries at three frames each. Motion and color settle
@@ -288,7 +288,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Partic
 					}
 				}
 			}
-			if s.phase_tick == final_ticks do return nil, false
+			if s.phase_tick == final_ticks do return false
 			color_step := min(s.phase_tick / 3, 12)
 			for id, i in s.characters {
 				visual := engine.get_visual(e, id)
@@ -339,7 +339,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> ([]engine.Partic
 				engine.set_particle(e, id, coord = position, visual = visual)
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 		}
 	}
 }

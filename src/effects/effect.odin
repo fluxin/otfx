@@ -331,7 +331,9 @@ build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 	}
 }
 
-next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+// Effects publish through particle setters and return whether a frame is ready.
+// Visibility is the admission authority; effects need no parallel render list.
+next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> bool {
 	engine.clock_advance(ctx)
 	switch &s in effect.state {
 	case Slide_State:
@@ -409,7 +411,7 @@ next_frame :: proc(effect: ^Effect, ctx: ^engine.Engine) -> ([]engine.Particle_I
 	case Thunderstorm_State:
 		return thunderstorm_next(&s, ctx)
 	case:
-		return nil, false
+		return false
 	}
 }
 
@@ -431,13 +433,9 @@ run_effect :: proc(effect: ^Effect, ctx: ^engine.Engine, resize_aware: bool) -> 
 			engine.reset_canvas_area()
 			return .Terminal_Resized
 		}
-		render_candidates, produced := next_frame(effect, ctx)
+		produced := next_frame(effect, ctx)
 		if !produced do break
-		if render_candidates == nil {
-			engine.frame(ctx)
-		} else {
-			engine.frame(ctx, render_candidates)
-		}
+		engine.frame(ctx)
 		if resize_aware && engine.resize_settled(ctx) {
 			engine.reset_canvas_area()
 			return .Terminal_Resized

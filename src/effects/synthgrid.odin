@@ -344,7 +344,7 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 	s.active_limit = max(int(math.ceil(f64(group_count) * s.config.max_active_blocks)), 1)
 }
 
-synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 	visible := e.particles.is_visible
 
 	if s.phase == .Grid_Expand {
@@ -364,7 +364,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Part
 		if all_extended {
 			s.phase = .Text
 		}
-		return nil, true
+		return true
 	}
 
 	if s.phase == .Text {
@@ -419,7 +419,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Part
 		if s.next_group == len(s.groups.spans) && s.active_count == 0 {
 			s.phase = .Grid_Collapse
 		}
-		return nil, true
+		return true
 	}
 
 	all_collapsed := true
@@ -436,6 +436,6 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> ([]engine.Part
 		}
 		s.grid_extended[line] = stop
 	}
-	if all_collapsed do return nil, false
-	return nil, true
+	if all_collapsed do return false
+	return true
 }

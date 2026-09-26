@@ -81,7 +81,6 @@ Burn_State :: struct {
 	smoke_steps:       [dynamic]int,
 	next_smoke:        int,
 	active_smoke:      [dynamic]int,
-	render_ids:        [dynamic]engine.Particle_Id,
 	tick:              int,
 	color_handling:    engine.Existing_Color_Handling,
 }
@@ -196,7 +195,6 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 	s.smoke_targets = make([dynamic]engine.Coord, n)
 	s.smoke_steps = make([dynamic]int, n)
 	reserve(&s.active_smoke, n)
-	reserve(&s.render_ids, n * 2)
 
 	initial_coords := e.particles.initial_coord
 
@@ -223,7 +221,6 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		e.particles.is_visible[id] = false
 		append(&s.smoke_ids, id)
 	}
-	append(&s.render_ids, ..s.characters[:])
 }
 
 burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
@@ -248,11 +245,11 @@ burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 	engine.set_particle(e, id, visible = true)
 }
 
-burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 	fire_ticks := len(s.fire_palette) * 4
 	active := s.tick < s.last_fire_tick
 	for i in s.active_smoke do active ||= s.tick - s.smoke_start_ticks[i] < max(s.smoke_steps[i], 100)
-	if !active do return nil, false
+	if !active do return false
 
 
 	for id, i in s.characters {
@@ -299,7 +296,6 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 	smoke_gradient_start := engine.Color{0x50, 0x4F, 0x4F}
 	smoke_gradient_end := engine.Color{0xC7, 0xC7, 0xC7}
 	write := 0
-	resize(&s.render_ids, len(s.characters))
 	for i in s.active_smoke {
 		age := s.tick - s.smoke_start_ticks[i]
 		life := max(s.smoke_steps[i], 100)
@@ -310,7 +306,6 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 		}
 		s.active_smoke[write] = i
 		write += 1
-		append(&s.render_ids, id)
 		progress := f64(min(age + 1, s.smoke_steps[i])) / f64(s.smoke_steps[i])
 		engine.set_particle(
 			e,
@@ -330,5 +325,5 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 	}
 	resize(&s.active_smoke, write)
 	s.tick += 1
-	return s.render_ids[:], true
+	return true
 }

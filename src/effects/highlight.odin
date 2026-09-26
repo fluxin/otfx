@@ -146,9 +146,9 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 	}
 }
 
-highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
 	if len(s.active_slots) == 0 && engine.group_reveal_complete(s.reveal) {
-		return nil, false
+		return false
 	}
 	change := engine.group_reveal_step(&s.reveal)
 	for gi in change.added.start ..< change.added.start + change.added.len {
@@ -178,5 +178,5 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> ([]engine.Part
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	return nil, true
+	return true
 }

@@ -121,15 +121,9 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 	rand.shuffle(s.pending[:])
 }
 
-randomsequence_next :: proc(
-	s: ^Randomsequence_State,
-	e: ^engine.Engine,
-) -> (
-	[]engine.Particle_Id,
-	bool,
-) {
+randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool {
 	if len(s.pending) == 0 && len(s.active_slots) == 0 {
-		return nil, false
+		return false
 	}
 	for _ in 0 ..< s.chars_per_tick {
 		if len(s.pending) == 0 do break
@@ -192,5 +186,5 @@ randomsequence_next :: proc(
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	return nil, true
+	return true
 }

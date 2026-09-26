@@ -131,9 +131,9 @@ bounded_playback_reuses_build_storage :: proc(t: ^testing.T) {
 		allocations := track.total_allocation_count
 		frames := 0
 		for frames < 50_000 {
-			ids, alive := effects.next_frame(&fx, &e)
+			alive := effects.next_frame(&fx, &e)
 			if !alive do break
-			if ids == nil {engine.frame_build(&e)} else {engine.frame_build(&e, ids)}
+			engine.frame_build(&e)
 			free_all(context.temp_allocator)
 			frames += 1
 		}

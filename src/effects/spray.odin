@@ -193,7 +193,7 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 	s.volume = max(int(f64(len(s.pending)) * s.config.spray_volume), 1)
 }
 
-spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 	active := len(s.pending) != 0
 	for _, i in s.characters {
 		start := s.start_ticks[i]
@@ -202,7 +202,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 			break
 		}
 	}
-	if !active do return nil, false
+	if !active do return false
 	if len(s.pending) > 0 {
 		for _ in 0 ..< rand.int_range(1, s.volume + 1) {
 			if len(s.pending) == 0 do break
@@ -258,5 +258,5 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 		}
 	}
 	s.tick += 1
-	return s.characters[:], true
+	return true
 }

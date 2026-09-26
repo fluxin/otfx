@@ -23,8 +23,8 @@ BENCH_LINES :: 50
 BENCH_INPUT_WIDTH :: BENCH_COLUMNS - 10
 BENCH_INPUT_ROWS :: BENCH_LINES - 4
 
-ODIN_BINARY :: "./otfx"
-RUST_BINARY :: "./third_party/ttfx/target/release/ttfx"
+ODIN_BINARY :: #config(OTFX_BENCH_BINARY, "./otfx")
+RUST_BINARY :: #config(REFERENCE_BENCH_BINARY, "./third_party/ttfx/target/release/ttfx")
 
 Frame_Prefix :: [4]byte{'\x1b', '8', '\x1b', '7'}
 
@@ -362,9 +362,11 @@ main :: proc() {
 	minimum_seconds := minimum_sample_seconds()
 
 	fmt.printf(
-		"canvas %dx%d, repeats=%d, seed=1, stdout=/dev/null\n",
+		"terminal %dx%d, input/default canvas %dx%d, repeats=%d, seed=1, stdout=/dev/null\n",
 		BENCH_COLUMNS,
 		BENCH_LINES,
+		BENCH_INPUT_WIDTH,
+		BENCH_INPUT_ROWS,
 		repeats,
 	)
 	if paced {

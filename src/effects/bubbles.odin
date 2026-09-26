@@ -273,7 +273,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	s.delay = s.config.bubble_delay
 }
 
-bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 	active := s.next_bubble < len(s.bubbles.spans)
 	for state in s.bubble_states {
 		if state == .Float || state == .Pop {
@@ -281,7 +281,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Particle
 			break
 		}
 	}
-	if !active do return nil, false
+	if !active do return false
 	if s.next_bubble < len(s.bubbles.spans) {
 		if s.delay == 0 {
 			bi := s.next_bubble
@@ -430,5 +430,5 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> ([]engine.Particle
 		last := s.bubbles.spans[s.next_bubble - 1]
 		visible_count = last.start + last.len
 	}
-	return s.bubbles.members[:visible_count], true
+	return true
 }

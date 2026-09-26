@@ -138,7 +138,6 @@ Thunderstorm_State :: struct {
 	input_at_cell:       [dynamic]i32,
 	glow_starts:         [dynamic]int,
 	glow_active:         [dynamic]int,
-	render_ids:          [dynamic]engine.Particle_Id,
 
 	// Rain has a strict geometric maximum: at most six drops every two ticks;
 	// with minimum speed 0.5 and horizontal drift at most height + 1, a drop
@@ -267,10 +266,6 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		engine.set_background(e, id, s.visible_bg[i])
 		visible[id] = true
 	}
-	// Input glyphs are the permanent render prefix. Weather rows append only
-	// while live, keeping the painter pass proportional to visible particles.
-	reserve(&s.render_ids, n + 9 * (e.canvas.height + 1) + 6 + e.canvas.height + 18)
-	append(&s.render_ids, ..s.characters[:])
 
 	// See the strict bound documented on the state fields. Allocate every rain
 	// row before frame processing; its free list is the compact reusable pool.
@@ -477,7 +472,6 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		append(&s.strike_ids, id)
 	}
 	resize(&s.strike_pending, count)
-	reserve(&s.render_ids, len(s.characters) + len(s.rain_ids) + count + len(s.spark_ids))
 	for index, i in work.order {
 		segment := work.segments[index]
 		id := s.strike_ids[i]
@@ -686,21 +680,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	resize(&s.glow_active, write)
 }
 
-thunderstorm_render_candidates :: proc(s: ^Thunderstorm_State) -> []engine.Particle_Id {
-	resize(&s.render_ids, len(s.characters))
-	for slot in s.rain_active do append(&s.render_ids, s.rain_ids[slot])
-	append(&s.render_ids, ..s.strike_pending[:s.strike_pending_head])
-	for slot in s.spark_active do append(&s.render_ids, s.spark_ids[slot])
-	return s.render_ids[:]
-}
-
-thunderstorm_next :: proc(
-	s: ^Thunderstorm_State,
-	e: ^engine.Engine,
-) -> (
-	[]engine.Particle_Id,
-	bool,
-) {
+thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
@@ -780,9 +760,9 @@ thunderstorm_next :: proc(
 					engine.set_visual(e, id, visual)
 				}
 			}
-			return nil, false
+			return false
 		}
 	}
 	s.tick += 1
-	return thunderstorm_render_candidates(s), true
+	return true
 }

@@ -303,7 +303,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	s.phase = .Forming
 }
 
-blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 	pulse_symbols := Blackhole_Pulse_Symbols
 	current_coords := e.particles.current_coord
 	initial_coords := e.particles.initial_coord
@@ -352,7 +352,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Part
 				continue
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Consuming:
 			for steps in s.consume_durations {
@@ -419,7 +419,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Part
 				continue
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Collapsing:
 			if s.phase_tick >= s.collapse_limit {
@@ -475,10 +475,10 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Part
 				}
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 
 		case .Exploding:
-			if s.phase_tick == s.explode_limit do return nil, false
+			if s.phase_tick == s.explode_limit do return false
 			for steps in s.explode_durations {
 				s.explode_progress[steps] = ease.ease(
 					.Exponential_Out,
@@ -548,7 +548,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> ([]engine.Part
 				}
 			}
 			s.phase_tick += 1
-			return nil, true
+			return true
 		}
 	}
 }

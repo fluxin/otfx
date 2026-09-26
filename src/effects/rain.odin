@@ -84,7 +84,6 @@ Rain_State :: struct {
 	index_by_id:    [dynamic]int,
 	pending:        [dynamic]engine.Particle_Id,
 	by_row:         [dynamic]engine.Particle_Id, // flat pool sorted by input row asc
-	render_ids:     [dynamic]engine.Particle_Id, // every drop already made visible
 	active_slots:   [dynamic]int, // dense slots that still move or fade
 	final_colors:   [dynamic]engine.Color,
 	drop_colors:    [dynamic]engine.Color,
@@ -134,7 +133,6 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
 	reserve(&s.pending, n)
-	reserve(&s.render_ids, n)
 	reserve(&s.active_slots, n)
 	rows := make([]Rain_Row, n)
 	defer delete(rows)
@@ -166,13 +164,13 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	for row, i in rows do s.by_row[i] = row.id
 }
 
-rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 	by_row := s.by_row[:]
 	pending := &s.pending
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
 	visible := e.particles.is_visible[:]
 	if s.by_row_head >= len(by_row) && len(pending^) == 0 && len(s.active_slots) == 0 {
-		return nil, false
+		return false
 	}
 	if len(pending^) == 0 && s.by_row_head < len(by_row) {
 		// Consume the next row span by advancing a cursor; the sorted pool stays
@@ -194,7 +192,6 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 			slot := s.index_by_id[next]
 			s.start_ticks[slot] = s.tick
 			engine.set_particle(e, next, visible = true)
-			append(&s.render_ids, next)
 			append(&s.active_slots, slot)
 		}
 	}
@@ -252,5 +249,5 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1
-	return s.render_ids[:], true
+	return true
 }

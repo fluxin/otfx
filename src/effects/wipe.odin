@@ -153,9 +153,9 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 	s.wipe_delay = s.config.wipe_delay
 }
 
-wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 	if len(s.active) == 0 && engine.group_reveal_complete(s.reveal) {
-		return nil, false
+		return false
 	}
 	if s.wipe_delay == 0 {
 		change := engine.group_reveal_step(&s.reveal)
@@ -196,5 +196,5 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> ([]engine.Particle_Id, b
 	}
 	resize(&s.active, write)
 	s.tick += 1
-	return nil, true
+	return true
 }

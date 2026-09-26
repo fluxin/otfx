@@ -1,193 +1,121 @@
 # Engine and playback contracts
 
-## Shared performance paths
+Effects own choreography, random order, phase transitions, and completion. The
+engine owns clipping, overlap resolution, appearance encoding, dirty tracking,
+and terminal output. Effects use the same setters regardless of how they animate.
 
-Effects with the same operations use the same implementation so improvements
-carry across existing and future effects. Effects own choreography, phase
-transitions, random order, and completion; the engine owns appearance encoding,
-mutation invalidation, raster membership, and emission.
+## Effect API
 
-- Build reusable appearances with `prepare_visual`; publish prepared IDs and
-  dynamic values through `set_visual` or the appearance setters. Both forms
-  preserve one logical appearance, read through `get_visual`, and the same
-  input-color and dirty-state rules. `set_visual_codes` applies parallel ID/code
-  slices in order, comparing eight code IDs at a time to skip held blocks.
-  Colorshift and Decrypt share this bulk operation. It uses fixed local arrays
-  and native SIMD comparisons, without raw-pointer gathers or retained scratch.
-- Reuse `sample_timeline_changes` for shared tick-to-sample schedules. It returns
-  changed slots into caller-owned scratch; the effect keeps its own completion
-  and active-range decisions. Smoke and Decrypt already share this operation.
-- Send all rendering through the retained raster and `write_character`.
-  A single `strings.Builder` owns output throughout a frame, including cursor
-  moves, spaces, prepared bytes, and dynamic visuals. The buffer descriptor is
-  published back once after emission, rather than copied for each changed cell.
-
-New bulk or SIMD operations should implement a common data operation used by
-real callers, preserve the scalar API's ordering and invalidation contract, and
-be validated across their consumers. Do not duplicate encoders or dirty tracking
-inside effects, or add a generic playback interpreter to share choreography.
-
-## Ownership and resize
-
-The engine owns `#soa[dynamic]Character` storage, both terminal cell grids in one
-allocation, and the reusable ANSI output buffer. Effects write character state
-and supply renderer candidates; they do not own another canvas. Layer and
-creation index determine painter priority regardless of candidate-list order.
-Groups use a flat `Char_Groups.members` pool and explicit `spans`.
-
-The current raster persists across frames. Each cell retains an intrusive list
-of visible candidates, indexed by character ID. Coordinate, visibility, layer,
-and selection changes invalidate affected cells; only those cells resolve their
-maximum `(layer, creation index)` again. Visual-only changes invalidate output
-for the current winner without rebuilding membership. The previous raster and
-visual cache continue to describe the last emitted state.
-
-Effects can publish renderer-visible settings together:
+Build creates particles, reusable visuals, motion data, and schedules. During
+playback, publish changes through the setters and return whether a frame is ready:
 
 ```odin
-visual := engine.get_visual(e, id)
-visual.fg = color
-engine.set_character(e, id, coord = position, visible = true, visual = visual)
-```
-
-`set_character` is forced inline. Omitted settings keep their values and equal
-settings do no work. `set_symbol`, `set_foreground`, `set_background`, and
-`set_bold` update individual appearance fields; `set_visual` publishes either
-a complete `Visual` or a prepared `Visual_Code_Id`. The `visual` argument of
-`set_character` accepts either form too. Effects use these setters during playback. The low-level
-`mark_character_dirty` remains available for external direct writers and
-invalidates both membership and encoded appearance. Explicit direct appearance
-edits write `chars.visual[id]` and then mark the character; its logical value is
-always current, including after a prepared-code assignment.
-Construction marks every
-character initially, including added characters, so direct initialization before
-the first raster update needs no extra tag. Input state remains immutable.
-
-Odin `bit_array.Bit_Array` owns dirty character, cell, and selection sets. Bits
-deduplicate changes without per-character generations or an ID queue. Membership
-bits clear after rasterization; output bits remain pending until emission,
-including when tools update without emitting. Storage grows with character
-capacity. Preallocated marking and membership checks use the library's unchecked
-operations, so fixed-population playback does not allocate.
-
-Each character has a naturally aligned 12-byte membership record containing its
-cell and two intrusive links. Prepared code IDs occupy a separate contiguous u32
-column. A nonzero code selects immutable prepared bytes; `NO_CODE` selects
-dynamic encoding. `get_visual` is the logical read API for both forms. One
-`Visual` record stays current in either case, so reads and whole-value mutations
-do not branch between storage representations. Its fields are consumed together
-by the existing effect API. Splitting them into separate columns and deferring
-prepared-value publication regressed real effects; packed ID comparisons remain
-separate for the bulk API. Equal assignments do no work and preserve the code.
-Dynamic visuals retain color number fragments in a 24-byte character-owned
-`Encoded_Colors` record: two 11-byte RGB buffers and a `bit_field u16` containing
-two four-bit lengths and a validity flag. Changing color invalidates those
-fragments; symbol, bold, placement, visibility, and layer changes preserve them.
-An actual component edit releases a prepared code. Last-emitted state uses its
-own prepared ID or a whole raw `Visual` snapshot, selected by `cached_code`.
-`get_emitted_visual` resolves either form; the cached raw snapshot is ignored
-while its corresponding prepared ID is active. Preview reads do not
-publish last-emitted state.
-
-```odin
-// Build once; keep the ID in effect state or a shared timeline.
 red := engine.prepare_visual(e, engine.Visual{symbol = "*", fg = RED})
 
-// Playback uses the same setter and renderer for either source.
-engine.set_visual(e, id, red)
-engine.set_visual(e, id, engine.Visual{symbol = "*", fg = color})
-engine.set_character(e, id, coord = position, visual = red)
+// Either a prepared Visual_Id or a dynamic Visual uses the same publication API.
+engine.set_particle(e, id, coord = position, visible = true, visual = red)
+engine.set_foreground(e, id, color)
+engine.set_symbol(e, id, "░")
+
+// The runner calls frame and print_frame after a successful effect step.
+produced := effects.next_frame(&effect, e)
 ```
 
-`write_character` appends prepared bytes or assembles dynamic output from cached
-color fragments, the existing UTF-8 symbol, and constant ANSI prefixes/resets.
-Build and playback share `encode_colors` and `write_visual`. `Always` input-color
-overrides cache the effective per-character colors too. No-color output writes
-the symbol directly. Configuration and input styles stay fixed for the
-engine's lifetime; resize constructs a new world and new caches.
+`next_frame` and each effect's `*_next` return `bool`. Visibility determines what
+can be rendered; effects no longer return or maintain a second render-ID list.
+Omitted `set_particle` settings keep their values. Equality guards avoid repeated
+publication. `set_visual` accepts `Visual` and `Visual_Id`; `get_visual` reads the
+current logical value in either case. `set_visuals` applies parallel particle and
+prepared-visual slices in order, preserving repeated-ID semantics.
 
-`strings.Builder` writes directly into the prepared pool or destination frame
-buffer. There is no 64-byte cache, overflow pool, temporary per-cell `Code_Buffer`,
-or runtime interning. Cache size does not depend on symbol length or the presence
-of bold, foreground, and background together. Fixed-population playback does not
-allocate. Frame emission and preview use the same policy-specialized writer;
-only frame emission publishes the last-emitted snapshot. Dynamic assembly
-passes symbol/bold and color fragments directly to the common encoder.
-The small decimal helper remains shared with cursor formatting; its measured
-cost is lower than generic integer formatting in these hot loops.
+Direct initialization of particle columns is allowed during build, before the
+first compose. After admission, use setters for coordinate, visibility, layer,
+and appearance changes. There is no external dirty-marking obligation. A tool
+can still pass an explicit particle slice to `compose_frame` or `frame_build`:
+no selection means all particles, while an explicit empty slice means none.
+The engine owns the previous selection because callers may overwrite their slice.
 
-Effects whose visibility flags define their complete work set return `nil` for
-all-character rendering: this consumes only marked changes. A selected slice
-still restricts membership when needed, but its bitmap is rebuilt to detect
-entries and departures. Fixed candidate sets need no redundant selection list.
+## Storage and ownership
 
-One `mem.Dynamic_Arena` backs the engine/effect world for a CLI run. A settled
-terminal resize ends playback, resets that arena while retaining its blocks,
-and constructs a replacement world. No references into the old world survive.
-Construction and resize use the same `Render_Layout` calculation. Redirected
-output does not enable the terminal-resize handler.
+Particles use `#soa[dynamic]Particle`. Coordinates and particle IDs are native
+integers; `Visual_Id` is u32. A particle stores initial coordinates and visual ID,
+current coordinates and visual ID, visibility, layer, and renderer membership.
+Initial input style and glyph are resolved through `get_initial_visual`.
+`Particle_Groups` uses flat `members` and `spans`.
 
-Decoded input and initial fill populations are counted before construction.
-Their SoA columns are resized once per population, then initialized directly;
-build does not repeatedly append and scatter a full character row. Added
-characters retain the growable path and extend all character-indexed bit arrays.
+A cell stores its winning particle and visual ID. Intrusive previous/next links
+connect the visible, admitted particles at that cell. Coordinate and visibility
+changes unlink/link immediately; layer changes reconsider the winner. Priority
+is highest layer, then highest particle ID, independent of selection order.
+When a winner leaves, only that cell's remaining occupants are examined.
+Unchanged all-particle admission does not scan the population each frame.
 
-When an effect knows its added population, the engine manages capacity for the
-characters, added IDs, and dirty/selection bits together:
+Prepared visuals are immutable and interned at build time. Each particle also
+has a reserved mutable visual entry. Editing a prepared appearance first copies
+its logical value into that slot; subsequent edits mutate the same entry.
+`Packet_Fields`, an Odin `bit_set`, identifies which encoded fields need updating.
+There is no runtime interning for ordinary appearance changes.
 
-```odin
-characters := engine.character_batch(e, count)
-for position in positions {
-    id := engine.add_character(&characters, "*", position)
-    engine.set_character(e, id, visible = true)
-}
-```
+The cached packet has 52 bytes plus u8 prefix and length fields. It encodes the
+common glyph of up to four UTF-8 bytes, optional foreground/background, and bold.
+Long symbols retain their full string and use prefix/string/reset emission.
+Input-color policy and no-color mode share this encoding path. `write_particle`
+provides previews from the same packet without changing renderer ownership.
 
-The batch permits up to `count` additions. IDs stay stable; no borrowed column
-slices survive growth. Callers do not inspect engine lengths or reserve its
-internal arrays. For incremental creation, `add_character(e, symbol, position)`
-still grows storage automatically.
+## Row emission
 
-Output capacity is reserved from the clipped render extent. `frame_emit` clears
-the buffer length and reuses its capacity. Fixed-population effect lists reserve
-their known bounds during construction; resize recomputes those bounds. Variable
-Thunderstorm branches and overlapping sparks may still grow during playback.
+The engine retains encoded bytes and cell offsets per viewport row. A winning
+appearance change of unchanged encoded length can overwrite those bytes directly.
+Other changes mark a cell in Odin's `bit_array.Bit_Array`; repeated marks are
+deduplicated. Sparse changed cells splice their exact byte lengths into the row.
+If more than one eighth of a row changes length or owner, the row is rebuilt once
+from cached packets. No padding or unused glyph bytes are sent to the terminal.
 
-## Animation and rendering
+Dirty rows preserve the existing output protocol: emit each whole changed row,
+including blanks that erase departed particles. One slice per row plus cursor
+moves replaces one slice per cell. `print_frame` submits those slices through
+`writev`, retaining partial-write and EINTR handling. `frame_bytes` concatenates
+only for consumers explicitly requesting a contiguous capture. There is no
+second previous-cell grid or whole-animation output cache. Output slices borrow
+row storage: emit or capture the frame before advancing the effect again.
 
-Animation remains frame-by-frame. Effects retain compact motion data, traversal
-orders, and hold schedules, not whole rendered frames or ANSI diffs. Completed
-animation work can stop while its final characters remain renderer candidates.
-Effects own completion and final holds; skipping work must preserve the last
-coordinate, color, visibility, and layer transition.
+`compose_frame` updates admission independently of emission. Pending row/cell
+changes survive composition-only calls. Row storage is reserved from viewport
+width for the common four-byte glyph case; arbitrary long symbols can grow it.
+Playback storage tests enforce allocation-free bounded cases.
 
-`sample_timeline_changes` reads start ticks, previous sample indices, and a shared
-tick-to-sample table. It writes changed `(slot, sample)` pairs into caller-owned
-scratch in input order, without allocating. Each lane owns its written fields:
-initialize the previous sample to `-1` on activation or after another writer
-changes those fields. The sampler holds the last sample indefinitely; the caller
-owns completion timing. Smoke and Decrypt use this shared primitive.
+## Lifetime and resize
 
-Odin native easing supplies movement curves. Coordinate quantization uses the
-shared ties-to-even helper. Color comparison includes optional-color presence;
-the four-byte comparison has static size/alignment guards. String content and
-bold state remain part of visual comparison.
+One `mem.Dynamic_Arena` backs a CLI engine/effect world. Settled terminal resize
+ends playback and rebuilds the world using the same `Render_Layout` calculation.
+No references into the old world survive. Redirected output does not install the
+resize handler. Effects may animate outside the viewport; the engine clips at
+membership publication, and those particles can later re-enter.
 
-Smoke precomputes a weighted spanning tree and breadth-first arrival ticks. Burn
-precomputes connected random-frontier ignition ticks. Laseretch precomputes a
-depth-first target order, using spaces as traversal bridges. Temporary graph and
-queue storage is discarded before playback; their compact replay data persists.
+Input and fill populations are counted before SoA initialization. Ordinary
+`add_particle(e, symbol, position)` grows storage automatically. A known generated
+population can use `particle_batch(e, count)`; callers never reserve internal
+renderer arrays. Borrowed SoA column slices must not survive particle growth.
 
-## Thunderstorm
+## Shared animation work
 
-Strike generation and replay live together in `src/effects/thunderstorm.odin`.
-Scalar batches advance branch tips using Odin's RNG. Temporary branch spans and
-child insertion points are flattened into depth-first reveal order. Once the
-final segment count is known, character and replay capacity is reserved before
-materialization; generation scratch does not survive into playback.
+Shared geometry uses Odin math/linalg and paired SIMD ties-to-even coordinate
+rounding. `sample_timeline_changes` returns changed sample slots in input order;
+effects retain completion timing and phase ownership. Finished motion or held
+color samples may skip calculation while the final particle remains visible.
+Rings and Middleout skip unchanged color samples; Decrypt retires completed tails.
 
-Playback reveals one to three segments per step. Only the revealed prefix enters
-the renderer candidate list. Retirement hides the strike and clears its replay
-cursor, retaining pool capacity. There is no fixed cap that silently drops
-branches; recursive populations can grow rapidly on tall canvases. Geometry
-fidelity does not imply whole-effect parity; see [accuracy](accuracy-review.md).
+Animation still runs frame by frame. Smoke, Burn, and Laseretch precompute compact
+traversal/arrival data, not rendered frames. Thunderstorm generates recursive
+geometry into reusable particle pools; visibility admits only revealed segments.
+Its variable branches and sparks may grow during playback rather than imposing
+a cap that drops geometry.
+
+## Diagnostics
+
+Build `bench/phases` with `-define:OTFX_FRAME_STATS=true` for compose, emit, write,
+dirty-row, descriptor, patch/rebuild, membership, and byte-copy counters. Normal
+builds compile out this instrumentation. Phase timings include instrumentation
+cost and do not replace frozen-binary CLI measurements. See
+[row renderer measurements](row-renderer.md) for the experiment decisions and
+comparison against ttfx's ASM branch.

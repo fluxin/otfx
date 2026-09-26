@@ -105,7 +105,6 @@ Laseretch_State :: struct {
 	config:         Laseretch_Config,
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	render_ids:     [dynamic]engine.Particle_Id,
 	final_colors:   [dynamic]engine.Color,
 	source_starts:  [dynamic]int,
 	active_sources: [dynamic]int,
@@ -234,9 +233,6 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 		s.source_starts[i] = -1
 		visible[id] = false
 	}
-	// Retain the beam and revealed source glyphs as a prefix. Unrevealed
-	// source glyphs never need to enter the painter's work set.
-	reserve(&s.render_ids, n * 2 + e.canvas.top + 1)
 
 	// Create all generated rows after no storage column is borrowed. There is one
 	// spark row per source glyph, the exact upper bound for this one-strike-per-
@@ -248,7 +244,6 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 		e.particles.is_visible[id] = true
 		e.particles.layer[id] = 2
 		append(&s.beam_ids, id)
-		append(&s.render_ids, id)
 	}
 	for i in 0 ..< n {
 		symbols := [3]string{".", ",", "*"}
@@ -284,13 +279,12 @@ laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: en
 	engine.set_particle(e, s.spark_ids[i], visible = true)
 }
 
-laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 	if s.pending_head == len(s.pending) &&
 	   len(s.active_sources) == 0 &&
 	   len(s.active_sparks) == 0 {
-		return nil, false
+		return false
 	}
-	resize(&s.render_ids, len(s.beam_ids) + s.pending_head)
 
 	if s.pending_head < len(s.pending) {
 		if s.delay == 0 {
@@ -298,7 +292,6 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Part
 				if s.pending_head == len(s.pending) do break
 				id := s.pending[s.pending_head]
 				s.pending_head += 1
-				append(&s.render_ids, id)
 				i := s.index_by_id[id]
 				s.source_starts[i] = s.tick
 				append(&s.active_sources, i)
@@ -449,8 +442,6 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> ([]engine.Part
 	}
 	resize(&s.active_sparks, spark_write)
 
-	// Keep the permanent prefix in place; replace only the compact spark tail.
-	for i in s.active_sparks do append(&s.render_ids, s.spark_ids[i])
 	s.tick += 1
-	return s.render_ids[:], true
+	return true
 }

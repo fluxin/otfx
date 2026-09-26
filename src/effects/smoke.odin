@@ -280,8 +280,8 @@ smoke_paint_color :: proc(
 	return engine.gradient_between_step(start, finish, 5, step)
 }
 
-smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
-	if s.tick == s.last_tick do return nil, false
+smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
+	if s.tick == s.last_tick do return false
 	smoke_count :=
 		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
 	changes := engine.sample_timeline_changes(
@@ -332,5 +332,5 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 		}
 	}
 	s.tick += 1
-	return s.characters[:], true
+	return true
 }

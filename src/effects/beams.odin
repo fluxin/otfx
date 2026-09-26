@@ -444,9 +444,9 @@ beams_update_visuals :: proc(s: Beams_State, e: ^engine.Engine) {
 	}
 }
 
-beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Complete && !beams_wipe_active(s^) {
-		return nil, false
+		return false
 	}
 	switch s.phase {
 	case .Beams:
@@ -505,5 +505,5 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 	}
 	beams_update_visuals(s^, e)
 	s.tick += 1
-	return s.characters[:], true
+	return true
 }

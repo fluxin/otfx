@@ -28,26 +28,21 @@ job: a small shell-friendly binary that turns piped text into an animation.
 
 The design is data-oriented from the renderer through the effects:
 
-- `#soa[dynamic]Character` keeps the hot visibility, coordinate, painter-key,
-  and visual columns contiguous.
-- One engine-owned allocation holds both sides of the terminal cell buffer.
-  Effects feed it; no effect owns a second canvas or raster.
-- The renderer compares the current and prior cell grids and emits only changed
-  terminal runs into one reusable byte buffer.
-- Effects use flat `[dynamic]` pools, spans, and `Char_Groups {members, spans}`.
-  They do not use maps for character state.
-- Newer effects evaluate movement, color ramps, and phase state directly from
-  dense columns rather than allocating paths, scenes, callbacks, or per-glyph
-  objects.
-- Geometry and interpolation use Odin's native math/linalg primitives; cyclic
-  hot loops use branch wraps or precomputed lookup columns rather than `%`.
+- `#soa[dynamic]Particle` keeps hot particle columns contiguous.
+- Effects publish through `set_particle`, `set_visual`, and field setters.
+  The engine handles clipping, cell ownership, and dirty tracking.
+- Persistent row bytes are patched for sparse changes or rebuilt for dense
+  changes, then submitted as row slices through `writev`.
+- Effects use flat pools, groups, and direct phase machines. They return whether
+  a frame is ready; no parallel render-ID list is required.
+- Shared Odin math/linalg and SIMD coordinate rounding serve every effect.
 
 ## otfx versus ttfx
 
 | | `otfx` (Odin) | `ttfx` (Rust reference) |
 |---|---|---|
 | Implementation | SoA engine, direct effect phase machines, shared dirty renderer | Per-effect paths/scenes/events and full reference renderer |
-| Terminal output | Dirty cell runs only | Reference terminal stream |
+| Terminal output | Persistent bytes for dirty rows | Reference terminal stream |
 | Supported effects | 37 | 37 |
 | CLI for shared effects | Same effect names and option names | Reference contract |
 | Deterministic seed | `--seed` resets Odin's native RNG | `--seed` resets ttfx's RNG |
@@ -72,45 +67,46 @@ playback contracts are described in [architecture](docs/architecture.md).
 
 ## Performance
 
-On the measured workload, Odin is faster on **35/35 finite effects**, with a
-**2.35× geometric wall-speedup**. [Per-effect results](docs/rust-benchmark.tsv)
-include wall time, CPU, peak RSS, and frame counts.
+The latest native comparison against **ttfx's ASM branch** measures **48.2 ms
+for otfx versus 54.5 ms for ASM**, averaged over 35 finite effects: about 12%
+less mean wall time. otfx wins 19/35 effects; geometric mean is essentially tied
+at 1.01×, so this is not a uniform advantage.
 
-| Metric | Rust | Odin | Odin / Rust |
-|---|---:|---:|---:|
-| Best wall, mean per effect | 196.0 ms | 85.9 ms | 0.44× (2.28× faster) |
-| CPU, mean per effect | 196.6 ms | 85.9 ms | 0.44× |
-| Peak RSS, mean per effect | 133.2 MiB | 13.9 MiB | 0.10× |
+| Metric, unweighted mean | ttfx ASM | otfx |
+|---|---:|---:|
+| Best wall time per effect | 54.5 ms | 48.2 ms |
+| Child CPU time | 54.5 ms | 48.1 ms |
+| Peak RSS per effect | 87.9 MiB | 11.3 MiB |
 
-Measured 2026-09-25 on an AMD Ryzen 9 9900X3D, pinned to CPU 2. Odin
-`dev-2026-09-nightly:a2fb372`, built with `-o:speed -debug`; Rust `ttfx v0.3.3`
-at `54d21f0`, using its release binary. The native [benchmark](bench/bench.odin)
-runs both real CLIs with dense 190×46 text on a 200×50 canvas, seed 1,
-`--frame-rate 0`, and stdout redirected to `/dev/null`: three repeats, minimum
-0.5 seconds per sample. CPU is child user-plus-system time from Linux `wait4`;
-RSS is the maximum observed across measured children. Table aggregates are
-unweighted means over the 35 finite effects. The harness computes aggregates
-before rounding individual rows for display.
+Against the frozen preceding otfx binary, mean wall time falls from 93.2 to
+48.2 ms; 34/35 effects improve. Overflow regresses, and is reported explicitly.
+See the [experiment report](docs/row-renderer.md),
+[before/after table](docs/row-benchmark.tsv), and
+[ASM comparison](docs/row-asm-benchmark.tsv) for every effect and frame count.
+The [older non-ASM Rust comparison](docs/rust-benchmark.tsv) is historical.
 
-These are complete-run costs for the implemented animations. Choreography and
-frame counts can differ; this is neither equal-frame throughput nor a claim
-about every input and option. Terminal-emulator cost is excluded.
-[Performance decisions](docs/performance-decisions.md) retain the reasons for
-keeping or rejecting the main optimizations.
+Measured 2026-09-26 on Ryzen 9 9900X3D, CPU 2, Odin
+`dev-2026-09-nightly:a2fb372`, `-o:speed -microarch:native -debug`, with bounds
+checks. Dense input and default canvas are 190×46; terminal dimensions are
+200×50. Both CLIs use seed 1, frame rate 0, and stdout `/dev/null`. Three samples
+batch at least 0.3 seconds each. CPU is child user plus system time from `wait4`.
+Frame counts differ for 21/35 ASM comparisons: these are complete animation
+costs, not equal-frame throughput. Terminal-emulator work is excluded.
 
 ### Reproduce
 
 ```sh
-odin build src -o:speed -debug -out:otfx
-odin build bench -o:speed -out:bench/bench
-BENCH_MIN_SECONDS=0.5 BENCH_MATRIX_RAIN_TIME=1 BENCH_STORM_TIME=1 taskset -c 2 ./bench/bench 3
-# Application resource cost at 60 fps; defaults to Matrix and Thunderstorm
-BENCH_MATRIX_RAIN_TIME=1 BENCH_STORM_TIME=1 ./bench/bench --paced 3
+odin build src -o:speed -microarch:native -debug -out:otfx
+# Default reference is the local non-ASM ttfx binary.
+odin build bench -o:speed -out:/tmp/otfx-bench
+BENCH_MIN_SECONDS=0.3 taskset -c 2 /tmp/otfx-bench 3
+# An exported asm-zen5 binary can be selected without changing third_party.
+odin build bench -o:speed -define:REFERENCE_BENCH_BINARY=/path/to/asm-zen5/ttfx -out:/tmp/otfx-asm-bench
+TTFX_ASM=force BENCH_MIN_SECONDS=0.3 taskset -c 2 /tmp/otfx-asm-bench 3
 ```
 
-The harness uses the local Rust reference release binary. Short unpaced runs
-are batched to reach the minimum sample duration; each paced repeat is one
-complete animation.
+Use `-define:OTFX_BENCH_BINARY=/path/to/frozen/otfx` to select a frozen candidate.
+The report records the ASM revision, binary hashes, and diagnostic commands.
 
 ### Timing-gated effects
 

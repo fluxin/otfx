@@ -198,10 +198,10 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	)
 }
 
-waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Particle_Id, bool) {
+waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 	group_count := len(s.pending_cols.spans)
 	if s.col_idx >= group_count && len(s.active) == 0 {
-		return nil, false
+		return false
 	}
 	if s.col_idx < group_count {
 		for id in engine.group_members(s.pending_cols, s.col_idx) {
@@ -270,5 +270,5 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> ([]engine.Particle_Id,
 	}
 	resize(&s.active, write)
 	s.tick += 1
-	return nil, true
+	return true
 }

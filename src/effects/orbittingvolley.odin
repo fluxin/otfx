@@ -85,7 +85,6 @@ Orbittingvolley_State :: struct {
 	launch_starts:      [dynamic]int,
 	launch_origins:     [dynamic]engine.Coord,
 	launch_steps:       [dynamic]int,
-	render_ids:         [dynamic]engine.Particle_Id,
 	magazines:          [dynamic]int, // character indices, four contiguous spans
 	magazine_offsets:   [5]int,
 	magazine_heads:     [4]int,
@@ -150,8 +149,6 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		s.launch_starts[i] = -1
 		visible[id] = false
 	}
-	reserve(&s.render_ids, n + 4)
-	append(&s.render_ids, ..s.characters[:])
 
 	// Center-to-outside source ordering, then branch-wrapped round-robin
 	// assignment into four flat magazine spans.
@@ -204,7 +201,6 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		s.launcher_positions[i] = starts[i]
 		e.particles.layer[id] = 2
 		e.particles.is_visible[id] = true
-		append(&s.render_ids, id)
 	}
 }
 
@@ -242,13 +238,7 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	}
 }
 
-orbittingvolley_next :: proc(
-	s: ^Orbittingvolley_State,
-	e: ^engine.Engine,
-) -> (
-	[]engine.Particle_Id,
-	bool,
-) {
+orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bool {
 	active := !s.launchers_hidden
 	for start, i in s.launch_starts {
 		if start >= 0 && s.tick - start < s.launch_steps[i] {
@@ -256,7 +246,7 @@ orbittingvolley_next :: proc(
 			break
 		}
 	}
-	if !active do return nil, false
+	if !active do return false
 
 	magazines_left := false
 	for i in 0 ..< 4 {
@@ -337,5 +327,5 @@ orbittingvolley_next :: proc(
 		}
 	}
 	s.tick += 1
-	return s.render_ids[:], true
+	return true
 }
