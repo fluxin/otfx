@@ -62,6 +62,38 @@ renderer, not ttfx ASM. All effect frame counts match.
 The eight-effect geometric slowdown is approximately 9x; mean CPU time rises
 from 100.4 to 1723.4 ms. Average peak RSS is 11.8 versus 11.9 MiB. Full-frame
 collection, sorting, and output replace incremental work; sparse effects suffer
-most. No profile has separated those costs yet. The screen predates the final
+most. The screen predates the final
 removal of the unused added-particle list and redundant placement comparisons.
 Raw local results and source snapshots are under `/tmp/otfx-packets`.
+
+## CPU profile of the simplified renderer
+
+Profiled revision `1dae5641` with Odin `dev-2026-09-nightly:a2fb372`, built with
+`-o:speed -microarch:native -debug`. Input, terminal dimensions, CPU affinity,
+seed, and output destination match the screen above. `perf record` sampled
+`cycles:u` at 997 Hz with DWARF call stacks (16 KiB). Laseretch and Burn each ran
+once; Colorshift ran 30 complete invocations to collect enough samples.
+
+| Effect | Samples | Approximate user-cycle share in sorting |
+| --- | ---: | ---: |
+| Laseretch | 7752 | 96% |
+| Burn | 2375 | 94% |
+| Colorshift | 2855 | 74% |
+
+The dominant call is `slice.sort_by` in `build_draws` (`src/engine/render.odin`).
+The installed Odin implementation converts the typed comparator into a generic
+smoothsort comparator, potentially calls `less` twice per comparison, and moves
+records through a generic byte-copy routine. Laseretch's comparator adapter alone
+accounts for about 20% self samples. In Colorshift, `set_visuals` is only about
+2.3% self samples. Inclusive percentages overlap and must not be added together.
+Some inlined inclusive attribution in the repeated Colorshift run is inconsistent;
+the smoothsort self samples alone account for 72.3%, supporting the same conclusion.
+
+An independent three-run `perf stat` measurement of Laseretch reports mean wall
+time 7.809 seconds and approximately 142.47 billion user instructions per run.
+Each repetition reopens the input file. This is a CPU/output-submission workload;
+`/dev/null` does not measure a terminal emulator, and `cycles:u` excludes kernel
+execution. These results identify sorting as the first optimization target without
+establishing how fast a replacement will be. No rendering algorithm was changed
+during this profiling pass. Data, text reports, input, and timing results are saved
+under `/tmp/otfx-profile`; the symbolized binary is `/tmp/otfx-perf-debug`.
