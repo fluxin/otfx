@@ -220,3 +220,40 @@ frame_composition_character_growth_is_amortized :: proc(t: ^testing.T) {
 	engine.frame_build(&e)
 	testing.expect_value(t, track.total_allocation_count, allocations)
 }
+
+@(test)
+frame_composition_clips_signed_extremes_and_empty_viewport :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 3, 3
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg, context.allocator)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	e.layout.row_offset, e.layout.col_offset = 7, -11
+	id := e.particle_sets.input[0]
+	expected: [9]i32
+	for p in ([]engine.Coord{{1, 1}, {3, 3}, {0, 1}, {4, 1}, {1, 0}, {1, 4}, {min(int), 1}, {max(int), 1}, {1, min(int)}, {1, max(int)}}) {
+		engine.set_particle(
+			&e,
+			id,
+			visible = true,
+			coord = engine.Coord{p.column - e.layout.col_offset, p.row - e.layout.row_offset},
+		)
+		raster_expected(&e, nil, true, expected[:])
+		engine.frame_build(&e)
+		for cell, index in expected do testing.expect_value(t, draw_at(&e, index), cell)
+	}
+	// An inverted interval is empty; unsigned interval widths must not admit it.
+	e.layout.visible_left = 4
+	for &dirty in e.dirty_rows do dirty = true
+	engine.set_particle(
+		&e,
+		id,
+		coord = engine.Coord{2 - e.layout.col_offset, 2 - e.layout.row_offset},
+	)
+	engine.frame_build(&e)
+	for cell in e.frame_particles do testing.expect_value(t, cell, engine.Particle_Id(-1))
+}

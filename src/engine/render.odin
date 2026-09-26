@@ -1,5 +1,7 @@
 package engine
 
+import "core:simd"
+
 frame :: proc(e: ^Engine, selected: Maybe([]Particle_Id) = nil) {
 	enforce_framerate(e)
 	frame_build(e, selected)
@@ -38,15 +40,25 @@ compose_frame :: proc(e: ^Engine, selection: Maybe([]Particle_Id) = nil) -> (wid
 	for dirty, row in e.dirty_rows {
 		if dirty do for &id in e.frame_particles[row * width:(row + 1) * width] do id = -1
 	}
+	if e.layout.visible_right < e.layout.visible_left ||
+	   e.layout.visible_top < e.layout.visible_bottom {
+		return
+	}
 	for i in 0 ..< count {
 		id := selected[i] if restricted else Particle_Id(i)
 		if !e.particles.is_visible[id] do continue
 		p := e.particles.current_coord[id]
 		row, column := p.row + e.layout.row_offset, p.column + e.layout.col_offset
-		if row < e.layout.visible_bottom ||
-		   row > e.layout.visible_top ||
-		   column < e.layout.visible_left ||
-		   column > e.layout.visible_right {
+		// Test both axes together. Unsigned distances also reject negative positions.
+		distance := #simd[2]uint {
+			uint(column - e.layout.visible_left),
+			uint(row - e.layout.visible_bottom),
+		}
+		extent := #simd[2]uint {
+			uint(e.layout.visible_right - e.layout.visible_left),
+			uint(e.layout.visible_top - e.layout.visible_bottom),
+		}
+		if simd.extract_msbs(simd.lanes_gt(distance, extent)) != {} {
 			continue
 		}
 		if !e.dirty_rows[height - row] do continue
