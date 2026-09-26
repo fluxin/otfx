@@ -30,7 +30,7 @@ Visual_Entry :: struct {
 }
 
 get_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
-	return e.visuals[e.particles.visual_id[id] - 1].visual
+	return e.visuals[e.particles[id].visual_id - 1].visual
 }
 
 packet_decimal :: #force_inline proc(bytes: []byte, v: u8) {
@@ -96,9 +96,9 @@ packet_update :: #force_inline proc(
 
 update_packet :: #force_inline proc(e: ^Engine, id: Particle_Id, fields: Packet_Fields) {
 	dirty_particle_row(e, id)
-	entry := &e.visuals[e.particles.visual_id[id] - 1]
+	entry := &e.visuals[e.particles[id].visual_id - 1]
 	colors := &entry.visual
-	if e.particles.preserve_initial_colors[id] do colors = &e.visuals[e.particles.initial_visual_id[id] - 1].visual
+	if e.particles[id].preserve_initial_colors do colors = &e.visuals[e.particles[id].initial_visual_id - 1].visual
 	packet_update(&entry.packet, &entry.visual, &e.cfg, fields, colors)
 }
 
@@ -123,15 +123,15 @@ prepare_visual :: proc(e: ^Engine, visual: Visual) -> Visual_Id {
 // Switching a prepared appearance changes only the reference.
 set_visual_prepared :: #force_inline proc(e: ^Engine, id: Particle_Id, visual_id: Visual_Id) {
 	assert(visual_id != NO_VISUAL)
-	if e.particles.visual_id[id] == visual_id do return
-	if e.particles.preserve_initial_colors[id] {
+	if e.particles[id].visual_id == visual_id do return
+	if e.particles[id].preserve_initial_colors {
 		source := &e.visuals[visual_id - 1].visual
-		target := &e.visuals[e.particles.mutable_visual_id[id] - 1].visual
+		target := &e.visuals[e.particles[id].mutable_visual_id - 1].visual
 		target^ = source^
-		e.particles.visual_id[id] = e.particles.mutable_visual_id[id]
+		e.particles[id].visual_id = e.particles[id].mutable_visual_id
 		update_packet(e, id, All_Packet_Fields)
 	} else {
-		e.particles.visual_id[id] = visual_id
+		e.particles[id].visual_id = visual_id
 		dirty_particle_row(e, id)
 	}
 }
@@ -139,16 +139,16 @@ set_visual_prepared :: #force_inline proc(e: ^Engine, id: Particle_Id, visual_id
 // A shared palette entry is immutable. Independent edits reuse the particle's
 // preallocated mutable slot; ordinary edits never copy a whole visual/packet.
 edit_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> (^Visual_Entry, Packet_Fields) {
-	own := e.particles.mutable_visual_id[id]
+	own := e.particles[id].mutable_visual_id
 	entry := &e.visuals[own - 1]
-	if e.particles.visual_id[id] == own do return entry, {}
-	entry.visual = e.visuals[e.particles.visual_id[id] - 1].visual
-	e.particles.visual_id[id] = own
+	if e.particles[id].visual_id == own do return entry, {}
+	entry.visual = e.visuals[e.particles[id].visual_id - 1].visual
+	e.particles[id].visual_id = own
 	return entry, All_Packet_Fields
 }
 
 set_visual_value :: proc(e: ^Engine, id: Particle_Id, value: Visual) {
-	old := &e.visuals[e.particles.visual_id[id] - 1].visual
+	old := &e.visuals[e.particles[id].visual_id - 1].visual
 	fields: Packet_Fields
 	if !symbol_equal(old.symbol, value.symbol) do fields |= {.Symbol}
 	if old.fg != value.fg do fields |= {.Foreground}
@@ -166,28 +166,28 @@ set_visual :: proc {
 }
 
 set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: string) {
-	if symbol_equal(get_visual(e, id).symbol, value) do return
+	if symbol_equal(e.visuals[e.particles[id].visual_id - 1].visual.symbol, value) do return
 	entry, fields := edit_visual(e, id)
 	entry.visual.symbol = value
 	update_packet(e, id, fields | {.Symbol})
 }
 
 set_foreground :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
-	if get_visual(e, id).fg == value do return
+	if e.visuals[e.particles[id].visual_id - 1].visual.fg == value do return
 	entry, fields := edit_visual(e, id)
 	entry.visual.fg = value
 	update_packet(e, id, fields | {.Foreground})
 }
 
 set_background :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
-	if get_visual(e, id).bg == value do return
+	if e.visuals[e.particles[id].visual_id - 1].visual.bg == value do return
 	entry, fields := edit_visual(e, id)
 	entry.visual.bg = value
 	update_packet(e, id, fields | {.Background})
 }
 
 set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
-	if get_visual(e, id).bold == value do return
+	if e.visuals[e.particles[id].visual_id - 1].visual.bold == value do return
 	entry, fields := edit_visual(e, id)
 	entry.visual.bold = value
 	update_packet(e, id, fields | {.Bold})
@@ -195,8 +195,8 @@ set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
 
 // Rendering borrows packets; it performs no appearance assembly or encoding.
 append_packet :: #force_inline proc(e: ^Engine, id: Particle_Id) {
-	p := &e.visuals[e.particles.visual_id[id] - 1].packet
-	symbol := e.visuals[e.particles.visual_id[id] - 1].visual.symbol
+	p := &e.visuals[e.particles[id].visual_id - 1].packet
+	symbol := e.visuals[e.particles[id].visual_id - 1].visual.symbol
 	if len(symbol) <= 4 {
 		append(&e.output_parts, p.bytes[:int(p.length)])
 	} else {
@@ -208,8 +208,8 @@ append_packet :: #force_inline proc(e: ^Engine, id: Particle_Id) {
 
 // Preview borrows the same packet used by frame output.
 write_particle :: proc(e: ^Engine, id: Particle_Id, b: ^strings.Builder) {
-	p := &e.visuals[e.particles.visual_id[id] - 1].packet
-	symbol := e.visuals[e.particles.visual_id[id] - 1].visual.symbol
+	p := &e.visuals[e.particles[id].visual_id - 1].packet
+	symbol := e.visuals[e.particles[id].visual_id - 1].visual.symbol
 	if len(symbol) <= 4 {
 		strings.write_bytes(b, p.bytes[:int(p.length)])
 	} else {
@@ -225,23 +225,23 @@ set_visuals :: proc(e: ^Engine, ids: []Particle_Id, visuals: []Visual_Id) {
 }
 
 get_initial_visual :: #force_inline proc(e: ^Engine, id: Particle_Id) -> Visual {
-	return e.visuals[e.particles.initial_visual_id[id] - 1].visual
+	return e.visuals[e.particles[id].initial_visual_id - 1].visual
 }
 
 // Each particle owns one mutable entry. Prepared and initial entries may be
 // shared, but editing one particle never mutates another particle's bytes.
 init_particle_visual :: proc(e: ^Engine, id: Particle_Id, initial: Visual) {
-	e.particles.initial_visual_id[id] = prepare_visual(e, initial)
+	e.particles[id].initial_visual_id = prepare_visual(e, initial)
 	append(&e.visuals, Visual_Entry{visual = Visual{symbol = initial.symbol}})
-	e.particles.visual_id[id] = Visual_Id(len(e.visuals))
-	e.particles.mutable_visual_id[id] = e.particles.visual_id[id]
+	e.particles[id].visual_id = Visual_Id(len(e.visuals))
+	e.particles[id].mutable_visual_id = e.particles[id].visual_id
 	update_packet(e, id, All_Packet_Fields)
 }
 
 // Cold consumers can request the resolved value; the frame writer borrows bytes.
 get_render_visual :: proc(e: ^Engine, id: Particle_Id) -> Visual {
 	v := get_visual(e, id)
-	if e.particles.preserve_initial_colors[id] {
+	if e.particles[id].preserve_initial_colors {
 		initial := get_initial_visual(e, id)
 		v.fg, v.bg, v.bold = initial.fg, initial.bg, initial.bold
 	}
