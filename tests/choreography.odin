@@ -154,13 +154,16 @@ burn_grows_a_connected_front :: proc(t: ^testing.T) {
 	rand.reset_u64(42)
 	effects.burn_build(&s, &e)
 	free_all(context.temp_allocator)
+	starts := make([]int, len(s.characters))
+	for &start in starts do start = -1
+	for source in s.sources do starts[source.index] = source.start_tick
 	// Every ignition prefix must be one connected fire, rather than random
 	// speckles across the input. Same-tick cells may connect through one another.
 	for tick in 0 ..< s.last_fire_tick - len(s.fire_palette) * 4 - 36 + 1 {
 		seen := make([]bool, len(s.characters))
 		queue := make([dynamic]int, 0, len(s.characters))
 		expected := 0
-		for start, i in s.start_ticks {
+		for start, i in starts {
 			if start > tick do continue
 			expected += 1
 			if len(queue) == 0 {append(&queue, i); seen[i] = true}
@@ -171,7 +174,7 @@ burn_grows_a_connected_front :: proc(t: ^testing.T) {
 			for id, j in s.characters {
 				q := e.particles.initial_coord[id]
 				if !seen[j] &&
-				   s.start_ticks[j] <= tick &&
+				   starts[j] <= tick &&
 				   abs(p.column - q.column) + abs(p.row - q.row) == 1 {
 					seen[j] = true
 					append(&queue, j)

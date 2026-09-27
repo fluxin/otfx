@@ -4,7 +4,8 @@ import "core:unicode/utf8"
 
 // Particle storage, population construction, and placement publication.
 
-Particle_Id :: distinct int
+Particle_Id :: distinct u32
+NO_PARTICLE :: max(Particle_Id)
 Visible :: distinct bool
 Layer :: distinct int // nonnegative cell-layer index
 
@@ -13,15 +14,18 @@ Particle_Flag :: enum {
 	Fill,
 	Update_Queued,
 	Preserve_Initial_Colors,
+	Placement_Changed,
+	Content_Changed,
 }
 Particle_Flags :: bit_set[Particle_Flag;u8]
 
 // Alignment groups: eight-byte geometry, four-byte IDs/glyphs, then byte data.
-// The SoA stores one column per field; the four booleans share one byte column.
+// The SoA stores one column per field; state and change flags share one byte column.
 Particle :: struct {
 	initial_coord:         Coord,
 	current_coord:         Coord,
 	layer:                 int,
+	cell:                  int, // renderer-owned published cell; -1 when absent
 	initial_appearance_id: Appearance_Id,
 	shared_appearance_id:  Appearance_Id, // zero selects private_appearance
 	initial_symbol:        rune,
@@ -51,6 +55,7 @@ init_particle :: proc(
 	shared_id: Appearance_Id,
 	position: Coord,
 ) {
+	assert(id != NO_PARTICLE, "particle ID is reserved for an empty cell")
 	assert(shared_id != NO_APPEARANCE && int(shared_id) <= len(e.shared_appearances))
 	assert(utf8.valid_rune(symbol), "symbol must be a valid Unicode scalar value")
 	e.particles[id].initial_coord = position
@@ -59,9 +64,10 @@ init_particle :: proc(
 	e.particles[id].symbol = symbol
 	e.particles[id].initial_appearance_id = shared_id
 	e.particles[id].shared_appearance_id = shared_id
+	e.particles[id].cell = -1
 	// New particles have no published membership; later edits use this entry.
-	append(&e.updates, Particle_Update{id = id, previous_cell = -1})
-	e.particles[id].flags += {.Update_Queued}
+	append(&e.updates, Particle_Update{id = id})
+	e.particles[id].flags += {.Update_Queued, .Placement_Changed, .Content_Changed}
 }
 
 make_fill_particles :: proc(e: ^Engine, occupied: []bool) {
@@ -70,6 +76,7 @@ make_fill_particles :: proc(e: ^Engine, occupied: []bool) {
 		if !cell do count += 1
 	}
 	first := len(e.particles)
+	assert(u64(first) + u64(count) <= u64(NO_PARTICLE), "particle count exceeds 32-bit IDs")
 	resize(&e.particles, first + count)
 	if count == 0 do return
 	reserve(&e.updates, cap(e.particles))
@@ -100,6 +107,10 @@ Particle_Batch :: struct {
 
 particle_batch :: proc(e: ^Engine, count: int) -> Particle_Batch {
 	assert(count >= 0)
+	assert(
+		u64(len(e.particles)) + u64(count) <= u64(NO_PARTICLE),
+		"particle count exceeds 32-bit IDs",
+	)
 	reserve(&e.particles, len(e.particles) + count)
 	reserve(&e.updates, cap(e.particles))
 	return {e, count}
@@ -129,9 +140,10 @@ add_particle_single :: proc(
 	shared_id: Appearance_Id,
 	position: Coord,
 ) -> Particle_Id {
+	assert(u64(len(e.particles)) < u64(NO_PARTICLE), "particle count exceeds 32-bit IDs")
+	id := Particle_Id(len(e.particles))
 	append(&e.particles, Particle{})
 	reserve(&e.updates, cap(e.particles))
-	id := Particle_Id(len(e.particles) - 1)
 	init_particle(e, id, symbol, shared_id, position)
 	return id
 }
@@ -139,7 +151,7 @@ add_particle_single :: proc(
 set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: rune) {
 	if e.particles[id].symbol == value do return
 	assert(utf8.valid_rune(value), "symbol must be a valid Unicode scalar value")
-	queue_particle(e, id)
+	queue_particle(e, id, .Content_Changed)
 	e.particles[id].symbol = value
 }
 
@@ -148,28 +160,31 @@ set_particle :: proc {
 	set_visible,
 	set_layer,
 	set_placement,
+	set_particle_frame,
+	set_particle_frames,
 }
 
 set_position :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Coord) {
 	old := e.particles[id].current_coord
 	if old == value do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Placement_Changed)
 	e.particles[id].current_coord = value
 }
 
 set_visible :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Visible) {
 	visible := bool(value)
 	if (.Visible in e.particles[id].flags) == visible do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Placement_Changed)
 	if visible {e.particles[id].flags += {.Visible}} else {e.particles[id].flags -= {.Visible}}
 }
 
 set_layer :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Layer) {
 	layer := int(value)
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
+	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
 	old_layer := e.particles[id].layer
 	if old_layer == layer do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Placement_Changed)
 	e.particles[id].layer = layer
 }
 
@@ -182,13 +197,41 @@ set_placement :: #force_inline proc(
 	layer: int,
 ) {
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
+	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
 	old_coord := e.particles[id].current_coord
 	old_visible := (.Visible in e.particles[id].flags)
 	old_layer := e.particles[id].layer
 	placement_changed := coord != old_coord || visible != old_visible || layer != old_layer
 	if !placement_changed do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Placement_Changed)
 	e.particles[id].current_coord = coord
 	if visible {e.particles[id].flags += {.Visible}} else {e.particles[id].flags -= {.Visible}}
 	e.particles[id].layer = layer
+}
+
+// Load one rendered frame's particle columns. Generation never changes Engine;
+// publication uses the same deduplicated queue as individual setters.
+// Glyph, bold, visibility and layer are left to their own writers.
+@(private = "file")
+set_particle_frames :: proc(e: ^Engine, ids: []Particle_Id, frames: #soa[]Sequence_Frame) {
+	assert(len(ids) == len(frames))
+	for id, i in ids do set_particle_frame(e, id, frames[i])
+}
+
+@(private = "file")
+set_particle_frame :: #force_inline proc(e: ^Engine, id: Particle_Id, frame: Sequence_Frame) {
+	position_changed := e.particles.current_coord[id] != frame.coord
+	colors_changed := get_appearance(e, id).colors != frame.colors
+	if !position_changed && !colors_changed do return
+	flags := e.particles[id].flags
+	if .Update_Queued not_in flags do append(&e.updates, Particle_Update{id, e.particles.layer[id]})
+	if position_changed do flags += {.Placement_Changed}
+	if colors_changed do flags += {.Content_Changed}
+	e.particles[id].flags = flags + {.Update_Queued}
+	e.particles.current_coord[id] = frame.coord
+	if colors_changed {
+		appearance := edit_appearance(e, id)
+		appearance.colors = frame.colors
+		dirty_appearance(appearance)
+	}
 }

@@ -70,7 +70,7 @@ main :: proc() {
 					e := &run.engine_state
 					for entry, cell in e.cells {
 						id := entry.top
-						if id < 0 do continue
+						if id == engine.NO_PARTICLE do continue
 						v := engine.get_render_appearance(e, engine.Particle_Id(id))
 						c := Cell {
 							x      = cell % width,

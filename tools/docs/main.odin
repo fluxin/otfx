@@ -200,7 +200,7 @@ raster_render_cells :: proc(
 	raster_fill(r, Background)
 	for entry, cell in e.cells {
 		id := entry.top
-		if id < 0 do continue
+		if id == engine.NO_PARTICLE do continue
 		screen_row, column := cell / width, cell % width
 		appearance := engine.get_render_appearance(e, engine.Particle_Id(id))
 		cell_background := Background

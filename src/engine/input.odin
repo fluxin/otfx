@@ -272,6 +272,7 @@ setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 		}
 	}
 	first := len(e.particles)
+	assert(u64(first) + u64(count) <= u64(NO_PARTICLE), "particle count exceeds 32-bit IDs")
 	set_first := len(e.particle_sets.input)
 	resize(&e.particles, first + count)
 	reserve(&e.updates, cap(e.particles))

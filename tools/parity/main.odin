@@ -80,7 +80,7 @@ otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 		wanted := (e.layout.visible_top - p.row) * e.layout.visible_right + p.column - 1
 		if wanted < 0 || wanted >= len(e.cells) do return frames, false
 		visible := e.cells[wanted].top
-		if visible < 0 || e.particles.symbol[visible] != e.particles.initial_symbol[id] do return frames, false
+		if visible == engine.NO_PARTICLE || e.particles.symbol[visible] != e.particles.initial_symbol[id] do return frames, false
 	}
 	return frames, true
 }

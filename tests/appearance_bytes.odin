@@ -88,8 +88,8 @@ appearance_prefix_survives_glyph_changes_and_private_edits :: proc(t: ^testing.T
 		expect_visible_draws(t, &e)
 		testing.expect_value(t, e.shared_appearances[shared - 1].bytes, shared_prefix)
 		private_prefix := e.particles.private_appearance[a].bytes
-		// Reuse styles with an ASCII, four-byte, and empty glyph.
-		for symbol in ([]rune{'B', '𐍈', 0, 'A'}) {
+		// Reuse styles with an one- through four-byte UTF-8 and empty glyph.
+		for symbol in ([]rune{'B', 'é', '█', '𐍈', 0, 'A'}) {
 			engine.set_symbol(&e, a, symbol)
 			testing.expect(t, !e.particles.private_appearance[a].dirty)
 			testing.expect_value(t, e.particles.private_appearance[a].bytes, private_prefix)

@@ -1,0 +1,5 @@
+effect	before_ms	after_ms	before_frames	after_frames	before_mean_ms	after_mean_ms	before_cpu_ms	after_cpu_ms	before_rss_kib	after_rss_kib
+beams	30.4	22.0	890	890	30.4	22.0	30.3	21.9	14024.0	13820.0
+bubbles	65.4	56.8	11658	11658	65.6	56.8	65.3	56.6	11264.0	11220.0
+spotlights	42.4	38.7	780	780	43.1	39.3	42.9	39.2	9496.0	9464.0
+burn	40.8	25.7	3237	3237	40.9	25.7	40.7	25.5	14336.0	14404.0

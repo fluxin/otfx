@@ -20,7 +20,8 @@ frame_without_padding :: proc(e: ^engine.Engine, allocator := context.temp_alloc
 draw_at :: proc(e: ^engine.Engine, cell: int) -> i32 {
 	width, height := e.layout.visible_right, e.layout.visible_top
 	top_down := (height - 1 - cell / width) * width + cell % width
-	return i32(e.cells[top_down].top)
+	if id := e.cells[top_down].top; id != engine.NO_PARTICLE do return i32(id)
+	return -1
 }
 
 expect_frame_cell :: proc(
@@ -48,7 +49,7 @@ expect_visible_draws :: proc(t: ^testing.T, e: ^engine.Engine) {
 	testing.expect_value(t, err, engine.Input_Error.None)
 	for entry, index in e.cells {
 		id := entry.top
-		if id < 0 do continue
+		if id == engine.NO_PARTICLE do continue
 		row, col := index / e.layout.visible_right, index % e.layout.visible_right
 		// A delta contains only rewritten rows. Held rows remain on screen.
 		if row >= len(lines) || lines[row].width == 0 do continue

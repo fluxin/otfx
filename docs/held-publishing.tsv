@@ -1,0 +1,5 @@
+effect	before_ms	after_ms	before_frames	after_frames	before_mean_ms	after_mean_ms	before_cpu_ms	after_cpu_ms	before_rss_kib	after_rss_kib
+wipe	5.1	4.6	138.0	138.0	5.1	4.6	5.0	4.6	16016.0	15984.0
+highlight	3.6	3.4	129.0	129.0	3.6	3.4	3.5	3.3	11220.0	11248.0
+decrypt	28.6	24.6	5480.0	5480.0	28.6	24.6	28.5	24.5	18680.0	18720.0
+scattered	47.9	44.8	420.0	420.0	47.9	44.8	47.7	44.6	9908.0	9852.0

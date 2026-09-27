@@ -252,6 +252,7 @@ bubbles_mixed_styles_finish_the_longest_scene :: proc(t: ^testing.T) {
 	effects.bubbles_build(&s, &e)
 	free_all(context.temp_allocator)
 	s.next_bubble = len(s.bubbles.spans)
+	append(&s.active_bubbles, 0)
 	s.bubble_states[0] = .Pop
 	for id in s.characters {
 		s.pop_origins[id], s.pop_targets[id] =

@@ -28,18 +28,15 @@ stats_rows :: proc(e: ^Engine) {
 	when FRAME_STATS_ENABLED {
 		dirty, cursor := 0, 0
 		rows := bit_array.make_iterator(&e.emit_rows)
-		for row_index, ok := bit_array.iterate_by_set(&rows);
-		    ok;
-		    row_index, ok = bit_array.iterate_by_set(&rows) {
+		for row_index, ok := next_dirty_bit(&rows); ok; row_index, ok = next_dirty_bit(&rows) {
 			row := &e.rows[row_index]
 			dirty += 1
 			e.stats.cursor_moves += int(row_index != cursor)
 			cursor = row_index
 			blank := false
 			for cell in row.cells {
-				id := cell.top
 				e.stats.cells += 1
-				if id < 0 {
+				if cell.top == NO_PARTICLE {
 					e.stats.blank_cells += 1
 					if !blank do e.stats.blank_spans += 1
 					blank = true

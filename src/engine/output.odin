@@ -65,7 +65,7 @@ frame_bytes :: proc(e: ^Engine, allocator := context.temp_allocator) -> []byte {
 	move: [24]byte
 	length, cursor := 0, 0
 	rows := bit_array.make_iterator(&e.emit_rows)
-	for i, ok := bit_array.iterate_by_set(&rows); ok; i, ok = bit_array.iterate_by_set(&rows) {
+	for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
 		row := &e.rows[i]
 		length += len(row_move(move[:], i - cursor)) + len(row.bytes)
 		cursor = i
@@ -74,7 +74,7 @@ frame_bytes :: proc(e: ^Engine, allocator := context.temp_allocator) -> []byte {
 	used := 0
 	cursor = 0
 	rows = bit_array.make_iterator(&e.emit_rows)
-	for i, ok := bit_array.iterate_by_set(&rows); ok; i, ok = bit_array.iterate_by_set(&rows) {
+	for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
 		used += copy(out[used:], row_move(move[:], i - cursor))
 		used += copy(out[used:], e.rows[i].bytes)
 		cursor = i
@@ -112,14 +112,14 @@ write_vectors :: proc(fd: linux.Fd, vectors: []linux.IO_Vec, e: ^Engine = nil) -
 
 print_frame :: proc(e: ^Engine) {
 	when FRAME_STATS_ENABLED {e.stats.clock = time.tick_now()}
-	storage: [1024]linux.IO_Vec
+	storage: [1024]linux.IO_Vec = ---
 	moves: [1024][24]byte = ---
 	prefix := transmute([]byte)Frame_Origin
 	storage[0] = {raw_data(prefix), uint(len(prefix))}
 	count := 1
 	cursor := 0
 	rows := bit_array.make_iterator(&e.emit_rows)
-	for i, ok := bit_array.iterate_by_set(&rows); ok; i, ok = bit_array.iterate_by_set(&rows) {
+	for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
 		for bytes in ([2][]byte{row_move(moves[count][:], i - cursor), e.rows[i].bytes}) {
 			if len(bytes) == 0 do continue
 			storage[count] = {raw_data(bytes), uint(len(bytes))}

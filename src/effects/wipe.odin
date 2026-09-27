@@ -181,9 +181,12 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 		if s.active_by_id[id] == 0 do continue
 		span := s.frame_spans[id]
 		age := s.tick - s.start_ticks[id]
-		frame := age / s.config.final_gradient_frames
-		engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
-		engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
+		// Activation (including re-entry) publishes sample zero; held ticks do not.
+		if age % s.config.final_gradient_frames == 0 {
+			frame := age / s.config.final_gradient_frames
+			engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
+			engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
+		}
 		if age + 1 == span.len * s.config.final_gradient_frames {
 			s.active_by_id[id] = 0
 		} else {

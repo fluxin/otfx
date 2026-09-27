@@ -65,6 +65,8 @@ swarm_parse :: proc(cfg: ^Swarm_Config, args: []string) -> bool {
 	return true
 }
 
+SWARM_BATCH_FRAMES :: 16
+
 SWARM_FLASH_ENTRIES :: 26 // eight ramp entries, ten flash entries, eight returning
 
 // A swarm is a contiguous slice, while each source glyph owns a fixed-width
@@ -75,7 +77,10 @@ Swarm_State :: struct {
 	index_by_id:        [dynamic]int,
 	group_by_index:     [dynamic]int,
 	final_colors:       [dynamic]engine.Color,
-	landing_colors:     [dynamic][11]engine.Color_Pair,
+	frames:             #soa[dynamic]engine.Sequence_Frame,
+	frame_starts:       [dynamic]int,
+	frame_ends:         [dynamic]int,
+	factors:            [SWARM_BATCH_FRAMES]f64,
 	swarms:             engine.Particle_Groups,
 	group_stage_counts: [dynamic]int,
 	flash_colors:       [dynamic]engine.Color,
@@ -140,7 +145,9 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
-	s.landing_colors = make([dynamic][11]engine.Color_Pair, n)
+	s.frames = make(#soa[dynamic]engine.Sequence_Frame, n * SWARM_BATCH_FRAMES)
+	s.frame_starts = make([dynamic]int, n)
+	s.frame_ends = make([dynamic]int, n)
 	s.waypoints = make([dynamic]engine.Coord, n * s.stage_stride)
 	s.lane_origins = make([dynamic]engine.Coord, n * s.stage_stride)
 	s.lane_starts = make([dynamic]int, n * s.stage_stride)
@@ -157,36 +164,6 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
-		input := engine.get_initial_appearance(e, id)
-		for step in 0 ..< 11 {
-			appearance := engine.get_appearance(e, id)
-			if s.color_handling == .Dynamic {
-				if input.colors.fg == nil && input.colors.bg == nil {
-					appearance.colors.fg = engine.gradient_between_step(
-						s.config.flash_color,
-						engine.Color{255, 255, 255},
-						10,
-						step,
-					)
-				} else {
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						s.config.flash_color,
-						input,
-						10,
-						step,
-					)
-				}
-			} else {
-				appearance.colors.fg = engine.gradient_between_step(
-					s.config.flash_color,
-					s.final_colors[i],
-					10,
-					step,
-				)
-			}
-			s.landing_colors[i][step] = appearance.colors
-		}
 		visible_flags[id] -= {.Visible}
 		current_coords[id] = engine.canvas_random_coord(e.canvas, true, false)
 	}
@@ -444,7 +421,8 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 		i := s.index_by_id[id]
 		s.character_stages[i] = 0
 		engine.set_particle(e, id, s.lane_origins[swarm_lane_index(s, i, 0)])
-		engine.set_particle(e, id, engine.Visible(true))
+		engine.set_placement(e, id, e.particles.current_coord[id], true, 1)
+		engine.set_symbol(e, id, e.particles.initial_symbol[id])
 		append(&s.active_indexes, i)
 	}
 }
@@ -456,72 +434,104 @@ swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
 
 	write := 0
 	for i in s.active_indexes {
-		group := s.group_by_index[i]
-		stage_count := s.group_stage_counts[group]
-		stage := s.character_stages[i]
 		id := s.characters[i]
-		row := swarm_lane_index(s, i, stage)
-		// Coordination can replace a newly entered lane in the same tick.
-		// Skip every expired lane before deciding between motion and landing.
-		for s.tick >= s.lane_ends[row] && s.lane_next[row] >= 0 {
-			stage = s.lane_next[row]
-			s.character_stages[i] = stage
-			row = swarm_lane_index(s, i, stage)
-		}
-		if s.tick >= s.lane_ends[row] {
-			if s.tick >= s.lane_finish[i] {
-				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					engine.dynamic_apply_input_colors(
-						&appearance,
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					engine.set_foreground(e, id, s.final_colors[i])
+		if s.tick >= s.frame_ends[i] {
+			group := s.group_by_index[i]
+			stage_count := s.group_stage_counts[group]
+			stage := s.character_stages[i]
+			row := swarm_lane_index(s, i, stage)
+			// Resolve phase transitions only when replenishing this frame chunk.
+			for s.tick >= s.lane_ends[row] && s.lane_next[row] >= 0 {
+				stage = s.lane_next[row]
+				s.character_stages[i] = stage
+				row = swarm_lane_index(s, i, stage)
+			}
+			if s.tick >= s.lane_ends[row] {
+				if s.tick >= s.lane_finish[i] {
+					if s.color_handling == .Dynamic {
+						appearance := engine.get_appearance(e, id)
+						engine.dynamic_apply_input_colors(
+							&appearance,
+							engine.get_initial_appearance(e, id),
+						)
+						engine.set_appearance(e, id, appearance)
+					} else {
+						engine.set_foreground(e, id, s.final_colors[i])
+					}
+					continue
 				}
-				continue
+				engine.set_layer(e, id, engine.Layer(0))
+				swarm_batch_landing(s, e, i, stage, row)
+			} else {
+				// Planned lanes start at launch or at the previous lane's end.
+				assert(s.tick >= s.lane_starts[row])
+				swarm_batch_motion(s, e, i, stage, row, stage_count)
 			}
-			engine.set_particle(e, id, engine.Layer(0))
-			landing_step := min((s.tick - s.lane_ends[row]) / 3, 10)
-			appearance := engine.get_appearance(e, id)
-			appearance.colors = s.landing_colors[i][landing_step]
-			if s.color_handling == .Dynamic && s.tick - s.lane_ends[row] >= 33 {
-				appearance.colors = engine.get_initial_appearance(e, id).colors
-			}
-			engine.set_appearance(e, id, appearance)
-			engine.set_particle(e, id, swarm_waypoint(s, i, stage))
-			s.active_indexes[write] = i
-			write += 1
-			continue
 		}
-		if s.tick >= s.lane_starts[row] {
-			progress := f64(s.tick - s.lane_starts[row] + 1) / f64(s.lane_steps[row])
-			factor := ease.ease(swarm_stage_easing(stage, stage_count), progress)
-			engine.set_particle(
-				e,
-				id,
-				engine.coord_on_line(s.lane_origins[row], swarm_waypoint(s, i, stage), factor),
-			)
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-			engine.set_particle(e, id, engine.Layer(1))
-			entry := 0
-			if stage % 3 == 0 {
-				// Entry and landing flash through a mirrored palette as distance
-				// progresses. Inner paths retain the base color.
-				distance_fraction := factor
-				entry = clamp(
-					engine.round_to_int(f64(SWARM_FLASH_ENTRIES - 1) * distance_fraction),
-					0,
-					SWARM_FLASH_ENTRIES - 1,
-				)
-			}
-			engine.set_foreground(e, id, s.flash_colors[group * SWARM_FLASH_ENTRIES + entry])
-		}
+		sample := i * SWARM_BATCH_FRAMES + s.tick - s.frame_starts[i]
+		engine.set_particle(e, id, s.frames[sample])
 		s.active_indexes[write] = i
 		write += 1
 	}
 	resize(&s.active_indexes, write)
 	s.tick += 1
 	return true
+}
+
+// A chunk never crosses a planned lane interruption or landing transition.
+// Planning and RNG remain in build; these actions only evaluate frame data.
+swarm_batch_motion :: proc(s: ^Swarm_State, e: ^engine.Engine, i, stage, row, stage_count: int) {
+	count := min(SWARM_BATCH_FRAMES, s.lane_ends[row] - s.tick)
+	s.frame_starts[i], s.frame_ends[i] = s.tick, s.tick + count
+	base := i * SWARM_BATCH_FRAMES
+	group := s.group_by_index[i]
+	palette := group * SWARM_FLASH_ENTRIES
+	actions := [?]engine.Sequence_Action {
+		engine.Ease_Action{swarm_stage_easing(stage, stage_count)},
+		engine.Move_Action{s.lane_origins[row], swarm_waypoint(s, i, stage)},
+		engine.Palette_Action {
+			s.flash_colors[palette:palette + SWARM_FLASH_ENTRIES],
+			engine.get_appearance(e, s.characters[i]).colors,
+			stage % 3 == 0,
+		},
+	}
+	keypoints := [?]engine.Sequence_Keypoint {
+		{s.lane_starts[row], s.lane_starts[row] + s.lane_steps[row], actions[:]},
+	}
+	engine.sequence_batch(s.frames[base:base + count], s.factors[:], s.tick, keypoints[:])
+}
+
+swarm_batch_landing :: proc(s: ^Swarm_State, e: ^engine.Engine, i, stage, row: int) {
+	id := s.characters[i]
+	age := s.tick - s.lane_ends[row]
+	count := min(SWARM_BATCH_FRAMES, s.lane_finish[i] - s.tick)
+	input := engine.get_initial_appearance(e, id).colors
+	color_action: engine.Sequence_Action
+	if s.color_handling == .Dynamic && age >= 33 {
+		color_action = engine.Colors_Action{input}
+	} else {
+		if s.color_handling == .Dynamic do count = min(count, 33 - age)
+		from, to := engine.get_appearance(e, id).colors, engine.get_appearance(e, id).colors
+		from.fg, to.fg = s.config.flash_color, s.final_colors[i]
+		if s.color_handling == .Dynamic {
+			if input.fg == nil && input.bg == nil {
+				to.fg = engine.Color{255, 255, 255}
+			} else {
+				to = input
+				from = {
+					fg = s.config.flash_color,
+					bg = s.config.flash_color,
+				}
+			}
+		}
+		color_action = engine.Gradient_Action{from, to, 3, 10}
+	}
+	s.frame_starts[i], s.frame_ends[i] = s.tick, s.tick + count
+	base := i * SWARM_BATCH_FRAMES
+	actions := [?]engine.Sequence_Action {
+		engine.Position_Action{swarm_waypoint(s, i, stage)},
+		color_action,
+	}
+	keypoints := [?]engine.Sequence_Keypoint{{s.lane_ends[row], s.lane_finish[i], actions[:]}}
+	engine.sequence_batch(s.frames[base:base + count], s.factors[:], s.tick, keypoints[:])
 }

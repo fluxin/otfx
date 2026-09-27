@@ -63,9 +63,11 @@ scattered_parse :: proc(cfg: ^Scattered_Config, args: []string) -> bool {
 Scattered_State :: struct {
 	config:         Scattered_Config,
 	characters:     [dynamic]engine.Particle_Id,
+	active_indexes: [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	origins:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
+	color_steps:    [dynamic]u8, // last published gradient sample; build installs zero
 	step_limit:     int,
 	tick:           int,
 	initial_hold:   int,
@@ -100,8 +102,11 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.origins = make([dynamic]engine.Coord, n)
+	s.active_indexes = make([dynamic]int, n)
 	s.max_steps = make([dynamic]int, n)
+	if s.color_handling != .Dynamic do s.color_steps = make([dynamic]u8, n)
 	for id, i in s.characters {
+		s.active_indexes[i] = i
 		c := e.particles.initial_coord[id]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
 
@@ -137,11 +142,11 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 		s.initial_hold -= 1
 		return true
 	}
-	for id, i in s.characters {
+	write := 0
+	for i in s.active_indexes {
+		id := s.characters[i]
 		steps := s.max_steps[i]
-		// The arrival tick already published the final coordinate, color, and layer.
-		if s.tick >= steps do continue
-		progress := f64(min(s.tick + 1, steps)) / f64(steps)
+		progress := f64(s.tick + 1) / f64(steps)
 		engine.set_particle(
 			e,
 			id,
@@ -151,40 +156,35 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 				ease.ease(s.config.movement_easing, progress),
 			),
 		)
-		if s.color_handling == .Dynamic {
-			appearance := engine.get_appearance(e, id)
-			engine.dynamic_apply_input_colors(
-				&appearance,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)),
-			)
-			engine.set_appearance(e, id, appearance)
-		} else {
-			engine.set_foreground(
-				e,
-				id,
-				engine.gradient_between_step(
-					s.config.final_gradient_stops[0],
-					s.final_colors[i],
-					10,
-					min(engine.round_to_int(progress * 9), 10),
-				),
-			)
+		// Dynamic input colors are installed during build and never change here.
+		if s.color_handling != .Dynamic {
+			step := min(engine.round_to_int(progress * 9), 10)
+			if u8(step) != s.color_steps[i] {
+				s.color_steps[i] = u8(step)
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.config.final_gradient_stops[0],
+						s.final_colors[i],
+						10,
+						step,
+					),
+				)
+			}
 		}
 		if s.tick + 1 >= steps {
 			engine.set_particle(e, id, e.particles.initial_coord[id])
-			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_apply_input_colors(
-					&appearance,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				)
-				engine.set_appearance(e, id, appearance)
-			} else {
+			if s.color_handling != .Dynamic {
 				engine.set_foreground(e, id, s.final_colors[i])
 			}
 			engine.set_particle(e, id, engine.Layer(0))
+		} else {
+			s.active_indexes[write] = i
+			write += 1
 		}
 	}
+	resize(&s.active_indexes, write)
 	s.tick += 1
 	return true
 }

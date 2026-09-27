@@ -7,6 +7,88 @@ import "core:mem"
 import "core:testing"
 
 @(test)
+unstable_settled_motion_keeps_dynamic_color_finish :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.ignore_terminal_dimensions = true
+	cfg.existing_color_handling = .Dynamic
+	rand.reset_u64(42)
+	e, err := engine.engine_make("\x1b[31;44mA\x1b[0m B", cfg)
+	testing.expect(t, err == .None)
+	s := effects.Unstable_State {
+		config = effects.unstable_config_default(),
+	}
+	s.config.explosion_speed, s.config.reassembly_speed = 100000, 100000
+	effects.unstable_build(&s, &e)
+	free_all(context.temp_allocator)
+	frames, restored := 0, false
+	for effects.unstable_next(&s, &e) {
+		if s.phase == .Reassembly {
+			for id in s.characters {
+				testing.expect_value(
+					t,
+					e.particles[id].current_coord,
+					e.particles[id].initial_coord,
+				)
+				if engine.get_initial_appearance(&e, id).colors.fg == nil {
+					fg := engine.get_appearance(&e, id).colors.fg
+					if s.phase_tick == 39 do testing.expect(t, fg != nil)
+					if s.phase_tick == 40 {
+						testing.expect(t, fg == nil)
+						restored = true
+					}
+				}
+			}
+		}
+		engine.frame_build(&e)
+		free_all(context.temp_allocator)
+		frames += 1
+		if frames > 300 {testing.expect(t, false, "unstable did not finish"); break}
+	}
+	testing.expect(t, restored)
+	testing.expect_value(t, frames, 150 + 1 + 30 + 42)
+	for id in s.characters {
+		testing.expect_value(
+			t,
+			engine.get_appearance(&e, id).colors,
+			engine.get_initial_appearance(&e, id).colors,
+		)
+	}
+}
+
+@(test)
+spotlights_stationary_frames_still_advance_and_restore_colors :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	cfg := engine.config_default()
+	cfg.ignore_terminal_dimensions = true
+	cfg.existing_color_handling = .Dynamic
+	e, err := engine.engine_make("X", cfg)
+	testing.expect(t, err == .None)
+	s := effects.Spotlights_State {
+		config = effects.spotlights_config_default(),
+	}
+	s.config.spotlight_count, s.config.search_duration = 1, 2
+	effects.spotlights_build(&s, &e)
+	free_all(context.temp_allocator)
+	s.spot_positions[0], s.spot_origins[0] = e.canvas.center, e.canvas.center
+	s.spot_controls[0], s.spot_targets[0] = e.canvas.center, e.canvas.center
+	s.spot_steps[0], s.spot_ticks[0] = 100, 0
+	id := s.characters[0]
+	for frame in 0 ..< 4 {
+		testing.expect(t, step_frame(effects.spotlights_next, &s, &e))
+		if frame < 3 do testing.expect(t, engine.get_appearance(&e, id).colors.fg != nil)
+	}
+	testing.expect_value(t, s.phase, effects.Spotlights_Phase.Expand)
+	testing.expect(t, engine.get_appearance(&e, id).colors.fg == nil)
+}
+
+@(test)
 expand_publishes_arrival_before_retiring :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)

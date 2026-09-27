@@ -1,0 +1,7 @@
+effect	before_ms	after_ms	before_frames	after_frames	before_mean_ms	after_mean_ms	before_cpu_ms	after_cpu_ms	before_rss_kib	after_rss_kib	screen
+middleout	30.2	22.3	235	235	30.2	22.3	30.1	22.2	11808.0	11608.0	bench-active.log
+swarm	120.3	116.1	4312	4312	120.3	116.4	120.0	116.0	23532.0	23300.0	bench-active.log
+spray	49.3	28.2	1253	1253	49.4	28.2	49.2	28.1	9684.0	9664.0	bench-spray-final.log
+scattered	54.0	52.3	420	420	54.0	52.3	53.8	52.1	9636.0	9704.0	bench-active.log
+unstable	59.2	43.8	592	592	59.2	43.9	59.0	43.7	9880.0	10116.0	bench-active.log
+spotlights	49.9	42.5	780	780	49.9	42.7	49.8	42.5	9508.0	9504.0	bench-active.log

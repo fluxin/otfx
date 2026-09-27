@@ -2,6 +2,7 @@ package effects
 
 import "../engine"
 
+import "core:container/bit_array"
 import "core:fmt"
 import "core:math/ease"
 import "core:math/rand"
@@ -73,24 +74,28 @@ Spotlights_Phase :: enum {
 }
 
 Spotlights_State :: struct {
-	config:           Spotlights_Config,
-	characters:       [dynamic]engine.Particle_Id,
-	bright_colors:    [dynamic]engine.Color,
-	dark_colors:      [dynamic]engine.Color,
-	bright_bg:        [dynamic]Maybe(engine.Color),
-	dark_bg:          [dynamic]Maybe(engine.Color),
-	spot_positions:   [dynamic]engine.Coord,
-	spot_origins:     [dynamic]engine.Coord,
-	spot_targets:     [dynamic]engine.Coord,
-	spot_controls:    [dynamic]engine.Coord,
-	spot_steps:       [dynamic]int,
-	spot_ticks:       [dynamic]int,
-	spot_speeds:      [dynamic]f64,
-	phase:            Spotlights_Phase,
-	phase_tick:       int,
-	illuminate_range: int,
-	expand_limit:     int,
-	color_handling:   engine.Existing_Color_Handling,
+	config:                   Spotlights_Config,
+	characters:               [dynamic]engine.Particle_Id,
+	rows:                     []engine.Span, // spans into the immutable, row-ordered characters
+	lit:                      [dynamic]int,
+	candidates:               bit_array.Bit_Array,
+	bright_colors:            [dynamic]engine.Color,
+	dark_colors:              [dynamic]engine.Color,
+	bright_bg:                [dynamic]Maybe(engine.Color),
+	dark_bg:                  [dynamic]Maybe(engine.Color),
+	spot_positions:           [dynamic]engine.Coord,
+	spot_origins:             [dynamic]engine.Coord,
+	spot_targets:             [dynamic]engine.Coord,
+	spot_controls:            [dynamic]engine.Coord,
+	spot_steps:               [dynamic]int,
+	spot_ticks:               [dynamic]int,
+	spot_speeds:              [dynamic]f64,
+	phase:                    Spotlights_Phase,
+	phase_tick:               int,
+	illuminate_range:         int,
+	expand_limit:             int,
+	color_handling:           engine.Existing_Color_Handling,
+	illumination_initialized: bool,
 }
 
 spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) {
@@ -139,6 +144,9 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.rows = make([]engine.Span, e.canvas.top + 1)
+	reserve(&s.lit, n)
+	bit_array.init(&s.candidates, n)
 	s.bright_colors = make([dynamic]engine.Color, n)
 	s.dark_colors = make([dynamic]engine.Color, n)
 	s.bright_bg = make([dynamic]Maybe(engine.Color), n)
@@ -147,6 +155,9 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	visible_flags := e.particles.flags
 
 	for id, i in s.characters {
+		row := &s.rows[initial_coords[id].row]
+		if row.len == 0 do row.start = i
+		row.len += 1
 		bright := engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		if s.color_handling == .Dynamic {
 			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
@@ -180,10 +191,16 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	)
 	s.expand_limit = max(int(f64(max(e.canvas.right, e.canvas.top)) / 1.5), s.illuminate_range)
 	s.phase = .Search
+	s.illumination_initialized = false
 }
 
-spotlights_update_positions :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
-	all_arrived := true
+spotlights_update_positions :: proc(
+	s: ^Spotlights_State,
+	e: ^engine.Engine,
+) -> (
+	all_arrived, moved: bool,
+) {
+	all_arrived = true
 	for i in 0 ..< len(s.spot_positions) {
 		steps := s.spot_steps[i]
 		tick := s.spot_ticks[i]
@@ -191,22 +208,28 @@ spotlights_update_positions :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> 
 			all_arrived = false
 			progress := f64(tick + 1) / f64(steps)
 			ease_type := s.phase == .Converge ? ease.Ease.Sine_In_Out : ease.Ease.Quadratic_In_Out
-			s.spot_positions[i] = engine.coord_on_quadratic_bezier(
+			position := engine.coord_on_quadratic_bezier(
 				s.spot_origins[i],
 				s.spot_controls[i],
 				s.spot_targets[i],
 				ease.ease(ease_type, progress),
 			)
+			moved = moved || position != s.spot_positions[i]
+			s.spot_positions[i] = position
 			s.spot_ticks[i] += 1
 		}
 		if s.phase == .Search && s.spot_ticks[i] == steps do spotlights_new_target(s, e, i)
 	}
-	return all_arrived
+	return
 }
 
 spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
+	// Illumination depends on integer positions, range, and the Expand color rule.
+	restore_input := false
+	repaint := !s.illumination_initialized || s.phase == .Expand
 	if s.phase == .Search {
-		spotlights_update_positions(s, e)
+		_, moved := spotlights_update_positions(s, e)
+		repaint = repaint || moved
 		s.phase_tick += 1
 		if s.phase_tick == s.config.search_duration {
 			s.phase = .Converge
@@ -225,20 +248,49 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 			}
 		}
 	} else if s.phase == .Converge {
-		if spotlights_update_positions(s, e) {
+		arrived, moved := spotlights_update_positions(s, e)
+		repaint = repaint || moved
+		if arrived {
 			s.phase = .Expand
+			restore_input = s.color_handling == .Dynamic
 			for i in 0 ..< len(s.spot_positions) do s.spot_positions[i] = e.canvas.center
+			repaint = true
 		}
 	} else {
 		if s.illuminate_range > s.expand_limit do return false
 	}
+	if !repaint do return true
+	s.illumination_initialized = true
 
 	initial_coords := e.particles.initial_coord
-	for id, i in s.characters {
+	// Every spotlight is at the center during expansion; one distance suffices.
+	spot_count := 1 if s.phase == .Expand else len(s.spot_positions)
+	// Visit the new light bounds plus the old lit set, so departures darken.
+	for i in s.lit do bit_array.set(&s.candidates, i)
+	clear(&s.lit)
+	if restore_input {
+		// Dynamic nil foregrounds restore on Expand even outside the light.
+		for i in 0 ..< len(s.characters) do bit_array.set(&s.candidates, i)
+	} else {
+		for spot in s.spot_positions[:spot_count] {
+			bottom := max(spot.row - s.illuminate_range / 2, 1)
+			top := min(spot.row + s.illuminate_range / 2, e.canvas.top)
+			left, right := spot.column - s.illuminate_range, spot.column + s.illuminate_range
+			for row_index := bottom; row_index <= top; row_index += 1 {
+				row := s.rows[row_index]
+				for id, offset in s.characters[row.start:row.start + row.len] {
+					column := initial_coords[id].column
+					if column < left do continue
+					if column > right do break
+					bit_array.set(&s.candidates, row.start + offset)
+				}
+			}
+		}
+	}
+	it := bit_array.make_iterator(&s.candidates)
+	for i, ok := bit_array.iterate_by_set(&it); ok; i, ok = bit_array.iterate_by_set(&it) {
+		id := s.characters[i]
 		appearance := engine.get_appearance(e, id)
-		p := initial_coords[id]
-		nearest := engine.line_length(s.spot_positions[0], p, true)
-		for j in 1 ..< len(s.spot_positions) do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
 		if s.color_handling == .Dynamic &&
 		   s.phase == .Expand &&
 		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil {
@@ -248,12 +300,16 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 			engine.set_appearance(e, id, appearance)
 			continue
 		}
+		p := initial_coords[id]
+		nearest := engine.line_length(s.spot_positions[0], p, true)
+		for j in 1 ..< spot_count do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
 		if nearest > f64(s.illuminate_range) {
 			appearance.colors.fg = s.dark_colors[i]
 			appearance.colors.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
 			engine.set_appearance(e, id, appearance)
 			continue
 		}
+		append(&s.lit, i)
 		bright := s.bright_colors[i]
 		if s.config.beam_falloff > 0 &&
 		   nearest > f64(s.illuminate_range) * (1 - s.config.beam_falloff) {
@@ -274,6 +330,7 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 		}
 		engine.set_appearance(e, id, appearance)
 	}
+	bit_array.clear(&s.candidates)
 	if s.phase == .Expand do s.illuminate_range += 1
 	return true
 }

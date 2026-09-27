@@ -2,6 +2,107 @@ package engine
 
 import "core:math/ease"
 
+// Actions fill borrowed frame columns. The caller owns chunk size, lifetime,
+// phase boundaries and playback; dispatch happens once per action, not sample.
+Sequence_Frame :: struct {
+	coord:  Coord,
+	colors: Color_Pair,
+}
+
+Ease_Action :: struct {
+	fn: ease.Ease,
+}
+
+Move_Action :: struct {
+	from, to: Coord,
+}
+
+Palette_Action :: struct {
+	colors: []Color,
+	base:   Color_Pair,
+	eased:  bool,
+}
+
+Gradient_Action :: struct {
+	from, to:    Color_Pair,
+	hold, steps: int,
+}
+
+Position_Action :: struct {
+	value: Coord,
+}
+Colors_Action :: struct {
+	value: Color_Pair,
+}
+
+Sequence_Action :: union {
+	Ease_Action,
+	Move_Action,
+	Palette_Action,
+	Gradient_Action,
+	Position_Action,
+	Colors_Action,
+}
+
+// Keypoint times are frame boundaries [start, stop). Easing samples the end
+// of each frame: (tick + 1 - start) / (stop - start). Holds start at age zero.
+// Keypoints apply in slice order; later actions can overwrite earlier columns.
+Sequence_Keypoint :: struct {
+	start, stop: int,
+	actions:     []Sequence_Action,
+}
+
+sequence_batch :: proc(
+	frames: #soa[]Sequence_Frame,
+	factors: []f64,
+	first_tick: int,
+	keypoints: []Sequence_Keypoint,
+) {
+	assert(len(factors) >= len(frames))
+	for keypoint in keypoints {
+		assert(keypoint.stop >= keypoint.start)
+		start := clamp(keypoint.start - first_tick, 0, len(frames))
+		stop := clamp(keypoint.stop - first_tick, 0, len(frames))
+		if start == stop do continue
+		frames := frames[start:stop]
+		factors := factors[start:stop]
+		first := first_tick + start - keypoint.start
+		for action in keypoint.actions {
+			switch a in action {
+			case Ease_Action:
+				steps := keypoint.stop - keypoint.start
+				for &factor, i in factors do factor = ease.ease(a.fn, f64(first + i + 1) / f64(steps))
+			case Move_Action:
+				for &coord, i in frames.coord[:len(frames)] do coord = coord_on_line(a.from, a.to, factors[i])
+			case Palette_Action:
+				assert(len(a.colors) > 0)
+				for &colors, i in frames.colors[:len(frames)] {
+					entry :=
+						a.eased ? clamp(round_to_int(f64(len(a.colors) - 1) * factors[i]), 0, len(a.colors) - 1) : 0
+					colors = a.base
+					colors.fg = a.colors[entry]
+				}
+			case Gradient_Action:
+				assert(a.hold > 0 && a.steps > 0)
+				for &colors, i in frames.colors[:len(frames)] {
+					step := min((first + i) / a.hold, a.steps)
+					colors = a.to
+					if from, ok := a.from.fg.?; ok {
+						if to, ok := a.to.fg.?; ok do colors.fg = gradient_between_step(from, to, a.steps, step)
+					}
+					if from, ok := a.from.bg.?; ok {
+						if to, ok := a.to.bg.?; ok do colors.bg = gradient_between_step(from, to, a.steps, step)
+					}
+				}
+			case Position_Action:
+				for &coord in frames.coord[:len(frames)] do coord = a.value
+			case Colors_Action:
+				for &colors in frames.colors[:len(frames)] do colors = a.value
+			}
+		}
+	}
+}
+
 // Frame timeline construction and batched sample updates.
 
 Frame :: struct {
@@ -30,9 +131,13 @@ create_hold_timeline :: proc(
 	appearance: Appearance,
 	duration, count: int,
 ) -> Span {
-	assert(count >= 1)
+	assert(count >= 1 && duration >= 1)
 	start := len(frames^)
-	for _ in 0 ..< count do timeline_append_frame(frames, symbol, appearance, duration)
+	// Every column of the appended span is assigned before it is published.
+	non_zero_resize(frames, start + count)
+	for &value in frames.symbol[start:len(frames^)] do value = symbol
+	for &value in frames.appearance[start:len(frames^)] do value = appearance
+	for &value in frames.duration[start:len(frames^)] do value = duration
 	return {start, count}
 }
 
@@ -43,15 +148,15 @@ create_gradient_timeline :: proc(
 	start, end: Color,
 	steps: int,
 ) -> Span {
-	assert(steps >= 1)
+	assert(steps >= 1 && duration >= 1)
 	timeline_start := len(frames^)
-	for step in 0 ..= steps {
-		timeline_append_frame(
-			frames,
-			symbol,
-			Appearance{colors = {fg = gradient_between_step(start, end, steps, step)}},
-			duration,
-		)
+	non_zero_resize(frames, timeline_start + steps + 1)
+	for &value in frames.symbol[timeline_start:len(frames^)] do value = symbol
+	for &value in frames.duration[timeline_start:len(frames^)] do value = duration
+	for &appearance, step in frames.appearance[timeline_start:len(frames^)] {
+		appearance = Appearance {
+			colors = {fg = gradient_between_step(start, end, steps, step)},
+		}
 	}
 	return {timeline_start, steps + 1}
 }

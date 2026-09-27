@@ -49,7 +49,7 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.cells = make([]Render_Cell, width * height)
-	for &cell in e.cells do cell.top = -1
+	for &cell in e.cells do cell.top = NO_PARTICLE
 	e.rows = make([]Render_Row, height)
 	bit_array.init(&e.dirty_cells, width * height)
 	bit_array.init(&e.dirty_rows, height)

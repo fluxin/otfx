@@ -5,6 +5,39 @@ import "core:container/bit_array"
 import "core:mem"
 import "core:testing"
 
+// Every published occupant belongs to one sorted cell stack, including covered IDs.
+expect_published_cells :: proc(t: ^testing.T, e: ^engine.Engine) {
+	seen := make([]bool, len(e.particles))
+	defer delete(seen)
+	for cell, index in e.cells {
+		for entry, slot in cell.stack {
+			id := engine.Particle_Id(entry.id)
+			testing.expect(t, !seen[id])
+			seen[id] = true
+			testing.expect_value(t, e.particles[id].cell, index)
+			testing.expect_value(t, e.particles[id].layer, int(entry.layer))
+			if slot > 0 {
+				previous := cell.stack[slot - 1]
+				testing.expect(
+					t,
+					previous.layer < entry.layer ||
+					(previous.layer == entry.layer && previous.id < entry.id),
+				)
+			}
+		}
+		expected_top := engine.NO_PARTICLE
+		if len(cell.stack) > 0 do expected_top = engine.Particle_Id(cell.stack[len(cell.stack) - 1].id)
+		testing.expect_value(t, cell.top, expected_top)
+	}
+	for particle, id in e.particles do testing.expect_value(t, seen[id], particle.cell >= 0)
+}
+
+cell_layer_count :: proc(cell: engine.Render_Cell, layer: int) -> int {
+	count := 0
+	for entry in cell.stack do count += int(int(entry.layer) == layer)
+	return count
+}
+
 // Independent full-paint oracle: no retained membership or dirty state.
 raster_expected :: proc(e: ^engine.Engine, out: []i32) {
 	for &cell in out do cell = -1
@@ -72,6 +105,7 @@ frame_composition_matches_full_paint :: proc(t: ^testing.T) {
 				engine.set_foreground(&e, engine.Particle_Id(id), engine.Color{u8(tick), 100, 200})
 			}
 			engine.compose_frame(&e)
+			expect_published_cells(t, &e)
 			raster_expected(&e, expected)
 			engine.frame_build(&e)
 			for cell, index in expected do testing.expect_value(t, draw_at(&e, index), cell)
@@ -107,10 +141,7 @@ cell_layers_reuse_storage_and_reveal_lower_occupants :: proc(t: ^testing.T) {
 	}
 	engine.frame_build(&e)
 	storage :: proc(e: ^engine.Engine) -> (count, capacity: int) {
-		for ids in e.cells[0].layers {
-			count += len(ids)
-			capacity += cap(ids)
-		}
+		count, capacity = len(e.cells[0].stack), cap(e.cells[0].stack)
 		return
 	}
 	slots, _ := storage(&e)
@@ -120,11 +151,13 @@ cell_layers_reuse_storage_and_reveal_lower_occupants :: proc(t: ^testing.T) {
 		id := ids[(tick * 13) % len(ids)]
 		engine.set_particle(&e, id, engine.Visible(false))
 		engine.frame_build(&e)
+		expect_published_cells(t, &e)
 		raster_expected(&e, expected[:])
 		testing.expect_value(t, draw_at(&e, 0), expected[0])
 		engine.set_particle(&e, id, engine.Layer(((tick % 128) * 5) % 11))
 		engine.set_particle(&e, id, engine.Visible(true))
 		engine.frame_build(&e)
+		expect_published_cells(t, &e)
 		raster_expected(&e, expected[:])
 		testing.expect_value(t, draw_at(&e, 0), expected[0])
 		count, current_capacity := storage(&e)
@@ -132,11 +165,6 @@ cell_layers_reuse_storage_and_reveal_lower_occupants :: proc(t: ^testing.T) {
 		// Repeat the same layer transitions after warming every bucket.
 		if tick == 127 do capacity = current_capacity
 		if tick >= 128 do testing.expect_value(t, current_capacity, capacity)
-		for bucket, layer in e.cells[0].layers {
-			for occupant in bucket {
-				testing.expect_value(t, e.particles[occupant].layer, layer)
-			}
-		}
 	}
 	for id in ids do engine.set_particle(&e, id, engine.Visible(false))
 	engine.frame_build(&e)
@@ -153,7 +181,7 @@ cell_layers_reuse_storage_and_reveal_lower_occupants :: proc(t: ^testing.T) {
 }
 
 @(test)
-indexed_layers_reuse_warmed_storage :: proc(t: ^testing.T) {
+flat_cell_stack_reuses_storage_across_layers :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -169,8 +197,7 @@ indexed_layers_reuse_warmed_storage :: proc(t: ^testing.T) {
 	id := e.particle_sets.input[0]
 	engine.set_particle(&e, id, engine.Visible(true))
 	engine.frame_build(&e)
-	// Direct indices retain an array for each visited layer rather than retagging
-	// one empty bucket. Warming the range owns those first-use allocations.
+	// Changing layers reuses the same cell stack even across large layer values.
 	for layer in 0 ..= 128 {
 		engine.set_particle(&e, id, engine.Layer(layer))
 		engine.frame_build(&e)
@@ -182,8 +209,12 @@ indexed_layers_reuse_warmed_storage :: proc(t: ^testing.T) {
 		engine.frame_build(&e)
 		testing.expect_value(t, draw_at(&e, 0), i32(id))
 	}
-	testing.expect_value(t, len(e.cells[0].layers), 129)
+	testing.expect_value(t, len(e.cells[0].stack), 1)
+	engine.set_layer(&e, id, engine.Layer(max(u32)))
+	engine.frame_build(&e)
+	testing.expect_value(t, e.cells[0].stack[0].layer, max(u32))
 	testing.expect_value(t, track.total_allocation_count, allocations)
+	expect_published_cells(t, &e)
 }
 
 @(test)
@@ -388,5 +419,118 @@ frame_composition_clips_signed_extremes_and_empty_viewport :: proc(t: ^testing.T
 	for i in 0 ..< len(e.rows) do bit_array.set(&e.dirty_rows, i)
 	engine.set_particle(&e, id, engine.Coord{2 - e.layout.col_offset, 2 - e.layout.row_offset})
 	engine.frame_build(&e)
-	for cell in e.cells do testing.expect_value(t, cell.top, engine.Particle_Id(-1))
+	for cell in e.cells do testing.expect(t, cell.top == engine.NO_PARTICLE)
+}
+
+@(test)
+render_key_orders_full_u32_fields :: proc(t: ^testing.T) {
+	testing.expect_value(t, size_of(engine.Render_Key), 8)
+	low := engine.Render_Key {
+		id    = max(u32),
+		layer = 0,
+	}
+	high := engine.Render_Key {
+		id    = 0,
+		layer = 1,
+	}
+	last := engine.Render_Key {
+		id    = max(u32),
+		layer = max(u32),
+	}
+	testing.expect(t, transmute(u64)low < transmute(u64)high)
+	testing.expect_value(t, transmute(u64)last, max(u64))
+}
+
+@(test)
+layer_setter_rejects_unrepresentable_key :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	e, err := engine.engine_make("A", engine.config_default())
+	testing.expect_value(t, err, engine.Input_Error.None)
+	testing.expect_assert(t, "layer exceeds 32-bit render key")
+	engine.set_layer(&e, e.particle_sets.input[0], engine.Layer(u64(1) << 32))
+}
+
+@(test)
+placement_setter_rejects_unrepresentable_key :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	e, err := engine.engine_make("A", engine.config_default())
+	testing.expect_value(t, err, engine.Input_Error.None)
+	testing.expect_assert(t, "layer exceeds 32-bit render key")
+	engine.set_placement(&e, e.particle_sets.input[0], {1, 1}, true, int(u64(1) << 32))
+}
+
+@(test)
+particle_batch_rejects_unrepresentable_count :: proc(t: ^testing.T) {
+	e: engine.Engine
+	testing.expect_assert(t, "particle count exceeds 32-bit IDs")
+	engine.particle_batch(&e, int(u64(1) << 32))
+}
+
+@(test)
+particle_id_zero_is_distinct_from_an_empty_cell :: proc(t: ^testing.T) {
+	#assert(size_of(engine.Particle_Id) == 4)
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 1, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	testing.expect(t, e.cells[0].top == engine.NO_PARTICLE)
+	id := e.particle_sets.input[0]
+	testing.expect_value(t, id, engine.Particle_Id(0))
+	engine.set_visible(&e, id, true)
+	engine.frame_build(&e)
+	winner := e.cells[0].top
+	testing.expect(t, winner != engine.NO_PARTICLE)
+	testing.expect_value(t, winner, id)
+	engine.set_visible(&e, id, false)
+	engine.frame_build(&e)
+	testing.expect(t, e.cells[0].top == engine.NO_PARTICLE)
+	testing.expect_value(t, e.cells[0].bytes[0], u8(' '))
+	testing.expect_value(t, engine.NO_PARTICLE, max(engine.Particle_Id))
+}
+
+@(test)
+particle_constructor_rejects_empty_cell_sentinel :: proc(t: ^testing.T) {
+	e: engine.Engine
+	testing.expect_assert(t, "particle ID is reserved for an empty cell")
+	engine.init_particle(&e, engine.NO_PARTICLE, 'A', 1, {1, 1})
+}
+
+@(test)
+cell_stack_interior_growth_is_amortized :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	track: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&track, mem.dynamic_arena_allocator(&arena))
+	defer mem.tracking_allocator_destroy(&track)
+	context.allocator = mem.tracking_allocator(&track)
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 1, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("A", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	base := e.particle_sets.input[0]
+	engine.set_visible(&e, base, true)
+	ids: [512]engine.Particle_Id
+	batch := engine.particle_batch(&e, len(ids))
+	for &id in ids do id = engine.add_particle(&batch, 'X', e.particles[base].initial_appearance_id, {1, 1})
+	engine.frame_build(&e)
+	engine.set_visible(&e, ids[len(ids) - 1], true)
+	engine.frame_build(&e)
+	allocations := track.total_allocation_count
+	// Lower IDs arrive beneath the winner, forcing interior insertion as the
+	// stack grows. Capacity must not grow by one allocation per new occupant.
+	for i := len(ids) - 2; i >= 0; i -= 1 {
+		engine.set_visible(&e, ids[i], true)
+		engine.frame_build(&e)
+	}
+	testing.expect(t, track.total_allocation_count - allocations < 16)
+	testing.expect_value(t, len(e.cells[0].stack), len(ids) + 1)
+	testing.expect_value(t, e.cells[0].top, ids[len(ids) - 1])
+	expect_published_cells(t, &e)
 }

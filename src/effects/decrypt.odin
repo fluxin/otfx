@@ -247,6 +247,10 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Decrypting {
 		if s.decrypt_tick == s.decrypt_finish_tick do return false
 		if s.decrypt_tick < Decrypt_Fast_Ticks {
+			if s.decrypt_tick % 2 != 0 {
+				s.decrypt_tick += 1
+				return true
+			}
 			frame := s.decrypt_tick / 2
 			for base := 0; base < len(s.characters); base += 8 {
 				count := min(8, len(s.characters) - base)
@@ -255,9 +259,10 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 					i := base + lane
 					symbol := int(s.fast_symbols[i * Decrypt_Fast_Frames + frame])
 					engine.set_symbol(e, s.characters[i], s.encrypted_symbols[symbol])
-					codes[lane] = s.cipher_codes[s.color_index[i]]
+					if s.decrypt_tick == 0 do codes[lane] = s.cipher_codes[s.color_index[i]]
 				}
-				engine.set_appearances(e, s.characters[base:base + count], codes[:count])
+				// Cipher appearance is shared by the entire fast/slow phase.
+				if s.decrypt_tick == 0 do engine.set_appearances(e, s.characters[base:base + count], codes[:count])
 			}
 			s.decrypt_tick += 1
 			return true
@@ -268,19 +273,27 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 			id := s.characters[i]
 			base := i * Decrypt_Slow_Max_Frames
 			frame := int(s.slow_frame[i])
+			changed := slow_tick == 0
 			if frame < int(s.slow_counts[i]) && slow_tick >= s.slow_end_ticks[base + frame] {
 				frame += 1
 				s.slow_frame[i] = u8(frame)
+				changed = true
 			}
 			if frame < int(s.slow_counts[i]) {
-				symbol := int(s.slow_symbols[base + frame])
-				engine.set_symbol(e, id, s.encrypted_symbols[symbol])
-				engine.set_appearance(e, id, s.cipher_codes[s.color_index[i]])
+				if changed {
+					symbol := int(s.slow_symbols[base + frame])
+					engine.set_symbol(e, id, s.encrypted_symbols[symbol])
+				}
 				s.slow_active[write] = i
 				write += 1
 				continue
 			}
 			discovered_tick := slow_tick - s.slow_totals[i]
+			if discovered_tick % 5 != 0 {
+				s.slow_active[write] = i
+				write += 1
+				continue
+			}
 			appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
 			appearance := engine.Appearance{}
 			if s.color_handling == .Dynamic {
@@ -304,7 +317,7 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 					appearance.colors.fg = s.final_colors[i]
 				}
 			}
-			engine.set_symbol(e, id, appearance_symbol)
+			if discovered_tick == 0 do engine.set_symbol(e, id, appearance_symbol)
 			engine.set_appearance(e, id, appearance)
 			if discovered_tick < Decrypt_Discovered_Ticks {
 				s.slow_active[write] = i

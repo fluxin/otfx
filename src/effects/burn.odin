@@ -4,6 +4,7 @@ import "../engine"
 
 import "core:fmt"
 import "core:math/rand"
+import "core:slice"
 
 Burn_Char_Order :: [9]rune{'\'', '.', '▖', '▙', '█', '▜', '▀', '▝', '.'}
 Burn_Smoke_Symbols :: [6]rune{'.', ',', '\'', '`', '#', '*'}
@@ -66,28 +67,33 @@ burn_parse :: proc(cfg: ^Burn_Config, args: []string) -> bool {
 	return true
 }
 
+Burn_Source :: struct {
+	index, start_tick, next_update: int,
+}
+
 Burn_State :: struct {
-	config:            Burn_Config,
-	characters:        [dynamic]engine.Particle_Id,
-	final_colors:      [dynamic]engine.Color,
-	start_ticks:       [dynamic]int,
-	last_fire_tick:    int,
-	fire_palette:      [dynamic]engine.Color,
-	fire_symbols:      [dynamic]rune,
-	smoke_ids:         [dynamic]engine.Particle_Id,
-	smoke_start_ticks: [dynamic]int,
-	smoke_origins:     [dynamic]engine.Coord,
-	smoke_targets:     [dynamic]engine.Coord,
-	smoke_steps:       [dynamic]int,
-	next_smoke:        int,
-	active_smoke:      [dynamic]int,
-	tick:              int,
-	color_handling:    engine.Existing_Color_Handling,
+	config:                   Burn_Config,
+	characters:               [dynamic]engine.Particle_Id,
+	final_colors:             [dynamic]engine.Color,
+	sources:                  [dynamic]Burn_Source,
+	source_head, source_tail: int,
+	last_fire_tick:           int,
+	fire_palette:             [dynamic]engine.Color,
+	fire_symbols:             [dynamic]rune,
+	smoke_ids:                [dynamic]engine.Particle_Id,
+	smoke_start_ticks:        [dynamic]int,
+	smoke_origins:            [dynamic]engine.Coord,
+	smoke_targets:            [dynamic]engine.Coord,
+	smoke_steps:              [dynamic]int,
+	next_smoke:               int,
+	active_smoke:             [dynamic]int,
+	tick:                     int,
+	color_handling:           engine.Existing_Color_Handling,
 }
 
 // Random frontier growth (Python's PrimsSimple), including blank bridge cells.
-// Batch the growth and 2..4-cell ignition cadence once; replay keeps only each
-// source character's start tick. No tree or frontier survives construction.
+// Build the growth and 2..4-cell ignition cadence once. Replay retains source
+// start/wake ticks; no tree or frontier survives construction.
 burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
 	query := engine.Particle_Query {
 		e.particle_sets,
@@ -141,7 +147,7 @@ burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
 		   (e.particles.initial_symbol[engine.Particle_Id(id)] != ' ' ||
 				   s.color_handling != .Ignore) {
 			i := index_by_id[id]
-			s.start_ticks[i] = tick
+			append(&s.sources, Burn_Source{i, tick, tick})
 			final_ticks := 36
 			if s.color_handling == .Dynamic &&
 			   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil &&
@@ -189,7 +195,7 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
-	s.start_ticks = make([dynamic]int, n)
+	reserve(&s.sources, n)
 	s.smoke_start_ticks = make([dynamic]int, n)
 	s.smoke_origins = make([dynamic]engine.Coord, n)
 	s.smoke_targets = make([dynamic]engine.Coord, n)
@@ -205,12 +211,15 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 			final_spectrum[:],
 			initial_coords[id],
 		)
-		s.start_ticks[i] = -1
 		s.smoke_start_ticks[i] = -1
 		engine.set_foreground(e, id, s.config.starting_color)
 		visible_flags[id] += {.Visible}
 	}
 	burn_start_ticks(s, e)
+	slice.sort_by(s.sources[:], proc(a, b: Burn_Source) -> bool {
+		if a.start_tick != b.start_tick do return a.start_tick < b.start_tick
+		return a.index < b.index
+	})
 
 	// At most one smoke trail can be born from each source character. Allocate
 	// that exact maximum up front; no hidden per-frame particle allocation.
@@ -253,15 +262,17 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 	if !active do return false
 
 
-	for id, i in s.characters {
-		start_tick := s.start_ticks[i]
-		if start_tick < 0 do continue
-		age := s.tick - start_tick
-		if age < 0 do continue
-		if age >= fire_ticks + 36 {
-			s.start_ticks[i] = -1
-			continue
-		}
+	// Sources sleep until their next palette boundary. Equal ignition ticks
+	// retain character order, preserving the smoke RNG draw order.
+	for s.source_tail < len(s.sources) && s.sources[s.source_tail].start_tick <= s.tick do s.source_tail += 1
+	for s.source_head < s.source_tail && s.tick >= s.sources[s.source_head].start_tick + fire_ticks + 36 do s.source_head += 1
+	for &source in s.sources[s.source_head:s.source_tail] {
+		if s.tick < source.next_update do continue
+		source.next_update = s.tick + 4
+		i := source.index
+		id := s.characters[i]
+		age := s.tick - source.start_tick
+
 		if age < fire_ticks {
 			entry := age / 4
 			engine.set_symbol(e, id, s.fire_symbols[entry])
@@ -307,12 +318,15 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
 		}
 		s.active_smoke[write] = i
 		write += 1
-		progress := f64(min(age + 1, s.smoke_steps[i])) / f64(s.smoke_steps[i])
-		engine.set_particle(
-			e,
-			id,
-			engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress),
-		)
+		if age < s.smoke_steps[i] {
+			progress := f64(min(age + 1, s.smoke_steps[i])) / f64(s.smoke_steps[i])
+			engine.set_particle(
+				e,
+				id,
+				engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress),
+			)
+		}
+		if age % 10 != 0 || age > 90 do continue
 		engine.set_foreground(
 			e,
 			id,

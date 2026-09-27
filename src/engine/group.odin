@@ -2,7 +2,6 @@ package engine
 
 import "core:math/ease"
 import "core:math/rand"
-import "core:slice"
 
 // Particle queries, ordering, flat groups, and group reveal schedules.
 
@@ -70,6 +69,56 @@ collect_particles :: proc(q: Particle_Query, filter: Particle_Filter) -> [dynami
 	return all
 }
 
+
+// Construction-only keys. Stable passes retain coordinate order within groups.
+@(private = "file")
+Particle_Order_Row :: struct {
+	id:                    Particle_Id,
+	group_key, within_key: int,
+}
+
+// Stable byte passes over normalized integer keys; constant high bytes are skipped.
+@(private = "file")
+particle_order_rows :: proc(rows: []Particle_Order_Row) {
+	if len(rows) < 2 do return
+	low := [2]int{rows[0].within_key, rows[0].group_key}
+	high := low
+	for row in rows {
+		low[0], high[0] = min(low[0], row.within_key), max(high[0], row.within_key)
+		low[1], high[1] = min(low[1], row.group_key), max(high[1], row.group_key)
+	}
+	scratch := make([]Particle_Order_Row, len(rows))
+	defer delete(scratch)
+	source, destination := rows, scratch
+	for lane in 0 ..< 2 {
+		span := uint(high[lane]) - uint(low[lane])
+		for shift := uint(0); span != 0; shift, span = shift + 8, span >> 8 {
+			counts: [256]int
+			for row in source {
+				key := row.within_key if lane == 0 else row.group_key
+				bucket := ((uint(key) - uint(low[lane])) >> shift) & 255
+				counts[bucket] += 1
+			}
+			offset := 0
+			for &count in counts {
+				n := count
+				count = offset
+				offset += n
+			}
+			// Histogram prefix sums partition destination[0:len(source)]. Each
+			// bucket advances exactly its counted number of times; bucket is u8-sized.
+			#no_bounds_check for row in source {
+				key := row.within_key if lane == 0 else row.group_key
+				bucket := ((uint(key) - uint(low[lane])) >> shift) & 255
+				destination[counts[bucket]] = row
+				counts[bucket] += 1
+			}
+			source, destination = destination, source
+		}
+	}
+	if raw_data(source) != raw_data(rows) do copy(rows, source)
+}
+
 // Canonical order: (-row, column) — packed into a single non-negative key.
 get_particles :: proc(
 	q: Particle_Query,
@@ -77,20 +126,19 @@ get_particles :: proc(
 	srt: Particle_Sort,
 ) -> [dynamic]Particle_Id {
 	all := collect_particles(q, filter)
-	Sort_Row :: struct {
-		id:  Particle_Id,
-		key: int,
-	}
-	rows := make([]Sort_Row, len(all))
+	rows := make([]Particle_Order_Row, len(all))
 	defer delete(rows)
 	// key = (max_row - row) * width + column, dense pass over the SOA fields
 	width := q.canvas.right + 1
 	top := q.canvas.top
 	for id, i in all {
 		p := q.initial_coords[id]
-		rows[i] = {id, (top - p.row) * width + p.column}
+		rows[i] = {
+			id         = id,
+			within_key = (top - p.row) * width + p.column,
+		}
 	}
-	slice.sort_by(rows, proc(a, b: Sort_Row) -> bool {return a.key < b.key})
+	particle_order_rows(rows)
 	for row, i in rows do all[i] = row.id
 	if srt == .Random do rand.shuffle(all[:])
 	return all
@@ -129,12 +177,7 @@ get_particles_grouped :: proc(
 	all := collect_particles(q, filter)
 	defer delete(all[:])
 
-	Group_Row :: struct {
-		id:         Particle_Id,
-		group_key:  int,
-		within_key: int,
-	}
-	rows := make([]Group_Row, len(all))
+	rows := make([]Particle_Order_Row, len(all))
 	defer delete(rows)
 
 	reverse_groups :=
@@ -162,10 +205,7 @@ get_particles_grouped :: proc(
 		if reverse_groups do k = -k
 		rows[i] = {id, k, p.row * width + p.column}
 	}
-	slice.sort_by(rows, proc(a, b: Group_Row) -> bool {
-		if a.group_key != b.group_key do return a.group_key < b.group_key
-		return a.within_key < b.within_key
-	})
+	particle_order_rows(rows)
 
 	out: Particle_Groups
 	reserve(&out.members, len(rows))

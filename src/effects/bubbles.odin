@@ -127,6 +127,7 @@ Bubbles_State :: struct {
 	bubble_states:   [dynamic]Bubbles_Bubble_State,
 	bubble_starts:   [dynamic]int,
 	pop_starts:      [dynamic]int,
+	active_bubbles:  [dynamic]int,
 	next_bubble:     int,
 	delay:           int,
 	rainbow_palette: [dynamic]engine.Color,
@@ -268,22 +269,17 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			for s.color_offsets[id] >= len(s.rainbow_palette) do s.color_offsets[id] -= len(s.rainbow_palette)
 		}
 	}
+	reserve(&s.active_bubbles, len(s.bubbles.spans))
 	s.delay = s.config.bubble_delay
 }
 
 bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
-	active := s.next_bubble < len(s.bubbles.spans)
-	for state in s.bubble_states {
-		if state == .Float || state == .Pop {
-			active = true
-			break
-		}
-	}
-	if !active do return false
+	if s.next_bubble == len(s.bubbles.spans) && len(s.active_bubbles) == 0 do return false
 	if s.next_bubble < len(s.bubbles.spans) {
 		if s.delay == 0 {
 			bi := s.next_bubble
 			s.next_bubble += 1
+			append(&s.active_bubbles, bi)
 			s.bubble_states[bi] = .Float
 			s.bubble_starts[bi] = s.tick
 			s.delay = s.config.bubble_delay - 1
@@ -294,10 +290,9 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 
 	initial_coords := e.particles.initial_coord
 
-	visible_flags := e.particles.flags
-	for bi in 0 ..< len(s.bubble_states) {
+	write := 0
+	for bi in s.active_bubbles {
 		state := s.bubble_states[bi]
-		if state == .Pending || state == .Done do continue
 		members := engine.group_members(s.bubbles, bi)
 		if state == .Float {
 			age := s.tick - s.bubble_starts[bi]
@@ -312,15 +307,17 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 					engine.coord(anchor.column + s.circle_dx[id], anchor.row + s.circle_dy[id]),
 				)
 				landed ||= anchor.row + s.circle_dy[id] == s.bubble_targets[bi].row
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-				if s.config.rainbow {
+				if age == 0 {
+					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+					engine.set_particle(e, id, engine.Visible(true))
+				}
+				if s.config.rainbow && age % 4 == 0 {
 					color_index := s.color_offsets[id] + (age / 4) % len(s.rainbow_palette)
 					if color_index >= len(s.rainbow_palette) do color_index -= len(s.rainbow_palette)
 					engine.set_foreground(e, id, s.rainbow_palette[color_index])
-				} else {
+				} else if !s.config.rainbow && age == 0 {
 					engine.set_foreground(e, id, s.bubble_colors[bi])
 				}
-				engine.set_particle(e, id, engine.Visible(true))
 			}
 			if landed || (s.config.pop_condition == .Anywhere && rand.float64() < 0.002) {
 				s.bubble_states[bi] = .Pop
@@ -344,7 +341,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 			}
 		} else {
 			age := s.tick - s.pop_starts[bi]
-			complete := true
+			remaining := 0
 			for id in members {
 				expand_steps := s.expand_steps[id]
 				move_age := age - expand_steps
@@ -358,7 +355,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 							ease.ease(.Exponential_Out, f64(age + 1) / f64(expand_steps)),
 						),
 					)
-				} else {
+				} else if move_age < s.pop_steps[id] {
 					steps := s.pop_steps[id]
 					engine.set_particle(
 						e,
@@ -376,10 +373,10 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 						engine.set_particle(e, id, engine.Layer(0))
 					}
 				}
-				if age < 18 {
+				if age == 0 || age == 9 {
 					engine.set_symbol(e, id, age < 9 ? '*' : '\'')
 					engine.set_foreground(e, id, s.config.pop_color)
-				} else {
+				} else if age >= 18 && age <= 66 && (age - 18) % 6 == 0 {
 					color_age := age - 18
 					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 					if s.color_handling == .Dynamic {
@@ -408,16 +405,21 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 				final_ticks :=
 					s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 6 : 54
-				complete &&= age + 1 >= max(expand_steps + s.pop_steps[id], 18 + final_ticks)
+				if age + 1 < max(expand_steps + s.pop_steps[id], 18 + final_ticks) {
+					members[remaining] = id
+					remaining += 1
+				}
 			}
-			if complete do s.bubble_states[bi] = .Done
+			s.bubbles.spans[bi].len = remaining
+			if remaining == 0 do s.bubble_states[bi] = .Done
+		}
+		if s.bubble_states[bi] != .Done {
+			s.active_bubbles[write] = bi
+			write += 1
 		}
 	}
+	resize(&s.active_bubbles, write)
+
 	s.tick += 1
-	visible_count := 0
-	if s.next_bubble > 0 {
-		last := s.bubbles.spans[s.next_bubble - 1]
-		visible_count = last.start + last.len
-	}
 	return true
 }

@@ -121,7 +121,9 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		s.active_phase[i] = -1
 		s.start_ticks[i] = -1
 	}
-	reserve(&s.frames, len(chars) * (len(s.config.sweep_symbols) + 1) * 2)
+	span_length := len(s.config.sweep_symbols) + 1
+	// Both sweeps fill every column; no per-frame append or preliminary clear.
+	non_zero_resize(&s.frames, len(chars) * span_length * 2)
 	switch s.color_handling {
 	case .Dynamic:
 		for id in e.particle_sets.input {
@@ -135,7 +137,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	case .Ignore, .Always:
 	}
 
-	for id in chars {
+	for id, i in chars {
 		final: engine.Color_Pair
 		switch s.color_handling {
 		case .Dynamic:
@@ -159,38 +161,41 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 		}
 		sym := e.particles.initial_symbol[engine.Particle_Id(id)]
 
-		first_start := len(s.frames)
-		for symbol in s.config.sweep_symbols {
+		first_start := i * span_length * 2
+		first := s.frames[first_start:first_start + span_length]
+		for symbol, frame in s.config.sweep_symbols {
 			gray := gray_shades[rand.int_max(5)]
-			engine.timeline_append_frame(
-				&s.frames,
-				symbol,
-				engine.Appearance{colors = {fg = gray}},
-				5,
-			)
+			first.symbol[frame] = symbol
+			first.appearance[frame] = engine.Appearance {
+				colors = {fg = gray},
+			}
+			first.duration[frame] = 5
 		}
-		engine.timeline_append_frame(
-			&s.frames,
-			sym,
-			engine.Appearance{colors = {fg = gray_shades[1]}},
-			1,
-		)
-		s.first_frame_spans[id] = {first_start, len(s.config.sweep_symbols) + 1}
+		first.symbol[span_length - 1] = sym
+		first.appearance[span_length - 1] = engine.Appearance {
+			colors = {fg = gray_shades[1]},
+		}
+		first.duration[span_length - 1] = 1
+		s.first_frame_spans[id] = {first_start, span_length}
 
-		second_start := len(s.frames)
-		for symbol in s.config.sweep_symbols {
+		second_start := first_start + span_length
+		second := s.frames[second_start:second_start + span_length]
+		for symbol, frame in s.config.sweep_symbols {
 			colors :=
 				s.color_handling == .Dynamic ? s.dynamic_second_sweep_palette[:] : spectrum[:]
 			col := colors[rand.int_max(len(colors))]
-			engine.timeline_append_frame(
-				&s.frames,
-				symbol,
-				engine.Appearance{colors = {fg = col}},
-				5,
-			)
+			second.symbol[frame] = symbol
+			second.appearance[frame] = engine.Appearance {
+				colors = {fg = col},
+			}
+			second.duration[frame] = 5
 		}
-		engine.timeline_append_frame(&s.frames, sym, engine.Appearance{colors = final}, 1)
-		s.second_frame_spans[id] = {second_start, len(s.config.sweep_symbols) + 1}
+		second.symbol[span_length - 1] = sym
+		second.appearance[span_length - 1] = engine.Appearance {
+			colors = final,
+		}
+		second.duration[span_length - 1] = 1
+		s.second_frame_spans[id] = {second_start, span_length}
 	}
 
 	s.reveal.groups = engine.get_particles_grouped(

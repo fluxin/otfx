@@ -90,9 +90,11 @@ row_bytes_preserve_fixed_cell_slots :: proc(t: ^testing.T) {
 			for row in 0 ..< 2 {
 				strings.builder_reset(&builder)
 				for cell in e.rows[row].cells {
-					id := cell.top
-					if id <
-					   0 {strings.write_byte(&builder, ' ')} else {engine.write_particle(&e, id, &builder)}
+					if id := cell.top; id != engine.NO_PARTICLE {
+						engine.write_particle(&e, id, &builder)
+					} else {
+						strings.write_byte(&builder, ' ')
+					}
 				}
 				actual := strings.builder_make(allocator = context.temp_allocator)
 				for b in e.rows[row].bytes do if b != 0 do strings.write_byte(&actual, b)

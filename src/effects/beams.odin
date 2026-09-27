@@ -117,27 +117,29 @@ Beams_Phase :: enum {
 }
 
 Beams_State :: struct {
-	config:            Beams_Config,
-	characters:        [dynamic]engine.Particle_Id,
-	final_colors:      [dynamic]engine.Color,
-	faded_colors:      [dynamic]engine.Color,
-	beam_start_ticks:  [dynamic]int,
-	beam_modes:        [dynamic]Beam_Direction,
-	wipe_start_ticks:  [dynamic]int,
-	beam_palette:      [dynamic]engine.Color,
-	row_symbols:       [dynamic]rune,
-	column_symbols:    [dynamic]rune,
-	group_chars:       [dynamic]engine.Particle_Id,
-	groups:            [dynamic]Beam_Group,
-	pending:           [dynamic]int, // group handles
-	pending_head:      int,
-	active:            [dynamic]int,
-	final_wipe_groups: engine.Particle_Groups,
-	final_wipe_idx:    int,
-	delay:             int,
-	tick:              int,
-	phase:             Beams_Phase,
-	color_handling:    engine.Existing_Color_Handling,
+	config:             Beams_Config,
+	characters:         [dynamic]engine.Particle_Id,
+	final_colors:       [dynamic]engine.Color,
+	faded_colors:       [dynamic]engine.Color,
+	beam_start_ticks:   [dynamic]int,
+	beam_modes:         [dynamic]Beam_Direction,
+	wipe_start_ticks:   [dynamic]int,
+	beam_palette:       [dynamic]engine.Color,
+	row_symbols:        [dynamic]rune,
+	column_symbols:     [dynamic]rune,
+	group_chars:        [dynamic]engine.Particle_Id,
+	groups:             [dynamic]Beam_Group,
+	pending:            [dynamic]int, // group handles
+	pending_head:       int,
+	active:             [dynamic]int,
+	appearance_active:  [dynamic]engine.Particle_Id,
+	beam_end, wipe_end: int,
+	final_wipe_groups:  engine.Particle_Groups,
+	final_wipe_idx:     int,
+	delay:              int,
+	tick:               int,
+	phase:              Beams_Phase,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 // Expand symbols into the build-time lane; playback indexes the flat row.
@@ -235,6 +237,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	s.beam_start_ticks = make([dynamic]int, max_slot + 1)
 	s.beam_modes = make([dynamic]Beam_Direction, max_slot + 1)
 	s.wipe_start_ticks = make([dynamic]int, max_slot + 1)
+	reserve(&s.appearance_active, len(s.characters))
 	for i in 0 ..= max_slot do s.beam_start_ticks[i], s.wipe_start_ticks[i] = -1, -1
 
 	black := engine.Color{0x00, 0x00, 0x00}
@@ -296,36 +299,27 @@ beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Grou
 	group.counter -= 1
 	next := s.group_chars[group.span.start + group.head]
 	group.head += 1
+	if s.beam_start_ticks[next] < 0 && s.wipe_start_ticks[next] < 0 do append(&s.appearance_active, next)
+	s.beam_end = max(s.beam_end, s.tick + len(s.beam_palette) * s.config.beam_gradient_frames + 22)
 	s.beam_start_ticks[next] = s.tick
 	s.beam_modes[next] = group.direction
 	engine.set_particle(e, next, engine.Visible(true))
 }
 
-beams_beam_active :: proc(s: Beams_State) -> bool {
+beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	beam_ticks := len(s.beam_palette) * s.config.beam_gradient_frames + 22
-	for id in s.characters {
-		start := s.beam_start_ticks[id]
-		if start >= 0 && s.tick - start < beam_ticks do return true
-	}
-	return false
-}
-
-beams_wipe_active :: proc(s: Beams_State) -> bool {
-	wipe_ticks := 11 * s.config.final_gradient_frames
-	for id in s.characters {
-		start := s.wipe_start_ticks[id]
-		if start >= 0 && s.tick - start < wipe_ticks do return true
-	}
-	return false
-}
-
-beams_update_appearances :: proc(s: Beams_State, e: ^engine.Engine) {
-	beam_ticks := len(s.beam_palette) * s.config.beam_gradient_frames + 22
-	for id in s.characters {
+	write := 0
+	for id in s.appearance_active {
 		beam_start := s.beam_start_ticks[id]
 		if beam_start >= 0 {
 			age := s.tick - beam_start
 			if age < beam_ticks {
+				s.appearance_active[write] = id
+				write += 1
+				palette_ticks := len(s.beam_palette) * s.config.beam_gradient_frames
+				if age < palette_ticks {
+					if age % s.config.beam_gradient_frames != 0 do continue
+				} else if (age - palette_ticks) % 2 != 0 {continue}
 				palette_index := age / s.config.beam_gradient_frames
 				if palette_index < len(s.beam_palette) {
 					symbols := s.beam_modes[id] == .Row ? s.row_symbols : s.column_symbols
@@ -383,10 +377,14 @@ beams_update_appearances :: proc(s: Beams_State, e: ^engine.Engine) {
 				continue
 			}
 		}
+		s.beam_start_ticks[id] = -1
 		wipe_start := s.wipe_start_ticks[id]
 		if wipe_start >= 0 {
 			age := s.tick - wipe_start
 			if age < 11 * s.config.final_gradient_frames {
+				s.appearance_active[write] = id
+				write += 1
+				if age % s.config.final_gradient_frames != 0 do continue
 				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				step := min(age / s.config.final_gradient_frames, 10)
 				if s.color_handling == .Dynamic && (.Fill not_in e.particles.flags[id]) {
@@ -431,13 +429,14 @@ beams_update_appearances :: proc(s: Beams_State, e: ^engine.Engine) {
 						),
 					)
 				}
-			}
+			} else {s.wipe_start_ticks[id] = -1}
 		}
 	}
+	resize(&s.appearance_active, write)
 }
 
 beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
-	if s.phase == .Complete && !beams_wipe_active(s^) {
+	if s.phase == .Complete && s.tick >= s.wipe_end {
 		return false
 	}
 	switch s.phase {
@@ -476,7 +475,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 			}
 		}
 		resize(&s.active, write)
-		if s.pending_head == len(s.pending) && len(s.active) == 0 && !beams_beam_active(s^) {
+		if s.pending_head == len(s.pending) && len(s.active) == 0 && s.tick >= s.beam_end {
 			s.phase = .Final_Wipe
 		}
 	case .Final_Wipe:
@@ -486,6 +485,8 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 				g := engine.group_members(s.final_wipe_groups, s.final_wipe_idx)
 				s.final_wipe_idx += 1
 				for id in g {
+					if s.beam_start_ticks[id] < 0 && s.wipe_start_ticks[id] < 0 do append(&s.appearance_active, id)
+					s.wipe_end = max(s.wipe_end, s.tick + 11 * s.config.final_gradient_frames)
 					s.wipe_start_ticks[id] = s.tick
 					engine.set_particle(e, id, engine.Visible(true))
 				}
@@ -495,7 +496,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 		}
 	case .Complete:
 	}
-	beams_update_appearances(s^, e)
+	beams_update_appearances(s, e)
 	s.tick += 1
 	return true
 }

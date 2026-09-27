@@ -167,14 +167,16 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
 		limit := s.palette_len * 2
 		if s.color_handling == .Dynamic && engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil do limit = 2
 		if age >= limit do continue
-		if s.color_handling == .Dynamic {
-			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-			if style.colors.fg != nil {
+		if age % 2 == 0 {
+			if s.color_handling == .Dynamic {
+				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+				if style.colors.fg != nil {
+					engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
+				}
+				engine.set_background(e, id, style.colors.bg)
+			} else {
 				engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
 			}
-			engine.set_background(e, id, style.colors.bg)
-		} else {
-			engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
 		}
 		if age + 1 < limit {s.active_slots[write] = slot; write += 1}
 	}

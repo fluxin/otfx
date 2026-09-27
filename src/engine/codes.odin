@@ -61,7 +61,7 @@ set_appearance_prepared :: #force_inline proc(
 ) {
 	assert(appearance_id != NO_APPEARANCE && int(appearance_id) <= len(e.shared_appearances))
 	if e.particles[id].shared_appearance_id == appearance_id && !e.shared_appearances[appearance_id - 1].dirty do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Content_Changed)
 	e.particles[id].shared_appearance_id = appearance_id
 }
 
@@ -78,7 +78,7 @@ edit_appearance :: #force_inline proc(e: ^Engine, id: Particle_Id) -> ^Appearanc
 set_appearance_value :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Appearance) {
 	old := get_appearance(e, id)
 	if old.colors == value.colors && old.bold == value.bold do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Content_Changed)
 	e.particles[id].shared_appearance_id = NO_APPEARANCE
 	appearance := &e.particles.private_appearance[id]
 	appearance.colors, appearance.bold = value.colors, value.bold
@@ -92,7 +92,7 @@ set_appearance :: proc {
 
 set_foreground :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
 	if get_appearance(e, id).colors.fg == value do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Content_Changed)
 	appearance := edit_appearance(e, id)
 	appearance.colors.fg = value
 	dirty_appearance(appearance)
@@ -100,7 +100,7 @@ set_foreground :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(C
 
 set_background :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(Color)) {
 	if get_appearance(e, id).colors.bg == value do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Content_Changed)
 	appearance := edit_appearance(e, id)
 	appearance.colors.bg = value
 	dirty_appearance(appearance)
@@ -108,7 +108,7 @@ set_background :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Maybe(C
 
 set_bold :: #force_inline proc(e: ^Engine, id: Particle_Id, value: bool) {
 	if get_appearance(e, id).bold == value do return
-	queue_particle(e, id)
+	queue_particle(e, id, .Content_Changed)
 	appearance := edit_appearance(e, id)
 	appearance.bold = value
 	dirty_appearance(appearance)
@@ -239,16 +239,21 @@ packet_write :: #force_inline proc(
 	   (appearance.bold || appearance.colors.fg != nil || appearance.colors.bg != nil) {
 		prefix = len(appearance.bytes)
 	}
-	copy(bytes[:prefix], appearance.bytes[:prefix])
+	// One checked slice admits the fixed cell slot. UTF-8 emits at most four
+	// bytes; the styled prefix is 43 bytes and the reset is four more (51 total).
+	slot := bytes[:51 if prefix != 0 else 4]
 	end := prefix
-	if symbol != 0 {
-		encoded, width := utf8.encode_rune(symbol)
-		copy(bytes[end:end + width], encoded[:width])
-		end += width
-	}
-	if prefix != 0 {
-		copy(bytes[end:end + 4], "\x1b[0m")
-		end += 4
+	#no_bounds_check {
+		if prefix != 0 do copy(slot[:43], appearance.bytes[:])
+		if symbol != 0 {
+			encoded, width := utf8.encode_rune(symbol)
+			copy(slot[end:end + 4], encoded[:])
+			end += width
+		}
+		if prefix != 0 {
+			copy(slot[end:end + 4], "\x1b[0m")
+			end += 4
+		}
 	}
 	for &b in bytes[end:] do b = 0
 	return end

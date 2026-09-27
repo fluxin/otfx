@@ -107,6 +107,7 @@ Spray_State :: struct {
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
 	pending:        [dynamic]engine.Particle_Id,
+	active_indexes: [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	start_colors:   [dynamic]engine.Color,
 	max_steps:      [dynamic]int,
@@ -114,6 +115,7 @@ Spray_State :: struct {
 	origin:         engine.Coord,
 	volume:         int,
 	tick:           int,
+	last_tick:      int,
 	color_handling: engine.Existing_Color_Handling,
 }
 
@@ -165,6 +167,7 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	reserve(&s.active_indexes, n)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_colors = make([dynamic]engine.Color, n)
@@ -194,27 +197,28 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 }
 
 spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
-	active := len(s.pending) != 0
-	for _, i in s.characters {
-		start := s.start_ticks[i]
-		if start >= 0 && s.tick - start < max(s.max_steps[i], 160) {
-			active = true
-			break
-		}
-	}
-	if !active do return false
+	if len(s.pending) == 0 && s.tick >= s.last_tick do return false
 	if len(s.pending) > 0 {
 		for _ in 0 ..< rand.int_range(1, s.volume + 1) {
 			if len(s.pending) == 0 do break
 			id := pop(&s.pending)
-			s.start_ticks[s.index_by_id[id]] = s.tick
+			i := s.index_by_id[id]
+			s.start_ticks[i] = s.tick
+			s.last_tick = max(s.last_tick, s.tick + max(s.max_steps[i], 160))
+			append(&s.active_indexes, i)
 			engine.set_particle(e, id, engine.Visible(true))
 		}
 	}
-	for id, i in s.characters {
+	write := 0
+	for i in s.active_indexes {
+		id := s.characters[i]
 		start := s.start_ticks[i]
-		if start < 0 do continue
 		age := s.tick - start
+		// Keep the arrival boundary for the layer reset, even after motion stops.
+		if age < max(s.max_steps[i], 140) {
+			s.active_indexes[write] = i
+			write += 1
+		}
 		if age < s.max_steps[i] {
 			progress := f64(age + 1) / f64(s.max_steps[i])
 			engine.set_particle(
@@ -227,10 +231,11 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 				),
 			)
 			engine.set_particle(e, id, engine.Layer(1))
-		} else {
+		} else if age == s.max_steps[i] {
 			engine.set_particle(e, id, e.particles.initial_coord[id])
 			engine.set_particle(e, id, engine.Layer(0))
 		}
+		if age > 140 || age % 20 != 0 do continue
 		if s.color_handling == .Dynamic {
 			step := min(age / 20, 7)
 			appearance := engine.get_appearance(e, id)
@@ -242,7 +247,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 				step,
 			)
 			engine.set_appearance(e, id, appearance)
-		} else if age < 160 {
+		} else {
 			engine.set_foreground(
 				e,
 				id,
@@ -253,10 +258,9 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
 					min(age / 20, 7),
 				),
 			)
-		} else {
-			engine.set_foreground(e, id, s.final_colors[i])
 		}
 	}
+	resize(&s.active_indexes, write)
 	s.tick += 1
 	return true
 }
