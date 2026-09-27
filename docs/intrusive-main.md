@@ -4,7 +4,11 @@
 with the user's approval. The implementation remains single-threaded. A later
 terminal-output worker experiment remains isolated and is not part of this change.
 
-## Current result against ASM
+The [release benchmark](release-benchmark.md) supersedes these assertion-enabled
+measurements for the current README comparison; this report retains isolated
+implementation attribution.
+
+## Assertion-enabled integration result against ASM
 
 The final optimized working-tree binary is compared directly with the frozen
 ASM oracle in a fresh full 35-effect run. Arithmetic mean wall is **28.534 ms

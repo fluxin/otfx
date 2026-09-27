@@ -67,39 +67,98 @@ playback contracts are described in [architecture](docs/architecture.md).
 
 ## Performance
 
-The [current single-core renderer](docs/intrusive-main.md) uses stable intrusive
-cell lists and an ID-only update queue. A fresh 35-effect comparison measures
-**28.53 ms mean wall for OTFX versus 30.90 ms for ttfx ASM**: 7.7% less time by
-arithmetic mean. Geometrically OTFX is **0.6% slower**, essentially tied at this
-sampling depth, with **16/35 individual wins**.
+The [single-core renderer](docs/intrusive-main.md) uses stable intrusive cell
+lists and an ID-only update queue. The [latest release benchmark](docs/release-benchmark.md)
+uses **`-o:speed -microarch:native -disable-assert`**, without `-debug`.
+Across 35 finite effects OTFX averages **28.90 ms versus ASM's
+30.85 ms: 6.3% less time by arithmetic mean**.
+Geometrically OTFX takes **1.8% longer**, with **16/35 individual wins**.
 
-| Unweighted mean across 35 effects | OTFX | ttfx ASM |
+| Metric | OTFX | ttfx ASM |
 |---|---:|---:|
-| Mean wall per effect | 28.53 ms | 30.90 ms |
-| Mean child CPU | 28.40 ms | 30.74 ms |
-| Mean per-effect maximum RSS | 11.91 MiB | 50.72 MiB |
+| Mean wall per effect | 28.90 ms | 30.85 ms |
+| Mean child CPU per effect | 28.76 ms | 30.70 ms |
+| Mean per-effect maximum RSS | 11.83 MiB | 50.73 MiB |
+| Binary size, as built | 1.27 MiB | 2.74 MiB |
+| Binary size, stripped copy | 1.25 MiB | 2.74 MiB |
 
-See the [complete per-effect chart](docs/intrusive-main.md#current-result-against-asm)
-and [wall/CPU/RSS/frame table](docs/intrusive-main-final-asm.tsv). Frame counts
-differ for 21/35 effects: these are complete-animation costs, not equal-frame
-throughput. Native before/after captures remain byte-identical in all 756 cases;
-all 87 unit tests pass. The report discloses the per-effect tradeoffs.
+Binary sizes are file sizes; stripped copies exclude symbols/debug information.
+RSS is resident runtime memory. The mean RSS row averages each effect's measured
+maximum, while the chart below reports those individual maxima.
 
-Measured 2026-09-27 on Ryzen 9 9900X3D, CPU 2, `-o:speed -microarch:native -debug`,
-assertions enabled, existing scoped bounds-check exclusions. Dense input/default
-canvas 190×46; terminal 200×50; seed 1; frame rate 0; stdout `/dev/null`.
-Three samples batch at least 0.3 seconds each. Whole CLI time and child CPU/RSS
-are measured; terminal-emulator work is excluded. The frozen ASM oracle remains
-revision `c2be6411`; it was not rebuilt or fetched for this comparison.
+Measured 2026-09-27 on Ryzen 9 9900X3D, CPU 2 only. Seed 1, terminal 200×50,
+dense input/default canvas 190×46, frame rate 0, stdout `/dev/null`.
+Three samples batch at least 0.3 seconds each; whole CLI time and child CPU/RSS
+are measured. Existing scoped bounds-check exclusions remain; no global bounds
+or type-check disabling was added. Terminal-emulator cost is excluded. The
+frozen ASM oracle remains `c2be6411`, with `TTFX_ASM=force`.
 
-Earlier [Spotlights](docs/spotlights-prepared.md),
-[effect-pattern](docs/effect-patterns.md), and
-[row-renderer](docs/row-renderer.md) measurements remain historical references.
+### Complete finite-effect comparison
+
+Mean wall time; negative change means OTFX is faster. RSS is maximum child RSS
+across measured samples. Frame counts differ for 21/35 effects, so these are
+complete-animation costs rather than equal-frame throughput. Small differences
+are not significance claims. [Raw CPU, wall, RSS and frame data](docs/release-asm.tsv).
+
+| Effect | OTFX ms | ASM ms | OTFX time change | OTFX RSS MiB | ASM RSS MiB | Frames OTFX / ASM |
+|---|---:|---:|---:|---:|---:|---:|
+| beams | 13.5 | 11.7 | +15.4% | 11.53 | 37.33 | 890 / 732 |
+| binarypath | 157.8 | 183.7 | -14.1% | 19.40 | 223.64 | 1932 / 1891 |
+| blackhole | 50.2 | 55.0 | -8.7% | 9.46 | 61.71 | 1743 / 1800 |
+| bouncyballs | 33.0 | 29.6 | +11.5% | 9.59 | 43.04 | 10393 / 9093 |
+| bubbles | 47.8 | 46.7 | +2.4% | 10.93 | 58.53 | 11658 / 11742 |
+| burn | 21.6 | 25.9 | -16.6% | 13.85 | 47.95 | 3237 / 3175 |
+| colorshift | 16.3 | 17.2 | -5.2% | 8.53 | 39.06 | 528 / 528 |
+| crumble | 37.6 | 49.5 | -24.0% | 9.50 | 66.63 | 2159 / 1835 |
+| decrypt | 23.6 | 16.9 | +39.6% | 17.91 | 39.07 | 5480 / 5438 |
+| errorcorrect | 12.3 | 22.5 | -45.3% | 9.03 | 43.53 | 5221 / 5237 |
+| expand | 17.9 | 16.6 | +7.8% | 9.65 | 45.05 | 302 / 302 |
+| fireworks | 51.8 | 62.7 | -17.4% | 10.41 | 60.97 | 1516 / 1553 |
+| highlight | 3.3 | 2.8 | +17.9% | 10.59 | 28.88 | 129 / 129 |
+| laseretch | 44.1 | 59.6 | -26.0% | 12.62 | 39.63 | 14307 / 14306 |
+| middleout | 7.7 | 8.5 | -9.4% | 9.09 | 47.45 | 235 / 235 |
+| orbittingvolley | 18.4 | 17.5 | +5.1% | 12.09 | 35.38 | 1156 / 1156 |
+| overflow | 10.8 | 12.3 | -12.2% | 17.07 | 18.05 | 164 / 306 |
+| pour | 16.7 | 16.8 | -0.6% | 9.46 | 43.09 | 7160 / 7160 |
+| print | 6.8 | 6.7 | +1.5% | 12.09 | 38.89 | 10057 / 10057 |
+| rain | 16.4 | 19.2 | -14.6% | 9.27 | 47.63 | 4736 / 4737 |
+| randomsequence | 3.8 | 3.7 | +2.7% | 9.65 | 28.73 | 208 / 208 |
+| rings | 75.0 | 104.4 | -28.2% | 10.38 | 64.94 | 1566 / 1566 |
+| scattered | 30.0 | 24.9 | +20.5% | 9.28 | 44.94 | 420 / 418 |
+| slice | 5.3 | 6.6 | -19.7% | 9.81 | 31.28 | 368 / 368 |
+| slide | 18.1 | 12.7 | +42.5% | 9.65 | 43.17 | 375 / 375 |
+| smoke | 13.7 | 9.6 | +42.7% | 11.66 | 67.12 | 630 / 565 |
+| spotlights | 31.1 | 26.7 | +16.5% | 9.28 | 48.53 | 780 / 800 |
+| spray | 24.1 | 27.1 | -11.1% | 9.08 | 49.88 | 1253 / 661 |
+| swarm | 103.3 | 95.4 | +8.3% | 21.57 | 90.03 | 4312 / 5041 |
+| sweep | 4.8 | 4.2 | +14.3% | 16.15 | 30.81 | 220 / 220 |
+| synthgrid | 8.3 | 5.1 | +62.7% | 13.39 | 33.23 | 617 / 619 |
+| unstable | 33.7 | 35.2 | -4.3% | 9.46 | 43.71 | 592 / 530 |
+| vhstape | 27.0 | 24.3 | +11.1% | 17.79 | 59.74 | 726 / 736 |
+| waves | 21.2 | 15.8 | +34.2% | 9.65 | 45.21 | 633 / 633 |
+| wipe | 4.6 | 2.8 | +64.3% | 15.29 | 28.78 | 138 / 138 |
+
+### Timing-gated comparison
+
+Matrix and Thunderstorm are excluded above. These unpaced diagnostics use
+one-second rain/storm settings, three samples, and the same input/seed/canvas.
+Elapsed limits dominate time and frame counts represent different work; these
+rows do not establish a throughput advantage.
+
+| Effect | OTFX wall ms | ASM wall ms | OTFX CPU ms | ASM CPU ms | OTFX RSS MiB | ASM RSS MiB | Frames OTFX / ASM |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| matrix | 1054.4 | 1017.8 | 1051.7 | 1015.3 | 9.55 | 27.50 | 5484 / 14072 |
+| thunderstorm | 1003.9 | 1012.9 | 1001.4 | 1010.4 | 11.52 | 52.51 | 5174 / 8076 |
+
+All 87 assertion-enabled tests pass. The release build matches all 756 captures
+byte-for-byte. All 37 native GIF previews below were regenerated and decoded.
+Disabling assertions alone showed no aggregate speedup in its separate control;
+see the [build comparison and validation details](docs/release-benchmark.md).
 
 ### Reproduce
 
 ```sh
-odin build src -o:speed -microarch:native -debug -out:otfx
+odin build src -o:speed -microarch:native -disable-assert -out:otfx
 # Default reference is the local non-ASM ttfx binary.
 odin build bench -o:speed -out:/tmp/otfx-bench
 BENCH_MIN_SECONDS=0.3 taskset -c 2 /tmp/otfx-bench 3

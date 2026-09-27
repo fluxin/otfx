@@ -1,6 +1,7 @@
 # Performance decisions
 
-The latest measurements are in the [integrated renderer report](intrusive-main.md).
+The latest measurements and binary sizes are in the [release benchmark](release-benchmark.md).
+The [integrated renderer report](intrusive-main.md) retains isolated change attribution.
 Earlier effect work is in the [Spotlights follow-up](spotlights-prepared.md)
 and [all-effect pattern audit](effect-patterns.md). The accepted compaction tradeoff
 and earlier shared-motion work are in [shared motion](shared-motion.md).
