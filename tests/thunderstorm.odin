@@ -7,6 +7,78 @@ import "core:mem"
 import "core:testing"
 
 @(test)
+thunderstorm_flashes_unstruck_text_then_glows_only_struck_cells :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
+	for handling in ([]engine.Existing_Color_Handling{.Ignore, .Dynamic, .Always}) {
+		cfg := engine.config_default()
+		cfg.canvas_width, cfg.canvas_height = 3, 1
+		cfg.ignore_terminal_dimensions = true
+		cfg.existing_color_handling = handling
+		e, err := engine.engine_make("\x1b[38;2;80;100;120;48;2;20;30;40mABC\x1b[0m", cfg)
+		testing.expect_value(t, err, engine.Input_Error.None)
+		s := effects.Thunderstorm_State {
+			config = effects.thunderstorm_config_default(),
+		}
+		effects.thunderstorm_build(&s, &e)
+		for id, i in s.characters {
+			engine.set_foreground(&e, id, s.storm_colors[i])
+			engine.set_background(&e, id, s.storm_bg[i])
+		}
+		// A single bolt covers B. A has an earlier glow that this flash replaces.
+		a, b, c := s.characters[0], s.characters[1], s.characters[2]
+		bolt := s.strike_ids[0]
+		engine.set_placement(&e, bolt, e.particles.initial_coord[b], true, 2)
+		append(&s.strike_pending, bolt)
+		s.strike_pending_head, s.strike_flash_age, s.strike_live = 1, 0, true
+		s.glow_starts[0] = 0
+		append(&s.glow_active, 0)
+		for age in 0 ..= 54 {
+			s.tick = age
+			effects.thunderstorm_reveal_strike(&s, &e)
+			effects.thunderstorm_update_text(&s, &e)
+			engine.frame_build(&e)
+			if age < 54 {
+				testing.expect_value(t, len(s.glow_active), 0)
+				for id in ([]engine.Particle_Id{a, c}) {
+					testing.expect_value(t, e.cells[e.particles[id].cell].top, id)
+				}
+			}
+			if age == 18 || age == 36 {
+				for id, i in s.characters {
+					want := s.flash_colors[i] if age == 18 else s.storm_colors[i]
+					testing.expect_value(t, engine.get_appearance(&e, id).colors.fg.?, want)
+					testing.expect_value(t, engine.get_appearance(&e, id).colors.bg, s.storm_bg[i])
+					if handling == .Always {
+						testing.expect_value(
+							t,
+							engine.get_render_appearance(&e, id).colors,
+							engine.get_initial_appearance(&e, id).colors,
+						)
+					}
+				}
+			}
+		}
+		testing.expect(t, !s.strike_live)
+		testing.expect_value(t, len(s.glow_active), 1)
+		testing.expect_value(t, s.glow_active[0], 1)
+		testing.expect_value(t, e.cells[e.particles[b].cell].top, b)
+		testing.expect_value(
+			t,
+			engine.get_appearance(&e, b).colors.fg.?,
+			s.config.glowing_text_color,
+		)
+		for index in ([]int{0, 2}) {
+			testing.expect_value(
+				t,
+				engine.get_appearance(&e, s.characters[index]).colors.fg.?,
+				s.storm_colors[index],
+			)
+		}
+	}
+}
+
+@(test)
 thunderstorm_nested_branch_replay :: proc(t: ^testing.T) {
 	context.allocator = context.temp_allocator
 	defer free_all(context.temp_allocator)

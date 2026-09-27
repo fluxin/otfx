@@ -150,8 +150,12 @@ rows do not establish a throughput advantage.
 | matrix | 1054.4 | 1017.8 | 1051.7 | 1015.3 | 9.55 | 27.50 | 5484 / 14072 |
 | thunderstorm | 1003.9 | 1012.9 | 1001.4 | 1010.4 | 11.52 | 52.51 | 5174 / 8076 |
 
-All 87 assertion-enabled tests pass. The release build matches all 756 captures
-byte-for-byte. All 37 native GIF previews below were regenerated and decoded.
+All 88 assertion-enabled tests pass. The benchmark release build matched all
+756 captures byte-for-byte. The subsequent [Thunderstorm flash fix](docs/thunderstorm-flash.md)
+intentionally changes strike colors; its 24-case check preserves glyph positions,
+frame counts, and final output. The benchmark tables above predate that effect-only
+fix. All 37 native GIF previews were regenerated and decoded; Thunderstorm was
+regenerated again for the fix.
 Disabling assertions alone showed no aggregate speedup in its separate control;
 see the [build comparison and validation details](docs/release-benchmark.md).
 

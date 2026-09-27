@@ -28,8 +28,11 @@ Scattered retains Odin's sine-based `Back_In_Out` rather than Python's polynomia
 its color progression is linear rather than exactly distance-synchronized.
 
 Thunderstorm has independent strike/flash choreography. Its recursive branch
-geometry and depth-first reveal order follow Python, but full-text flashes,
-default-color restoration, spark cooling, and particle tails are not equivalent.
+geometry and depth-first reveal order follow Python. The
+[whole-text flash fix](thunderstorm-flash.md) now illuminates the text during each
+strike, then retains afterglow only at struck cells. Its seven-sample pulse uses
+the existing native 42-tick flash window rather than Python's randomized easing.
+Default-color restoration, spark cooling, and particle tails remain different.
 Equal-decision branch validation matched 6,279 coordinates, symbols, and child
 insertion positions across 15 cases; that does not prove whole-effect equivalence.
 

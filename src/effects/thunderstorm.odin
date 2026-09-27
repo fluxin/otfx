@@ -132,6 +132,7 @@ Thunderstorm_State :: struct {
 	characters:          [dynamic]engine.Particle_Id,
 	final_colors:        [dynamic]engine.Color,
 	storm_colors:        [dynamic]engine.Color,
+	flash_colors:        [dynamic]engine.Color,
 	visible_bg:          [dynamic]Maybe(engine.Color),
 	storm_bg:            [dynamic]Maybe(engine.Color),
 	input_slot_by_id:    [dynamic]int,
@@ -238,6 +239,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.storm_colors = make([dynamic]engine.Color, n)
+	s.flash_colors = make([dynamic]engine.Color, n)
 	s.visible_bg = make([dynamic]Maybe(engine.Color), n)
 	s.storm_bg = make([dynamic]Maybe(engine.Color), n)
 	s.glow_starts = make([dynamic]int, n)
@@ -261,6 +263,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		}
 		s.final_colors[i] = final
 		s.storm_colors[i] = engine.adjust_color_brightness(final, 0.5)
+		s.flash_colors[i] = engine.adjust_color_brightness(final, 1.7)
 		s.glow_starts[i] = -1
 		s.input_slot_by_id[id] = i
 		s.input_at_cell[thunderstorm_cell_index(e.canvas, p)] = i32(id)
@@ -550,6 +553,22 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		return
 	}
 	if age < 42 {
+		// A strike illuminates all text, replacing any earlier afterglow.
+		// Seven held samples rise to the flash color and return to storm color
+		// within the existing bolt flash duration; random draws/timing stay fixed.
+		if age == 0 {
+			for slot in s.glow_active do s.glow_starts[slot] = -1
+			clear(&s.glow_active)
+		}
+		flash_step := age / 6
+		flash_step = min(flash_step, 6 - flash_step)
+		for id, i in s.characters {
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(s.storm_colors[i], s.flash_colors[i], 3, flash_step),
+			)
+		}
 		step := min(age / 6, 7)
 		color := engine.gradient_between_step(
 			s.config.lightning_color,
