@@ -61,6 +61,8 @@ run_make :: proc(
 run_step :: proc(run: ^Run) -> (width, height: int, ok: bool) {
 	produced := effects.next_frame(&run.effect, &run.engine_state)
 	if !produced do return 0, 0, false
-	width, height = engine.compose_frame(&run.engine_state)
+	engine.compose_frame(&run.engine_state)
+	width = max(run.engine_state.layout.visible_right, 0)
+	height = len(run.engine_state.rows)
 	return width, height, true
 }

@@ -66,7 +66,7 @@ init_particle :: proc(
 	e.particles[id].shared_appearance_id = shared_id
 	e.particles[id].cell = -1
 	// New particles have no published membership; later edits use this entry.
-	append(&e.updates, Particle_Update{id = id})
+	append(&e.updates, id)
 	e.particles[id].flags += {.Update_Queued, .Placement_Changed, .Content_Changed}
 }
 
@@ -224,7 +224,7 @@ set_particle_frame :: #force_inline proc(e: ^Engine, id: Particle_Id, frame: Seq
 	colors_changed := get_appearance(e, id).colors != frame.colors
 	if !position_changed && !colors_changed do return
 	flags := e.particles[id].flags
-	if .Update_Queued not_in flags do append(&e.updates, Particle_Update{id, e.particles.layer[id]})
+	if .Update_Queued not_in flags do append(&e.updates, id)
 	if position_changed do flags += {.Placement_Changed}
 	if colors_changed do flags += {.Content_Changed}
 	e.particles[id].flags = flags + {.Update_Queued}

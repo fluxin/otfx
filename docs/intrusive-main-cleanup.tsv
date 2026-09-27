@@ -1,0 +1,9 @@
+effect	reference_best_ms	candidate_best_ms	reference_frames	candidate_frames	reference_mean_ms	candidate_mean_ms	reference_cpu_ms	candidate_cpu_ms	reference_rss_kib	candidate_rss_kib
+middleout	7.6	7.4	235.0	235.0	7.6	7.4	7.6	7.4	9484.0	9272.0
+blackhole	49.9	50.3	1743.0	1743.0	49.9	50.3	49.7	50.1	9908.0	9728.0
+slide	18.1	18.1	375.0	375.0	18.2	18.1	18.1	18.0	10064.0	9856.0
+binarypath	157.4	154.8	1932.0	1932.0	157.8	155.6	157.4	155.1	20952.0	19964.0
+colorshift	17.0	16.4	528.0	528.0	17.0	16.4	16.9	16.4	8936.0	8756.0
+smoke	13.3	13.1	630.0	630.0	13.3	13.1	13.3	13.1	12164.0	11964.0
+overflow	11.1	10.8	164.0	164.0	11.2	10.9	11.1	10.8	18480.0	17476.0
+laseretch	43.8	43.5	14307.0	14307.0	43.8	43.5	43.7	43.4	13412.0	13012.0

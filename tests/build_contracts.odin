@@ -107,7 +107,7 @@ expand_publishes_arrival_before_retiring :: proc(t: ^testing.T) {
 		retired := make([]bool, len(e.particles))
 		frames := 0
 		for effects.expand_next(&s, &e) {
-			for update in e.updates do testing.expect(t, !retired[update.id], "completed particles must leave the update work set")
+			for id in e.updates do testing.expect(t, !retired[id], "completed particles must leave the update work set")
 			for id, i in s.characters {
 				if s.tick < s.max_steps[s.motion_slots[i]] do continue
 				testing.expect_value(
@@ -158,7 +158,7 @@ fireworks_retires_after_motion_and_color_finish :: proc(t: ^testing.T) {
 		retired := make([]bool, len(e.particles))
 		frames := 0
 		for effects.fireworks_next(&s, &e) {
-			for update in e.updates do testing.expect(t, !retired[update.id], "completed particles must not be revisited by later shells")
+			for id in e.updates do testing.expect(t, !retired[id], "completed particles must not be revisited by later shells")
 			for id, i in s.characters {
 				start := s.shell_start_ticks[s.shell_index[i]]
 				if start < 0 || s.tick - start < s.finish_ages[i] do continue

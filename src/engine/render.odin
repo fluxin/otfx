@@ -2,7 +2,9 @@ package engine
 
 import "base:intrinsics"
 import "core:container/bit_array"
-import "core:slice"
+import "core:container/intrusive/list"
+import "core:container/xar"
+import "core:sort"
 import "core:time"
 
 // Cell ownership, dirty tracking, and retained row construction.
@@ -18,16 +20,35 @@ Render_Key :: bit_field u64 {
 	layer: u32 | 32,
 }
 
-Render_Cell :: struct {
-	stack:            [dynamic]Render_Key, // ascending (layer, particle ID)
-	needs_compaction: bool,
-	top:              Particle_Id, // NO_PARTICLE when the cell has no occupant
-	bytes:            []byte, // borrowed fixed-width slot in canvas_bytes
+Render_Node :: struct {
+	link: list.Node,
+	key:  Render_Key,
 }
 
-@(private = "file")
-render_key_compare :: #force_inline proc(a, b: Render_Key) -> slice.Ordering {
-	return slice.cmp(transmute(u64)a, transmute(u64)b)
+Render_Cell :: struct {
+	occupants:     list.List,
+	top:           Particle_Id,
+	unordered:     bool,
+	needs_resolve: bool,
+	bytes:         []byte,
+}
+
+// Prepare once after engine/effect build, and again only if playback adds IDs.
+// SHIFT=2 gives the installed xar enough chunk-table entries for all u32 IDs.
+render_prepare :: proc(e: ^Engine) {
+	if xar.len(e.render_nodes) == len(e.particles) do return
+	reserve(&e.render_keys, cap(e.particles))
+	for xar.len(e.render_nodes) < len(e.particles) {
+		_, err := xar.append(&e.render_nodes, Render_Node{})
+		assert(err == nil)
+	}
+}
+
+@(private)
+cell_tail :: #force_inline proc(cell: ^Render_Cell) -> ^Render_Node {
+	it := list.iterator_tail(cell.occupants, Render_Node, "link")
+	node, _ := list.iterate_prev(&it)
+	return node
 }
 
 Render_Row :: struct {
@@ -35,17 +56,12 @@ Render_Row :: struct {
 	bytes: []byte, // borrowed from the fixed-slot byte grid
 }
 
-Particle_Update :: struct {
-	id:             Particle_Id,
-	previous_layer: int,
-}
-
-// Accumulate change kinds; retain the published layer before its first edit.
+// Accumulate change kinds; queue each ID once. Published placement lives in its node.
 queue_particle :: #force_inline proc(e: ^Engine, id: Particle_Id, change: Particle_Flag) {
 	flags := e.particles[id].flags
 	e.particles[id].flags = flags + {change, .Update_Queued}
 	if .Update_Queued in flags do return
-	append(&e.updates, Particle_Update{id, e.particles[id].layer})
+	append(&e.updates, id)
 }
 
 frame :: proc(e: ^Engine) {
@@ -82,66 +98,66 @@ next_dirty_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (inde
 	return 0, false
 }
 
-// Leave its sorted key in place until this frame's membership changes are done.
+// A known node unlinks directly, even when it is covered and the cell unordered.
 cell_remove :: proc(e: ^Engine, id: Particle_Id) #no_bounds_check {
 	index := e.particles[id].cell
 	cell := &e.cells[index]
-	if cell.top == id {
-		pop(&cell.stack)
-		cell.top = NO_PARTICLE
-		if len(cell.stack) > 0 do cell.top = Particle_Id(cell.stack[len(cell.stack) - 1].id)
-		mark_cell_dirty(e, index)
-	} else if !cell.needs_compaction {
-		cell.needs_compaction = true
-		append(&e.compact_cells, index)
-	}
+	node := xar.get_ptr(&e.render_nodes, id)
+	list.remove(&cell.occupants, &node.link)
 	e.particles[id].cell = -1
-}
-
-// Published keys stay ordered; filter departed and relayered entries once.
-cell_compact :: proc(e: ^Engine, index: int) #no_bounds_check {
-	cell := &e.cells[index]
-	write := 0
-	for key in cell.stack {
-		id := Particle_Id(key.id)
-		if e.particles[id].cell != index || e.particles[id].layer != int(key.layer) do continue
-		cell.stack[write] = key
-		write += 1
+	if cell.top != id do return
+	cell.top = NO_PARTICLE
+	mark_cell_dirty(e, index)
+	if list.is_empty(&cell.occupants) {
+		cell.unordered = false
+	} else if cell.unordered {
+		cell.needs_resolve = true
+		append(&e.resolve_cells, index)
+	} else {
+		cell.top = Particle_Id(cell_tail(cell).key.id)
 	}
-	resize(&cell.stack, write)
-	top := NO_PARTICLE
-	if write > 0 do top = Particle_Id(cell.stack[write - 1].id)
-	if top != cell.top {cell.top = top; mark_cell_dirty(e, index)}
-	cell.needs_compaction = false
 }
 
-// compose_frame supplies a live particle and a nonnegative cell_index result.
-// The empty-stack branch and binary-search insertion point bound stack accesses.
+// This cell lost its winner. Sort its final live membership once, after all
+// movement/layer updates. Reconnect stable nodes without copying node storage.
+cell_resolve :: proc(e: ^Engine, index: int) #no_bounds_check {
+	cell := &e.cells[index]
+	clear(&e.render_keys)
+	it := list.iterator_head(cell.occupants, Render_Node, "link")
+	for node in list.iterate_next(&it) do append(&e.render_keys, node.key)
+	if cell.unordered do sort.quick_sort(transmute([]u64)e.render_keys[:])
+	cell.occupants = {}
+	for key in e.render_keys {
+		node := xar.get_ptr(&e.render_nodes, key.id)
+		list.push_back(&cell.occupants, &node.link)
+	}
+	cell.top = NO_PARTICLE
+	if len(e.render_keys) > 0 do cell.top = Particle_Id(e.render_keys[len(e.render_keys) - 1].id)
+	cell.unordered = false
+	cell.needs_resolve = false
+}
+
 cell_insert :: proc(e: ^Engine, index: int, id: Particle_Id) #no_bounds_check {
 	cell := &e.cells[index]
 	layer := e.particles[id].layer
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
 	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
-	key := Render_Key {
+	node := xar.get_ptr(&e.render_nodes, id)
+	node.key = Render_Key {
 		id    = u32(id),
 		layer = u32(layer),
 	}
-	if len(cell.stack) == 0 || render_key_compare(cell.stack[len(cell.stack) - 1], key) == .Less {
-		append(&cell.stack, key)
+	if tail := cell_tail(cell); tail != nil && transmute(u64)tail.key > transmute(u64)node.key {
+		cell.unordered = true
+	}
+	list.push_back(&cell.occupants, &node.link)
+	e.particles[id].cell = index
+	if cell.needs_resolve do return
+	if cell.top == NO_PARTICLE ||
+	   transmute(u64)node.key > transmute(u64)xar.get_ptr(&e.render_nodes, cell.top).key {
 		cell.top = id
 		mark_cell_dirty(e, index)
-	} else {
-		slot := 0
-		if render_key_compare(key, cell.stack[0]) != .Less {
-			found: bool
-			slot, found = slice.binary_search_by(cell.stack[:], key, render_key_compare)
-			assert(!found)
-		}
-		// inject_at resizes exactly; retain geometric growth for interior arrivals.
-		if len(cell.stack) == cap(cell.stack) do reserve(&cell.stack, 2 * cap(cell.stack))
-		inject_at(&cell.stack, slot, key)
 	}
-	e.particles[id].cell = index
 }
 
 cell_index :: #force_inline proc(e: ^Engine, coord: Coord) -> int {
@@ -155,14 +171,13 @@ cell_index :: #force_inline proc(e: ^Engine, coord: Coord) -> int {
 	return (e.layout.visible_top - row) * e.layout.visible_right + column - 1
 }
 
-// Insert arrivals in sorted order. Departures are compacted once per affected
-// cell after the queue is drained; only then can cell bytes be patched.
-compose_frame :: proc(e: ^Engine) -> (width, height: int) {
-	width, height = max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
+// Membership changes unlink/append directly. Resolve unordered winners once
+// after the queue, before encoding visible cell bytes.
+compose_frame :: proc(e: ^Engine) {
+	render_prepare(e)
 	// Queue insertion accesses the particle with checks on; IDs are never removed.
 	// Published cells come from cell_index, and all SoA columns share one length.
-	#no_bounds_check for update in e.updates {
-		id := update.id
+	#no_bounds_check for id in e.updates {
 		changes := e.particles[id].flags
 		e.particles[id].flags -= {.Update_Queued, .Placement_Changed, .Content_Changed}
 		when FRAME_STATS_ENABLED {e.stats.candidate_visits += 1}
@@ -171,7 +186,8 @@ compose_frame :: proc(e: ^Engine) -> (width, height: int) {
 			previous_cell := cell
 			cell = cell_index(e, e.particles[id].current_coord) if .Visible in changes else -1
 			if previous_cell >= 0 &&
-			   (cell != previous_cell || e.particles[id].layer != update.previous_layer) {
+			   (cell != previous_cell ||
+					   e.particles[id].layer != int(xar.get_ptr(&e.render_nodes, id).key.layer)) {
 				cell_remove(e, id)
 			}
 			if cell >= 0 && e.particles[id].cell < 0 {
@@ -180,10 +196,9 @@ compose_frame :: proc(e: ^Engine) -> (width, height: int) {
 		}
 		if cell >= 0 && .Content_Changed in changes && e.cells[cell].top == id do mark_cell_dirty(e, cell)
 	}
-	for cell in e.compact_cells do cell_compact(e, cell)
-	clear(&e.compact_cells)
+	for cell in e.resolve_cells do cell_resolve(e, cell)
+	clear(&e.resolve_cells)
 	clear(&e.updates)
-	return
 }
 
 // Encode the winning glyph and appearance directly into its fixed cell slot.

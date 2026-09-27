@@ -73,8 +73,8 @@ Adding a requested property requires its storage, setter, and rendering behavior
 it does not require another pending representation or dispatch case.
 The [placement API measurements](placement-api.md) record the rune/color-pair
 migration, frozen comparison, and remaining validation failures.
-Layers are nonnegative array indices. Use a small, dense range: a cell allocates
-layer headers through the highest index it has used. Negative layers are rejected.
+Layers are priorities in the inclusive range 0 through `max(u32)`. They do not
+index a per-layer allocation. Larger layers win; particle ID breaks ties.
 
 Direct initialization of particle columns is allowed during build, before their
 first compose. After admission, use setters for coordinate, visibility, layer,
@@ -84,58 +84,55 @@ separate frame-selection slice or external dirty-marking obligation.
 
 ## Storage and ownership
 
-Particles use `#soa[dynamic]Particle`. Coordinates and particle IDs are native
-integers; `Appearance_Id` is u32 and indexes `shared_appearances: [dynamic]Appearance`.
+Particles use `#soa[dynamic]Particle`. Coordinates and requested layers are native
+integers; `Particle_Id` is distinct u32, with `max(Particle_Id)` reserved as
+`NO_PARTICLE`. `Appearance_Id` is u32 and indexes shared appearance storage.
 A particle owns its current and initial glyph (`rune`), coordinates, appearance
 IDs, optional private appearance, visibility, and layer. Glyphs are independent
-of styling: different glyphs can use the same appearance ID. Initial appearance
-and glyph remain available after edits. Renderer membership belongs to cells;
-particles have no stored membership slot, links, or encoded packet.
+of styling. Its renderer-owned `cell` records published membership, or -1 when
+absent; it has no membership slot, links, or encoded packet.
 `Particle_Groups` uses flat `members` and `spans`.
 
 `Particle.flags` is `bit_set[Particle_Flag; u8]`: `Visible`, `Fill`,
-`Preserve_Initial_Colors`, and `Update_Queued`. The first three describe requested
-state/classification; only the renderer manages `Update_Queued`. Sharing their
-storage does not change their owners. Set/clear individual bits with `+=`/`-=`;
-do not overwrite the flag byte when changing one property.
+`Preserve_Initial_Colors`, `Update_Queued`, `Placement_Changed`, and
+`Content_Changed`. The first three describe requested state/classification;
+setters accumulate change flags and composition clears them. SoA stores one
+contiguous flags column. Set/clear individual bits with `+=`/`-=` rather than
+overwriting the flag byte. Fields retain natural alignment without packed,
+unaligned access.
 
-SoA stores one contiguous flags column; it does not pack separate boolean fields.
-The fields are ordered by natural alignment: coordinates/layer (8), IDs/glyphs
-(4), then appearance and flags (1). No unaligned packed struct is needed.
-On this 64-bit build, `size_of(Particle)` is 112 bytes (previously 128), and the
-SoA header is 104 bytes (previously 128). Actual column payload drops from 113
-to 110 bytes per capacity slot, plus per-column alignment: the measured buffer
-at 10,000 slots is 1,100,000 bytes, previously 1,130,000.
+`updates` is a reusable array of four-byte `Particle_Id` values. The particle
+gathers final requested values and change flags; `Update_Queued` deduplicates
+publication. No queue entry copies the previous placement. The particle's
+published cell and its render node's published key supply that information.
+Initialization queues new IDs through the same path. Capacity follows particle
+capacity; no separate admission scan or full particle/cell-grid scan is required.
 
-`updates` is a reusable contiguous array of 24-byte `Particle_Update` entries:
-`{id, previous_cell, previous_layer}`. The first change snapshots the published
-placement before modifying the particle. The `Update_Queued` flag deduplicates
-subsequent changes; there is no pending-index table. Queue capacity follows
-particle capacity. Initialization queues each new particle with `previous_cell = -1`;
-subsequent build edits deduplicate into that entry. New and existing particles
-use the same publication loop, with no separate admission count or scan.
+Each particle has one 24-byte renderer-owned `Render_Node`, containing native
+intrusive-list links and a packed 64-bit `(layer, particle ID)` key.
+`xar.Array(Render_Node, 2)` supplies stable addresses and direct ID lookup.
+Preparation runs after engine/effect build and on population growth; the usual
+frame path checks population length once. This also supports Thunderstorm's
+playback-created particles. One reusable key array reserves against particle
+capacity for winner resolution.
 
-Composition removes every changed old membership before inserting final requested
-placements. This order matters because other queued particles already hold their
-requested layers, which may differ from their published layers. Appearance/glyph
-changes leave membership intact. Final winning cells are marked for encoding;
-then the queue flags and entries are cleared. Publication belongs in `render.odin`.
+A 40-byte `Render_Cell` contains its intrusive-list header, winning ID,
+`unordered`/`needs_resolve` flags, and borrowed byte slice. Arrivals append and
+compare their published key with the cached winner. An append below the previous
+tail marks the list unordered. Departures unlink their exact node directly;
+covered departures need neither a scan nor pixel dirtiness. An ordered winner
+departure exposes the tail. An unordered winner departure queues that cell once,
+clears its winner, and defers resolution until all queued particle changes finish.
 
-A cell stores `layers: [dynamic][dynamic]Particle_Id`, indexed directly by layer.
-There is no stored layer tag or layer lookup. `top` caches the winning ID, or -1
-for an empty cell. Insertion grows the outer array if needed and appends the ID
-to `cell.layers[layer]`. A single comparison against the cached winner preserves
-the `(layer, particle_id)` priority; arrival order does not decide visibility.
-Removal linearly locates the ID within its layer and uses `ordered_remove`.
-Only removal of the winner triggers a replacement scan: walk layer indices
-backward to the first nonempty array, then take its maximum particle ID.
-The entry's previous cell and layer identify membership to remove for
-movement, layer changes, hiding, and clipping. Particles retain their requested
-layer while hidden or clipped. Setters do not mutate cell membership or rows.
-This [indexed-layer experiment](indexed-layers.md) retains both unordered and
-ordered-removal variants for comparison. Playback allocation gates remain open.
-The engine visits queued particles, including newly created ones. There is no
-separate admission scan, full particle scan, or cell-grid scan per frame.
+Composition drains each queued ID once, unlinking old membership and appending
+final membership only when its cell or layer changes. Published node keys stay
+independent of other particles' requested layers. Content-only updates dirty
+only their current winning cell. Pending cells gather and sort their surviving
+keys once, reconnect the same nodes, and publish the maximum-key winner. Then
+encoding sees only final winners. There are no per-cell dynamic arrays,
+insertion shifts, tombstones, or compaction passes. See the
+[intrusive-list measurements](intrusive-lazy-stack.md) and
+[current integrated benchmark](intrusive-main.md) for results and known tradeoffs.
 
 `rows[row].cells[column]` gives the row-oriented grid view. Each `Render_Row`
 holds only a borrowed cell slice and a borrowed byte slice.
@@ -204,7 +201,8 @@ malformed UTF-8. This is a code-point contract, not a grapheme or display-width
 guarantee. See [appearance ownership measurements](appearance-ownership.md) and the
 [renderer cache experiment](render-cache.md) and
 [appearance-prefix measurements](appearance-bytes.md). Current queue measurements
-and validation are in [unified publication](unified-publication.md). The previous
+and validation are in [the integrated report](intrusive-main.md). The previous
+[unified publication](unified-publication.md),
 [cell byte views](cell-byte-views.md),
 [packed particle flags](particle-flags.md),
 [requested state](requested-state.md),

@@ -329,6 +329,7 @@ build_effect :: proc(effect: ^Effect, ctx: ^engine.Engine) {
 	case:
 		unreachable()
 	}
+	engine.render_prepare(ctx)
 }
 
 // Effects publish through particle setters and return whether a frame is ready.

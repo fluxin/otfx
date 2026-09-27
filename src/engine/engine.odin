@@ -1,6 +1,7 @@
 package engine
 
 import "core:container/bit_array"
+import "core:container/xar"
 import "core:time"
 
 // Engine state, construction, and playback time.
@@ -16,9 +17,11 @@ Engine :: struct {
 	mono_start:            time.Tick,
 	particle_sets:         Particle_Sets,
 	layout:                Render_Layout,
-	updates:               [dynamic]Particle_Update,
+	updates:               [dynamic]Particle_Id,
 	cells:                 []Render_Cell,
-	compact_cells:         [dynamic]int,
+	resolve_cells:         [dynamic]int,
+	render_nodes:          xar.Array(Render_Node, 2),
+	render_keys:           [dynamic]Render_Key,
 	rows:                  []Render_Row,
 	dirty_cells:           bit_array.Bit_Array,
 	dirty_rows, emit_rows: bit_array.Bit_Array,
@@ -51,7 +54,7 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.cells = make([]Render_Cell, width * height)
 	for &cell in e.cells do cell.top = NO_PARTICLE
-	reserve(&e.compact_cells, len(e.cells))
+	reserve(&e.resolve_cells, len(e.cells))
 	e.rows = make([]Render_Row, height)
 	bit_array.init(&e.dirty_cells, width * height)
 	bit_array.init(&e.dirty_rows, height)
@@ -89,6 +92,7 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	}
 	make_fill_particles(&e, occupied)
 	delete(occupied)
+	render_prepare(&e)
 	return e, .None
 }
 

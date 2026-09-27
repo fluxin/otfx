@@ -1,7 +1,8 @@
 # Performance decisions
 
-The latest measurements are in the [Spotlights follow-up](spotlights-prepared.md)
-and the preceding [all-effect pattern audit](effect-patterns.md). The accepted compaction tradeoff
+The latest measurements are in the [integrated renderer report](intrusive-main.md).
+Earlier effect work is in the [Spotlights follow-up](spotlights-prepared.md)
+and [all-effect pattern audit](effect-patterns.md). The accepted compaction tradeoff
 and earlier shared-motion work are in [shared motion](shared-motion.md).
 Earlier production measurements are in [row renderer](row-renderer.md), with
 [before/after](row-benchmark.tsv) and [ASM](row-asm-benchmark.tsv) tables. The
@@ -9,6 +10,12 @@ observations below are historical unless the current report explicitly retains
 them; they are not an inventory of today's engine state.
 
 ## Retained
+
+- Intrusive cell lists with lazy sorting replace per-cell arrays and compaction.
+  Nodes retain published keys; queued changes contain only particle IDs.
+  The user approved applying the measured aggregate win despite the disclosed
+  Slide/Smoke/Overflow tradeoffs. [Current results](intrusive-main.md) separate
+  integration, queue cleanup, and the frozen ASM comparison.
 
 - Flat character/cell storage, direct four-byte color comparisons, one emission
   path, and color policy selected once per frame keep unchanged-cell work small.
@@ -26,6 +33,9 @@ them; they are not an inventory of today's engine state.
 
 | Experiment | Observation and decision |
 |---|---|
+| Standard-library priority queue per cell | [Indexed heap prototype](priority-queue-stack.md) deletes sorted insertion and compaction using `pq.push/remove` plus particle slot mappings. Two full sweeps show about 3% worse geometric time; Middleout/Expand improve but many effects regress. Timing variability is retained and disclosed. 756 captures match; preserve separately, do not promote. |
+| Lazy sorting after winner departure | [Tracked top-slot prototype](lazy-top-stack.md) appends without insertion shifts and sorts only after losing the winner. Middleout 15.8→7.2 ms; 35-effect geometric time improves 1.5%, arithmetic mean worsens 0.36%. Binarypath, Scattered and Slide regress in both run orders. All 756 captures match; preserve isolated prototype, do not promote. |
+| Bounded cell arrival sorting/merge | [Final preallocated-scratch control](bounded-cell-insert.md) improves Middleout 15.8→7.4 ms and removes the Blackhole regression, but the full mean is 0.7% worse while geometric time improves 0.8%. [Longer reversed-order repeats](bounded-cell-insert-recheck.md) confirm the mixed result. Storage-only controls reproduce several losses even without batching; preserve prototype, do not promote. |
 | Runtime foreground/background palette and packed cell keys | Lookup/key maintenance made complete Bubbles/Laseretch runs roughly 20–40% slower and added about 1 MiB. Removed. This does not rule out IDs assigned during construction. |
 | Wider string comparison | An alignment fault was corrected, but the wider comparison provided no useful speed advantage. Removed; retain string-content comparison. |
 | Native scalar or paired SIMD rounding | Improved motion-heavy effects, but repeat checks retained Beams/Decrypt/Smoke regressions. Deferred in that earlier renderer. Revisited with the current row renderer and retained after full-suite validation; see the current report. The cause of the earlier regressions was not established. |

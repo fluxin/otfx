@@ -30,9 +30,9 @@ queued_layer_changes_keep_published_stack_order :: proc(t: ^testing.T) {
 	engine.set_visible(&e, d, false)
 	engine.frame_build(&e)
 	testing.expect_value(t, string(frame_without_padding(&e)), "AB")
-	testing.expect_value(t, len(e.cells[0].stack), 2)
-	testing.expect_value(t, e.cells[0].stack[0].id, u32(c))
-	testing.expect_value(t, e.cells[0].stack[1].id, u32(a))
+	testing.expect_value(t, len(cell_keys(e.cells[0])), 2)
+	testing.expect_value(t, cell_keys(e.cells[0])[0].id, u32(c))
+	testing.expect_value(t, cell_keys(e.cells[0])[1].id, u32(a))
 	expect_published_cells(t, &e)
 
 	// Arrival precedes departure in each destination cell.
@@ -93,8 +93,8 @@ new_particles_publish_through_update_queue :: proc(t: ^testing.T) {
 	e, err := engine.engine_make("A", cfg)
 	testing.expect_value(t, err, engine.Input_Error.None)
 	testing.expect_value(t, len(e.updates), len(e.particles))
-	for update in e.updates {
-		testing.expect_value(t, e.particles[update.id].cell, -1)
+	for id in e.updates {
+		testing.expect_value(t, e.particles[id].cell, -1)
 	}
 	base := e.particle_sets.input[0]
 	// Direct build writes are gathered by the initialization entry too.
@@ -213,7 +213,7 @@ particle_requested_state_publishes_once :: proc(t: ^testing.T) {
 	expect_visible_draws(t, &e)
 
 	// A round trip before publication leaves exactly one membership.
-	occupants := len(e.cells[1].stack)
+	occupants := len(cell_keys(e.cells[1]))
 	engine.set_visible(&e, a, false)
 	engine.set_position(&e, a, {-1, 1})
 	engine.set_position(&e, a, {2, 1})
@@ -224,7 +224,7 @@ particle_requested_state_publishes_once :: proc(t: ^testing.T) {
 	engine.frame_build(&e)
 	// A placement round trip neither changes membership nor repatches the winner.
 	testing.expect_value(t, len(frame_without_padding(&e)), 0)
-	testing.expect_value(t, len(e.cells[1].stack), occupants)
+	testing.expect_value(t, len(cell_keys(e.cells[1])), occupants)
 	testing.expect(t, (.Update_Queued not_in e.particles[a].flags))
 	testing.expect_value(t, cell_layer_count(e.cells[1], 2), 1)
 	expect_published_cells(t, &e)

@@ -67,43 +67,34 @@ playback contracts are described in [architecture](docs/architecture.md).
 
 ## Performance
 
-The [Spotlights follow-up](docs/spotlights-prepared.md) reduces its runtime by 14%
-using prepared HSL colors and squared-distance checks. All 282 captures match
-byte-for-byte; the full 35-effect screen found no regression above 2%.
+The [current single-core renderer](docs/intrusive-main.md) uses stable intrusive
+cell lists and an ID-only update queue. A fresh 35-effect comparison measures
+**28.53 ms mean wall for OTFX versus 30.90 ms for ttfx ASM**: 7.7% less time by
+arithmetic mean. Geometrically OTFX is **0.6% slower**, essentially tied at this
+sampling depth, with **16/35 individual wins**.
 
-The preceding [37-effect pattern audit](docs/effect-patterns.md) records:
-23 effects now apply existing active-list, shared-calculation and held-sample
-patterns. The 21 changed finite effects improve 9.5% in mean best wall time.
-A [fresh 35-effect ASM comparison](docs/effect-patterns-asm.tsv) measures mean best
-wall time of 30.48 ms versus ASM 30.86 ms: roughly parity, with 12/35 individual
-wins and a 7.9% slower geometric time ratio.
-See the report for CPU/RSS, frame validation and measurement limits.
-
-The earlier row-renderer comparison against **ttfx's ASM branch** measured **48.2 ms
-for otfx versus 54.5 ms for ASM**, averaged over 35 finite effects: about 12%
-less mean wall time. otfx wins 19/35 effects; geometric mean is essentially tied
-at 1.01×, so this is not a uniform advantage.
-
-| Metric, unweighted mean | ttfx ASM | otfx |
+| Unweighted mean across 35 effects | OTFX | ttfx ASM |
 |---|---:|---:|
-| Best wall time per effect | 54.5 ms | 48.2 ms |
-| Child CPU time | 54.5 ms | 48.1 ms |
-| Peak RSS per effect | 87.9 MiB | 11.3 MiB |
+| Mean wall per effect | 28.53 ms | 30.90 ms |
+| Mean child CPU | 28.40 ms | 30.74 ms |
+| Mean per-effect maximum RSS | 11.91 MiB | 50.72 MiB |
 
-Against the frozen preceding otfx binary, mean wall time falls from 93.2 to
-48.2 ms; 34/35 effects improve. Overflow regresses, and is reported explicitly.
-See the [experiment report](docs/row-renderer.md),
-[before/after table](docs/row-benchmark.tsv), and
-[ASM comparison](docs/row-asm-benchmark.tsv) for every effect and frame count.
-The [older non-ASM Rust comparison](docs/rust-benchmark.tsv) is historical.
+See the [complete per-effect chart](docs/intrusive-main.md#current-result-against-asm)
+and [wall/CPU/RSS/frame table](docs/intrusive-main-final-asm.tsv). Frame counts
+differ for 21/35 effects: these are complete-animation costs, not equal-frame
+throughput. Native before/after captures remain byte-identical in all 756 cases;
+all 87 unit tests pass. The report discloses the per-effect tradeoffs.
 
-Measured 2026-09-26 on Ryzen 9 9900X3D, CPU 2, Odin
-`dev-2026-09-nightly:a2fb372`, `-o:speed -microarch:native -debug`, with bounds
-checks. Dense input and default canvas are 190×46; terminal dimensions are
-200×50. Both CLIs use seed 1, frame rate 0, and stdout `/dev/null`. Three samples
-batch at least 0.3 seconds each. CPU is child user plus system time from `wait4`.
-Frame counts differ for 21/35 ASM comparisons: these are complete animation
-costs, not equal-frame throughput. Terminal-emulator work is excluded.
+Measured 2026-09-27 on Ryzen 9 9900X3D, CPU 2, `-o:speed -microarch:native -debug`,
+assertions enabled, existing scoped bounds-check exclusions. Dense input/default
+canvas 190×46; terminal 200×50; seed 1; frame rate 0; stdout `/dev/null`.
+Three samples batch at least 0.3 seconds each. Whole CLI time and child CPU/RSS
+are measured; terminal-emulator work is excluded. The frozen ASM oracle remains
+revision `c2be6411`; it was not rebuilt or fetched for this comparison.
+
+Earlier [Spotlights](docs/spotlights-prepared.md),
+[effect-pattern](docs/effect-patterns.md), and
+[row-renderer](docs/row-renderer.md) measurements remain historical references.
 
 ### Reproduce
 
