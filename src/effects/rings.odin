@@ -111,6 +111,7 @@ Rings_State :: struct {
 	targets:            [dynamic]engine.Coord,
 	steps:              [dynamic]int,
 	max_steps:          [dynamic]int,
+	active_slots:       [dynamic]int,
 	modes:              [dynamic]Rings_Mode,
 	rings:              [dynamic]Ring,
 	phase:              Rings_Phase,
@@ -250,6 +251,7 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	s.spin_remaining = s.config.spin_duration
 	s.disperse_remaining = s.config.disperse_duration
 	s.cycles_remaining = s.config.spin_disperse_cycles
+	reserve(&s.active_slots, len(s.ids))
 	s.start_remaining = 100
 }
 
@@ -384,9 +386,9 @@ rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 }
 
 rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
-	for slot in 0 ..< len(s.ids) {
+	write := 0
+	for slot in s.active_slots {
 		mode := s.modes[slot]
-		if mode == .Idle || mode == .Complete do continue
 		id := s.ids[slot]
 		step := s.steps[slot] + 1
 		maximum := s.max_steps[slot]
@@ -403,6 +405,8 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		position := engine.coord_on_line(s.origins[slot], s.targets[slot], factor)
 		engine.set_particle(e, id, position)
 		if step < maximum {
+			s.active_slots[write] = slot
+			write += 1
 			s.steps[slot] = step
 			continue
 		}
@@ -445,11 +449,17 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			s.modes[slot] = .Complete
 		case .Idle, .Complete:
 		}
+		if s.modes[slot] != .Complete {
+			s.active_slots[write] = slot
+			write += 1
+		}
 	}
+	resize(&s.active_slots, write)
 }
 
 rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool {
 	if s.phase == .Complete do return false
+	previous_phase, previously_dispersed := s.phase, s.initial_disperse
 	switch s.phase {
 	case .Start:
 		if s.start_remaining == 0 {
@@ -483,12 +493,14 @@ rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool {
 			s.spin_remaining -= 1
 		}
 	case .Final:
-		complete := true
-		for mode in s.modes {
-			if mode != .Complete do complete = false
-		}
-		if complete do s.phase = .Complete
+		if len(s.active_slots) == 0 do s.phase = .Complete
 	case .Complete:
+	}
+	if previous_phase != s.phase || previously_dispersed != s.initial_disperse {
+		clear(&s.active_slots)
+		for mode, slot in s.modes {
+			if mode != .Idle && mode != .Complete do append(&s.active_slots, slot)
+		}
 	}
 	rings_update_colors(s, e)
 	rings_update_motion(s, e)

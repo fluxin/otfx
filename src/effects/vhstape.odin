@@ -612,15 +612,17 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
-			symbol, appearance := vhstape_noise_appearance(
-				s,
-				s.snow_frames[:],
-				VHSTAPE_SNOW_FRAMES,
-				id,
-				step / 2,
-			)
-			engine.set_symbol(e, id, symbol)
-			engine.set_appearance(e, id, appearance)
+			if step % 2 == 0 {
+				symbol, appearance := vhstape_noise_appearance(
+					s,
+					s.snow_frames[:],
+					VHSTAPE_SNOW_FRAMES,
+					id,
+					step / 2,
+				)
+				engine.set_symbol(e, id, symbol)
+				engine.set_appearance(e, id, appearance)
+			}
 		} else {
 			vhstape_set_stable_appearance(s, e, id)
 		}
@@ -631,25 +633,29 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 		}
 	case .Final_Snow:
 		step := s.scene_ticks[id]
-		symbol, appearance := vhstape_noise_appearance(
-			s,
-			s.final_snow_frames[:],
-			VHSTAPE_FINAL_SNOW_FRAMES,
-			id,
-			step / 2,
-		)
-		engine.set_symbol(e, id, symbol)
-		engine.set_appearance(e, id, appearance)
+		if step % 2 == 0 {
+			symbol, appearance := vhstape_noise_appearance(
+				s,
+				s.final_snow_frames[:],
+				VHSTAPE_FINAL_SNOW_FRAMES,
+				id,
+				step / 2,
+			)
+			engine.set_symbol(e, id, symbol)
+			engine.set_appearance(e, id, appearance)
+		}
 		s.scene_ticks[id] += 1
 		if s.scene_ticks[id] == VHSTAPE_FINAL_SNOW_FRAMES * 2 do s.scenes[id] = .Idle
 	case .Final_Redraw:
 		if s.scene_ticks[id] < 6 {
-			engine.set_symbol(e, id, '█')
-			engine.set_appearance(
-				e,
-				id,
-				engine.Appearance{colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}},
-			)
+			if s.scene_ticks[id] == 0 {
+				engine.set_symbol(e, id, '█')
+				engine.set_appearance(
+					e,
+					id,
+					engine.Appearance{colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}},
+				)
+			}
 		} else {
 			vhstape_set_final_appearance(s, e, id)
 		}

@@ -1,6 +1,9 @@
 # Performance decisions
 
-Current production measurements are in [row renderer](row-renderer.md), with
+The latest measurements are in the [Spotlights follow-up](spotlights-prepared.md)
+and the preceding [all-effect pattern audit](effect-patterns.md). The accepted compaction tradeoff
+and earlier shared-motion work are in [shared motion](shared-motion.md).
+Earlier production measurements are in [row renderer](row-renderer.md), with
 [before/after](row-benchmark.tsv) and [ASM](row-asm-benchmark.tsv) tables. The
 observations below are historical unless the current report explicitly retains
 them; they are not an inventory of today's engine state.

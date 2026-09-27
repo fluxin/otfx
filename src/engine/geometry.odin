@@ -34,6 +34,13 @@ line_length :: proc(a, b: Coord, double_row_diff: bool) -> f64 {
 	return linalg.length(v)
 }
 
+// Compare against a squared radius when the actual distance is not needed.
+line_length_squared :: proc(a, b: Coord, double_row_diff: bool) -> f64 {
+	v := coord_vec(b) - coord_vec(a)
+	if double_row_diff do v *= linalg.Vector2f64{1, 2}
+	return linalg.length2(v)
+}
+
 coord_vec :: proc(c: Coord) -> linalg.Vector2f64 {
 	return {f64(c.column), f64(c.row)}
 }

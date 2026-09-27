@@ -183,16 +183,18 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 	frames := s.config.gradient_frames
 	cycle_ticks := s.config.cycles * n * frames
 	if s.config.cycles == 0 || s.tick < cycle_ticks {
-		for base := 0; base < len(ids); base += 8 {
-			count := min(8, len(ids) - base)
-			codes: [8]engine.Appearance_Id
-			for lane in 0 ..< count {
-				i := base + lane
-				index := s.shifts[i] + s.palette_index
-				if index >= n do index -= n
-				codes[lane] = s.appearances[index]
+		if s.palette_tick == 0 {
+			for base := 0; base < len(ids); base += 8 {
+				count := min(8, len(ids) - base)
+				codes: [8]engine.Appearance_Id
+				for lane in 0 ..< count {
+					i := base + lane
+					index := s.shifts[i] + s.palette_index
+					if index >= n do index -= n
+					codes[lane] = s.appearances[index]
+				}
+				engine.set_appearances(e, ids[base:base + count], codes[:count])
 			}
-			engine.set_appearances(e, ids[base:base + count], codes[:count])
 		}
 		s.palette_tick += 1
 		if s.palette_tick == frames {
@@ -207,30 +209,32 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
 		transition_step := transition_tick / frames
 		transition_steps :: 8
 		if transition_step > transition_steps do return false
-		for id, i in ids {
-			appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
-			appearance := engine.Appearance{}
-			start_index := s.shifts[i] - 1
-			if start_index < 0 do start_index += n
-			start := s.gradient[start_index]
-			if s.color_handling == .Dynamic {
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					start,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					transition_steps,
-					transition_step,
-				)
-			} else {
-				appearance.colors.fg = engine.gradient_between_step(
-					start,
-					s.final_colors[i],
-					transition_steps,
-					transition_step,
-				)
+		if transition_tick % frames == 0 {
+			for id, i in ids {
+				appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
+				appearance := engine.Appearance{}
+				start_index := s.shifts[i] - 1
+				if start_index < 0 do start_index += n
+				start := s.gradient[start_index]
+				if s.color_handling == .Dynamic {
+					engine.dynamic_gradient_to_input(
+						&appearance,
+						start,
+						engine.get_initial_appearance(e, engine.Particle_Id(id)),
+						transition_steps,
+						transition_step,
+					)
+				} else {
+					appearance.colors.fg = engine.gradient_between_step(
+						start,
+						s.final_colors[i],
+						transition_steps,
+						transition_step,
+					)
+				}
+				engine.set_symbol(e, id, appearance_symbol)
+				engine.set_appearance(e, id, appearance)
 			}
-			engine.set_symbol(e, id, appearance_symbol)
-			engine.set_appearance(e, id, appearance)
 		}
 	}
 	s.tick += 1

@@ -109,7 +109,7 @@ expand_publishes_arrival_before_retiring :: proc(t: ^testing.T) {
 		for effects.expand_next(&s, &e) {
 			for update in e.updates do testing.expect(t, !retired[update.id], "completed particles must leave the update work set")
 			for id, i in s.characters {
-				if s.tick < s.max_steps[i] do continue
+				if s.tick < s.max_steps[s.motion_slots[i]] do continue
 				testing.expect_value(
 					t,
 					e.particles.current_coord[id],

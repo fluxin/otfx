@@ -224,8 +224,8 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool {
 	for id in s.active {
 		age := s.tick - s.start_ticks[id]
 		if age < wave_ticks - 1 {
-			engine.set_symbol(e, id, s.wave_symbols[age])
-			engine.set_appearance(e, id, s.wave_codes[age])
+			if age == 0 || s.wave_symbols[age] != s.wave_symbols[age - 1] do engine.set_symbol(e, id, s.wave_symbols[age])
+			if age == 0 || s.wave_codes[age] != s.wave_codes[age - 1] do engine.set_appearance(e, id, s.wave_codes[age])
 		} else {
 			final_age := age - (wave_ticks - 1)
 			final_ticks := (final_steps + 1) * 10

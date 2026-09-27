@@ -5,6 +5,27 @@ import "core:slice"
 import "core:testing"
 
 @(test)
+value_groups_preserve_complete_keys_and_lane_order :: proc(t: ^testing.T) {
+	// Equal durations alone are insufficient when start times or actions differ.
+	Key :: struct {
+		start, stop, action: int,
+	}
+	keys := [?]Key{{0, 10, 1}, {5, 15, 1}, {0, 10, 1}, {0, 10, 2}, {5, 15, 1}}
+	unique, slots := engine.group_values(keys[:])
+	defer delete(unique)
+	defer delete(slots)
+	testing.expect_value(t, len(unique), 3)
+	testing.expect(t, slice.equal(slots[:], []int{0, 1, 0, 2, 1}))
+	for key, i in keys do testing.expect_value(t, unique[slots[i]], key)
+	for index, i in ([3]int{0, 1, 3}) do testing.expect_value(t, unique[i], keys[index])
+	empty, empty_slots := engine.group_values(([]Key)(nil))
+	defer delete(empty)
+	defer delete(empty_slots)
+	testing.expect_value(t, len(empty), 0)
+	testing.expect_value(t, len(empty_slots), 0)
+}
+
+@(test)
 particle_groups_preserve_coordinate_order_and_filters :: proc(t: ^testing.T) {
 	// Dense and sparse keys, shuffled collection order, all group directions.
 	for scale in ([2]int{1, 1_000_000}) {

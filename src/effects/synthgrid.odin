@@ -93,6 +93,7 @@ Synthgrid_State :: struct {
 	grid_extended:           [dynamic]int,
 	grid_is_horizontal:      [dynamic]bool,
 	cells:                   [dynamic]engine.Particle_Id,
+	active_cells:            [dynamic]engine.Particle_Id,
 	groups:                  engine.Particle_Groups,
 	final_colors:            [dynamic]engine.Color, // Particle_Id indexed
 	start_ticks:             [dynamic]int, // Particle_Id indexed
@@ -316,6 +317,7 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 	s.generation_slot_by_id = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i], s.group_by_id[i], s.generation_slot_by_id[i] = -1, -1, -1
 	cell_count := len(s.cells)
+	reserve(&s.active_cells, cell_count)
 	s.generation_frame_counts = make([dynamic]u8, cell_count)
 	s.generation_symbols = make([dynamic]rune, cell_count * SYNTHGRID_MAX_GENERATION_FRAMES)
 	s.generation_colors = make([dynamic]engine.Color, cell_count * SYNTHGRID_MAX_GENERATION_FRAMES)
@@ -377,18 +379,22 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 				s.start_ticks[id] = s.tick
 				engine.set_particle(e, id, engine.Visible(true))
 			}
+			append(&s.active_cells, ..members)
 			s.active_count += 1
 			s.next_group += 1
 		}
 		fill_flags := e.particles.flags
-		for id in s.cells {
+		write := 0
+		for id in s.active_cells {
 			start := s.start_ticks[id]
-			if start < 0 do continue
 			age := s.tick - start
 			slot := s.generation_slot_by_id[id]
 			frame_count := int(s.generation_frame_counts[slot])
 			frame := age / 2
 			if frame < frame_count {
+				s.active_cells[write] = id
+				write += 1
+				if age % 2 != 0 do continue
 				index := slot * SYNTHGRID_MAX_GENERATION_FRAMES + frame
 				engine.set_symbol(e, id, s.generation_symbols[index])
 				engine.set_foreground(e, id, s.generation_colors[index])
@@ -416,6 +422,7 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
 				}
 			}
 		}
+		resize(&s.active_cells, write)
 		s.tick += 1
 		if s.next_group == len(s.groups.spans) && s.active_count == 0 {
 			s.phase = .Grid_Collapse

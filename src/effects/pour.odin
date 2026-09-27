@@ -253,34 +253,36 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
-		} else {
+		} else if age == s.max_steps[slot] {
 			engine.set_particle(e, id, e.particles.initial_coord[id])
 		}
 		if age < color_ticks {
-			step := min(age / s.config.final_gradient_frames, color_steps)
-			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					s.config.starting_color,
-					style,
-					10,
-					step,
-				)
-				engine.set_appearance(e, id, appearance)
-			} else {
-				engine.set_foreground(
-					e,
-					id,
-					engine.gradient_between_step(
+			if age % s.config.final_gradient_frames == 0 {
+				step := min(age / s.config.final_gradient_frames, color_steps)
+				if s.color_handling == .Dynamic {
+					appearance := engine.get_appearance(e, id)
+					engine.dynamic_gradient_to_input(
+						&appearance,
 						s.config.starting_color,
-						s.final_colors[slot],
-						s.color_steps,
+						style,
+						10,
 						step,
-					),
-				)
+					)
+					engine.set_appearance(e, id, appearance)
+				} else {
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(
+							s.config.starting_color,
+							s.final_colors[slot],
+							s.color_steps,
+							step,
+						),
+					)
+				}
 			}
-		} else {
+		} else if age == color_ticks {
 			if s.color_handling == .Dynamic {
 				engine.set_foreground(e, id, style.colors.fg)
 				engine.set_background(e, id, style.colors.bg)

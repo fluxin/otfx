@@ -457,29 +457,31 @@ matrix_step_resolve :: proc(s: ^Matrix_State, e: ^engine.Engine) {
 	write := 0
 	for id in s.resolve_active {
 		tick := s.resolve_ticks[id]
-		step := min(tick / s.config.final_gradient_frames, 8)
-		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		if s.color_handling == .Dynamic {
-			appearance := engine.get_appearance(e, id)
-			engine.dynamic_gradient_to_input(
-				&appearance,
-				s.config.highlight_color,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				8,
-				step,
-			)
-			engine.set_appearance(e, id, appearance)
-		} else {
-			engine.set_foreground(
-				e,
-				id,
-				engine.gradient_between_step(
+		if tick % s.config.final_gradient_frames == 0 {
+			step := min(tick / s.config.final_gradient_frames, 8)
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			if s.color_handling == .Dynamic {
+				appearance := engine.get_appearance(e, id)
+				engine.dynamic_gradient_to_input(
+					&appearance,
 					s.config.highlight_color,
-					s.resolve_final_colors[id],
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
 					8,
 					step,
-				),
-			)
+				)
+				engine.set_appearance(e, id, appearance)
+			} else {
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(
+						s.config.highlight_color,
+						s.resolve_final_colors[id],
+						8,
+						step,
+					),
+				)
+			}
 		}
 		tick += 1
 		limit := 9 * s.config.final_gradient_frames

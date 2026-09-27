@@ -82,6 +82,7 @@ Orbittingvolley_State :: struct {
 	config:             Orbittingvolley_Config,
 	characters:         [dynamic]engine.Particle_Id,
 	final_colors:       [dynamic]engine.Color,
+	active_indexes:     [dynamic]int,
 	launch_starts:      [dynamic]int,
 	launch_origins:     [dynamic]engine.Coord,
 	launch_steps:       [dynamic]int,
@@ -138,6 +139,7 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	reserve(&s.active_indexes, n)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.launch_starts = make([dynamic]int, n)
 	s.launch_origins = make([dynamic]engine.Coord, n)
@@ -241,8 +243,8 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 
 orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bool {
 	active := !s.launchers_hidden
-	for start, i in s.launch_starts {
-		if start >= 0 && s.tick - start < s.launch_steps[i] {
+	for i in s.active_indexes {
+		if s.tick - s.launch_starts[i] < s.launch_steps[i] {
 			active = true
 			break
 		}
@@ -264,6 +266,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 					i := s.magazines[head]
 					s.magazine_heads[launcher] += 1
 					s.launch_starts[i] = s.tick
+					append(&s.active_indexes, i)
 					s.launch_origins[i] = s.launcher_positions[launcher]
 					id := s.characters[i]
 					s.launch_steps[i] = max(
@@ -295,9 +298,10 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 
 	initial_coords := e.particles.initial_coord
 
-	for id, i in s.characters {
+	write := 0
+	for i in s.active_indexes {
+		id := s.characters[i]
 		start := s.launch_starts[i]
-		if start < 0 do continue
 		age := s.tick - start
 		steps := s.launch_steps[i]
 		if age >= steps {
@@ -307,6 +311,8 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 			}
 			continue
 		}
+		s.active_indexes[write] = i
+		write += 1
 		engine.set_particle(
 			e,
 			id,
@@ -316,17 +322,20 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			),
 		)
-		if s.color_handling == .Dynamic {
-			appearance := engine.get_appearance(e, id)
-			engine.dynamic_apply_input_colors(
-				&appearance,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)),
-			)
-			engine.set_appearance(e, id, appearance)
-		} else {
-			engine.set_foreground(e, id, s.final_colors[i])
+		if age == 0 {
+			if s.color_handling == .Dynamic {
+				appearance := engine.get_appearance(e, id)
+				engine.dynamic_apply_input_colors(
+					&appearance,
+					engine.get_initial_appearance(e, engine.Particle_Id(id)),
+				)
+				engine.set_appearance(e, id, appearance)
+			} else {
+				engine.set_foreground(e, id, s.final_colors[i])
+			}
 		}
 	}
+	resize(&s.active_indexes, write)
 	s.tick += 1
 	return true
 }

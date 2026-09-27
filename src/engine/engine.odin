@@ -18,6 +18,7 @@ Engine :: struct {
 	layout:                Render_Layout,
 	updates:               [dynamic]Particle_Update,
 	cells:                 []Render_Cell,
+	compact_cells:         [dynamic]int,
 	rows:                  []Render_Row,
 	dirty_cells:           bit_array.Bit_Array,
 	dirty_rows, emit_rows: bit_array.Bit_Array,
@@ -50,6 +51,7 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.cells = make([]Render_Cell, width * height)
 	for &cell in e.cells do cell.top = NO_PARTICLE
+	reserve(&e.compact_cells, len(e.cells))
 	e.rows = make([]Render_Row, height)
 	bit_array.init(&e.dirty_cells, width * height)
 	bit_array.init(&e.dirty_rows, height)

@@ -60,13 +60,20 @@ scattered_parse :: proc(cfg: ^Scattered_Config, args: []string) -> bool {
 	return true
 }
 
+// Particles with the same duration share the tick's scalar motion sample.
+Scattered_Motion :: struct {
+	progress, factor: f64,
+}
+
 Scattered_State :: struct {
 	config:         Scattered_Config,
 	characters:     [dynamic]engine.Particle_Id,
 	active_indexes: [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
 	origins:        [dynamic]engine.Coord,
-	max_steps:      [dynamic]int,
+	motion_slots:   [dynamic]int,
+	motion_steps:   [dynamic]int,
+	motions:        [dynamic]Scattered_Motion,
 	color_steps:    [dynamic]u8, // last published gradient sample; build installs zero
 	step_limit:     int,
 	tick:           int,
@@ -103,7 +110,8 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.active_indexes = make([dynamic]int, n)
-	s.max_steps = make([dynamic]int, n)
+	steps_by_particle := make([]int, n)
+	defer delete(steps_by_particle)
 	if s.color_handling != .Dynamic do s.color_steps = make([dynamic]u8, n)
 	for id, i in s.characters {
 		s.active_indexes[i] = i
@@ -114,11 +122,12 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 			e.canvas.right < 2 || e.canvas.top < 2 ? engine.coord(1, 1) : engine.canvas_random_coord(e.canvas, false, false)
 		e.particles.current_coord[id] = start
 		s.origins[i] = start
-		s.max_steps[i] = max(
+		steps := max(
 			engine.round_to_int(engine.line_length(start, c, true) / s.config.movement_speed),
 			1,
 		)
-		s.step_limit = max(s.step_limit, s.max_steps[i])
+		steps_by_particle[i] = steps
+		s.step_limit = max(s.step_limit, steps)
 		e.particles.layer[id] = 1
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 		engine.set_appearance(
@@ -133,6 +142,9 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		)
 		e.particles.flags[id] += {.Visible}
 	}
+	// Start tick and easing are common to the effect; duration is the only key.
+	s.motion_steps, s.motion_slots = engine.group_values(steps_by_particle)
+	s.motions = make([dynamic]Scattered_Motion, len(s.motion_steps))
 	s.initial_hold = 25
 }
 
@@ -142,19 +154,22 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 		s.initial_hold -= 1
 		return true
 	}
+	for steps, slot in s.motion_steps {
+		if s.tick >= steps do continue
+		motion := &s.motions[slot]
+		motion.progress = f64(s.tick + 1) / f64(steps)
+		motion.factor = ease.ease(s.config.movement_easing, motion.progress)
+	}
 	write := 0
 	for i in s.active_indexes {
 		id := s.characters[i]
-		steps := s.max_steps[i]
-		progress := f64(s.tick + 1) / f64(steps)
+		slot := s.motion_slots[i]
+		motion := s.motions[slot]
+		steps, progress := s.motion_steps[slot], motion.progress
 		engine.set_particle(
 			e,
 			id,
-			engine.coord_on_line(
-				s.origins[i],
-				e.particles.initial_coord[id],
-				ease.ease(s.config.movement_easing, progress),
-			),
+			engine.coord_on_line(s.origins[i], e.particles.initial_coord[id], motion.factor),
 		)
 		// Dynamic input colors are installed during build and never change here.
 		if s.color_handling != .Dynamic {

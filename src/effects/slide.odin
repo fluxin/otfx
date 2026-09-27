@@ -276,50 +276,53 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 	write := 0
 	base_color := s.config.final_gradient_stops[0]
 	gradient_ticks := 10 * s.config.final_gradient_frames
+	gradient_hold := max(s.config.final_gradient_frames, 1)
 	for i in s.active_slots {
 		id := s.characters[i]
-		position := e.particles.current_coord[id]
-		appearance := engine.get_appearance(e, id)
 		step := s.steps[i]
-		if step < s.max_steps[i] {
+		finished := step + 1 >= max(s.max_steps[i], gradient_ticks)
+		if finished {
+			engine.set_position(e, id, e.particles.initial_coord[id])
+		} else if step < s.max_steps[i] {
 			progress := f64(step + 1) / f64(s.max_steps[i])
-			position = engine.coord_on_line(
-				s.origins[i],
-				e.particles.initial_coord[id],
-				ease.ease(s.config.movement_easing, progress),
+			engine.set_position(
+				e,
+				id,
+				engine.coord_on_line(
+					s.origins[i],
+					e.particles.initial_coord[id],
+					ease.ease(s.config.movement_easing, progress),
+				),
 			)
 		}
 		if s.color_handling == .Dynamic {
-			engine.dynamic_apply_input_colors(
-				&appearance,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)),
-			)
-		} else {
-			gradient_step := min(step / max(s.config.final_gradient_frames, 1), 10)
-			appearance.colors.fg = engine.gradient_between_step(
-				base_color,
-				s.final_colors[i],
-				10,
-				gradient_step,
+			if step == 0 {
+				appearance := engine.get_appearance(e, id)
+				engine.dynamic_apply_input_colors(
+					&appearance,
+					engine.get_initial_appearance(e, id),
+				)
+				engine.set_appearance(e, id, appearance)
+			}
+		} else if finished {
+			engine.set_foreground(e, id, s.final_colors[i])
+		} else if step <= 10 * gradient_hold && step % gradient_hold == 0 {
+			engine.set_foreground(
+				e,
+				id,
+				engine.gradient_between_step(
+					base_color,
+					s.final_colors[i],
+					10,
+					min(step / gradient_hold, 10),
+				),
 			)
 		}
 		s.steps[i] += 1
-		if s.steps[i] < max(s.max_steps[i], gradient_ticks) {
+		if !finished {
 			s.active_slots[write] = i
 			write += 1
-		} else {
-			position = e.particles.initial_coord[id]
-			if s.color_handling == .Dynamic {
-				engine.dynamic_apply_input_colors(
-					&appearance,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				)
-			} else {
-				appearance.colors.fg = s.final_colors[i]
-			}
 		}
-		engine.set_particle(e, id, position)
-		engine.set_appearance(e, id, appearance)
 	}
 	resize(&s.active_slots, write)
 	return true

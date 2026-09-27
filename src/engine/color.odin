@@ -193,13 +193,29 @@ gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Col
 	unreachable()
 }
 
-// RGB -> HSL -> RGB brightness adjustment (beams/highlight/matrix).
-adjust_color_brightness :: proc(color: Color, brightness: f64) -> Color {
+// Keep HSL in build state when one fixed color is adjusted repeatedly.
+HSL_Color :: struct {
+	h, s, l: f64,
+}
+
+color_to_hsl :: proc(color: Color) -> HSL_Color {
 	rgba := linalg.Vector4f64{f64(color.r) / 255, f64(color.g) / 255, f64(color.b) / 255, 1}
 	hsla := linalg.vector4_rgb_to_hsl(rgba)
-	hsla *= linalg.Vector4f64{1, 1, brightness, 1}
-	hsla.z = clamp(hsla.z, 0.0, 1.0)
-	rgba = linalg.vector4_hsl_to_rgb(hsla.x, hsla.y, hsla.z, hsla.w)
+	return {hsla.x, hsla.y, hsla.z}
+}
+
+adjust_color_brightness :: proc {
+	adjust_rgb_brightness,
+	adjust_hsl_brightness,
+}
+
+adjust_rgb_brightness :: proc(color: Color, brightness: f64) -> Color {
+	return adjust_hsl_brightness(color_to_hsl(color), brightness)
+}
+
+adjust_hsl_brightness :: proc(color: HSL_Color, brightness: f64) -> Color {
+	lightness := clamp(color.l * brightness, 0.0, 1.0)
+	rgba := linalg.vector4_hsl_to_rgb(color.h, color.s, lightness, 1)
 	return {
 		u8(round_to_int(rgba.x * 255)),
 		u8(round_to_int(rgba.y * 255)),

@@ -1,0 +1,7 @@
+effect	before_ms	corrected_ms	before_frames	corrected_frames	before_mean_ms	corrected_mean_ms	before_cpu_ms	corrected_cpu_ms	before_rss_kib	corrected_rss_kib
+spray	23.9	23.4	1253	670	24.0	23.4	23.9	23.3	9928	9940
+beams	14.1	14.1	890	785	14.1	14.1	14.0	14.0	12196	12188
+bouncyballs	35.8	35.1	10393	9179	35.8	35.1	35.6	35.0	10240	10240
+crumble	45.6	45.2	2159	1920	45.6	45.2	45.4	45.0	12952	13008
+overflow	10.9	11.1	164	178	11.0	11.1	10.9	11.0	17972	17964
+rain	18.0	17.9	4736	4761	18.0	17.9	17.9	17.8	9888	9888

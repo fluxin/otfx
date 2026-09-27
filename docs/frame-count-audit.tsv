@@ -1,0 +1,36 @@
+effect	checkpoint_frames	recorded_asm_frames	difference	isolated_loop_control_frames	assessment
+beams	890	732	158	785	Confirmed random loop-bound re-evaluation; remaining phase/RNG difference unisolated
+binarypath	1932	1891	41		Random origin/path and activation order determine completion; exact delta unisolated
+blackhole	1743	1800	-57		Random movement lengths and speeds; exact delta unisolated
+bouncyballs	10393	9093	1300	9179	Confirmed random loop-bound re-evaluation; remaining RNG/path difference unisolated
+bubbles	11658	11742	-84		Random bubble sizes and motion/pop tails; exact delta unisolated
+burn	3237	3175	62		Random burn order and smoke tail; exact delta unisolated
+colorshift	528	528	0		Equal frame counts in this fixture
+crumble	2159	1835	324	1920	Confirmed random loop-bound re-evaluation; remaining phase/RNG difference unisolated
+decrypt	5480	5438	42		Random typing activation and slow holds; exact delta unisolated
+errorcorrect	5221	5237	-16		Random selected pairs set motion lengths; exact delta unisolated
+expand	302	302	0		Equal frame counts in this fixture
+fireworks	1516	1553	-37		Random launch delays and movement lengths; exact delta unisolated
+highlight	129	129	0		Equal frame counts in this fixture
+laseretch	14307	14306	1		One-frame retirement-boundary candidate; exact cause not yet isolated
+middleout	235	235	0		Equal frame counts in this fixture
+orbittingvolley	1156	1156	0		Equal frame counts in this fixture
+overflow	164	306	-142	178	Confirmed random loop-bound re-evaluation plus random cycle count and delays
+pour	7160	7160	0		Equal frame counts in this fixture
+print	10057	10057	0		Equal frame counts in this fixture
+rain	4736	4737	-1	4761	Confirmed random loop-bound re-evaluation; two-count distribution barely changes but RNG consumption does
+randomsequence	208	208	0		Equal frame counts in this fixture
+rings	1566	1566	0		Equal frame counts in this fixture
+scattered	420	418	2		Random origin determines longest motion; same distance/speed rounding rule
+slice	368	368	0		Equal frame counts in this fixture
+slide	375	375	0		Equal frame counts in this fixture
+smoke	630	565	65		Random spanning-tree and BFS-root depth determine reveal duration
+spotlights	780	800	-20		Fresh random search targets versus eleven prebuilt looping paths; convergence differs
+spray	1253	661	592	670	Confirmed random loop-bound re-evaluation; remaining RNG/path difference unisolated
+swarm	4312	5041	-729		Planner/follower policy differs from ASM/Python plus different RNG; needs phase trace
+sweep	220	220	0		Equal frame counts in this fixture
+synthgrid	617	619	-2		Random generation lengths plus stage boundaries; two-frame delta unisolated
+unstable	592	530	62		Random targets/permutation determine longest explosion and return; exact delta unisolated
+vhstape	726	736	-10		Random glitches and return holds; exact delta unisolated
+waves	633	633	0		Equal frame counts in this fixture
+wipe	138	138	0		Equal frame counts in this fixture

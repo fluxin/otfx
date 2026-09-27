@@ -78,6 +78,7 @@ Blackhole_Pulse_Symbols :: [7]rune{'◦', '◎', '◉', '●', '◉', '◎', '�
 // per-character event graph in the frame loop.
 Blackhole_State :: struct {
 	config:              Blackhole_Config,
+	active_stars:        [dynamic]int,
 	characters:          [dynamic]engine.Particle_Id,
 	final_colors:        [dynamic]engine.Color,
 	star_colors:         [dynamic]engine.Color,
@@ -299,6 +300,10 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	}
 	s.consume_durations, s.consume_progress = blackhole_progress_table(s.consume_steps[:])
 	s.explode_durations, s.explode_progress = blackhole_progress_table(s.explode_steps[:])
+	reserve(&s.active_stars, len(s.characters))
+	for slot, i in s.ring_slot_by_source {
+		if slot < 0 do append(&s.active_stars, i)
+	}
 	s.formation_delay = max(math.floor_div(100, max(ring_count, 1)), 6)
 	s.delay = s.formation_delay
 	s.phase = .Forming
@@ -332,6 +337,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 				}
 				age := s.phase_tick - start
 				steps := s.ring_steps[slot]
+				if age >= steps do continue
 				engine.set_particle(
 					e,
 					id,
@@ -341,9 +347,11 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						ease.ease(.Sine_In_Out, f64(min(age + 1, steps)) / f64(steps)),
 					),
 				)
-				engine.set_symbol(e, id, '*')
-				engine.set_foreground(e, id, s.config.blackhole_color)
-				engine.set_particle(e, id, engine.Layer(1))
+				if age == 0 {
+					engine.set_symbol(e, id, '*')
+					engine.set_foreground(e, id, s.config.blackhole_color)
+					engine.set_particle(e, id, engine.Layer(1))
+				}
 				if age < steps do formed = false
 			}
 			if formed {
@@ -361,17 +369,18 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					f64(min(s.phase_tick + 1, steps)) / f64(steps),
 				)
 			}
-			complete := true
-			for id, i in s.characters {
-				slot := s.ring_slot_by_source[i]
-				if slot >= 0 {
-					engine.set_particle(e, id, blackhole_ring_position(s, slot))
-					engine.set_symbol(e, id, '*')
-					engine.set_foreground(e, id, s.config.blackhole_color)
-					continue
-				}
+			for source, slot in s.ring_sources {
+				engine.set_position(e, s.characters[source], blackhole_ring_position(s, slot))
+			}
+			complete := len(s.active_stars) == 0
+			write := 0
+			for i in s.active_stars {
+				id := s.characters[i]
 				steps := s.consume_steps[i]
-				if s.phase_tick >= steps do continue
+				if s.phase_tick + 1 < steps {
+					s.active_stars[write] = i
+					write += 1
+				}
 				distance_fraction := s.consume_progress[steps]
 				engine.set_particle(
 					e,
@@ -389,9 +398,10 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					),
 				)
 				engine.set_symbol(e, id, s.phase_tick + 1 >= steps ? ' ' : s.star_symbols[i])
-				engine.set_particle(e, id, engine.Layer(2))
+				if s.phase_tick == 0 do engine.set_particle(e, id, engine.Layer(2))
 				if s.phase_tick < steps do complete = false
 			}
+			resize(&s.active_stars, write)
 			s.rotation += 1
 			if s.rotation == len(s.ring_positions) do s.rotation = 0
 			if complete && s.phase_tick > 20 {
@@ -428,16 +438,19 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					engine.set_particle(e, id, engine.Visible(true))
 					engine.set_particle(e, id, engine.Layer(0))
 				}
+				resize(&s.active_stars, len(s.characters))
+				for &index, i in s.active_stars do index = i
 				s.phase = .Exploding
 				s.phase_tick = 0
 				continue
 			}
-			for id, i in s.characters {
-				slot := s.ring_slot_by_source[i]
-				if slot < 0 {
-					engine.set_particle(e, id, engine.Visible(false))
-					continue
+			if s.phase_tick == 0 {
+				for id, i in s.characters {
+					if s.ring_slot_by_source[i] < 0 do engine.set_visible(e, id, false)
 				}
+			}
+			for source, slot in s.ring_sources {
+				id := s.characters[source]
 				expand_steps, collapse_steps := s.expand_steps[slot], s.collapse_steps[slot]
 				if s.phase_tick < expand_steps {
 					engine.set_particle(
@@ -449,7 +462,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 							ease.ease(.Exponential_In, f64(s.phase_tick + 1) / f64(expand_steps)),
 						),
 					)
-				} else {
+				} else if s.phase_tick < expand_steps + collapse_steps {
 					engine.set_particle(
 						e,
 						id,
@@ -464,10 +477,12 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 						),
 					)
 				}
-				engine.set_symbol(e, id, '*')
-				engine.set_foreground(e, id, s.config.blackhole_color)
+				if s.phase_tick == 0 {
+					engine.set_symbol(e, id, '*')
+					engine.set_foreground(e, id, s.config.blackhole_color)
+				}
 				pulse_age := s.phase_tick - expand_steps - collapse_steps
-				if slot == 0 && pulse_age >= 0 {
+				if slot == 0 && pulse_age >= 0 && pulse_age % 3 == 0 {
 					entry := min(pulse_age / 3, len(s.pulse_colors) - 1)
 					engine.set_symbol(e, id, pulse_symbols[entry % len(pulse_symbols)])
 					engine.set_foreground(e, id, s.pulse_colors[entry])
@@ -485,9 +500,15 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					f64(min(s.phase_tick + 1, steps)) / f64(steps),
 				)
 			}
-			for id, i in s.characters {
+			write := 0
+			for i in s.active_stars {
+				id := s.characters[i]
+				if s.phase_tick < s.explode_steps[i] + max(s.return_steps[i], 201) - 1 {
+					s.active_stars[write] = i
+					write += 1
+				}
 				age := s.phase_tick
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+				if age == 0 do engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				if age < s.explode_steps[i] {
 					engine.set_particle(
 						e,
@@ -498,7 +519,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 							s.explode_progress[s.explode_steps[i]],
 						),
 					)
-					engine.set_foreground(e, id, s.explode_colors[i])
+					if age == 0 do engine.set_foreground(e, id, s.explode_colors[i])
 				} else {
 					return_age := age - s.explode_steps[i]
 					if return_age < s.return_steps[i] {
@@ -512,7 +533,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 							),
 						)
 					}
-					if return_age % 20 != 0 do continue
+					if return_age > 200 || return_age % 20 != 0 do continue
 					if s.color_handling == .Dynamic {
 						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 						if style.colors.fg == nil && style.colors.bg == nil {
@@ -543,6 +564,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
 					}
 				}
 			}
+			resize(&s.active_stars, write)
 			s.phase_tick += 1
 			return true
 		}

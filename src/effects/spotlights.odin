@@ -4,6 +4,7 @@ import "../engine"
 
 import "core:container/bit_array"
 import "core:fmt"
+import "core:math"
 import "core:math/ease"
 import "core:math/rand"
 
@@ -80,6 +81,8 @@ Spotlights_State :: struct {
 	lit:                      [dynamic]int,
 	candidates:               bit_array.Bit_Array,
 	bright_colors:            [dynamic]engine.Color,
+	bright_hsl:               []engine.HSL_Color,
+	bright_bg_hsl:            []engine.HSL_Color,
 	dark_colors:              [dynamic]engine.Color,
 	bright_bg:                [dynamic]Maybe(engine.Color),
 	dark_bg:                  [dynamic]Maybe(engine.Color),
@@ -149,6 +152,8 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	bit_array.init(&s.candidates, n)
 	s.bright_colors = make([dynamic]engine.Color, n)
 	s.dark_colors = make([dynamic]engine.Color, n)
+	s.bright_hsl = make([]engine.HSL_Color, n)
+	if s.color_handling == .Dynamic do s.bright_bg_hsl = make([]engine.HSL_Color, n)
 	s.bright_bg = make([dynamic]Maybe(engine.Color), n)
 	s.dark_bg = make([dynamic]Maybe(engine.Color), n)
 	initial_coords := e.particles.initial_coord
@@ -164,10 +169,14 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 			bright = engine.Color{0x80, 0x80, 0x80}
 			if fg, ok := style.colors.fg.?; ok do bright = fg
 			s.bright_bg[i] = style.colors.bg
-			if bg, ok := style.colors.bg.?; ok do s.dark_bg[i] = engine.adjust_color_brightness(bg, 0.2)
+			if bg, ok := style.colors.bg.?; ok {
+				s.bright_bg_hsl[i] = engine.color_to_hsl(bg)
+				s.dark_bg[i] = engine.adjust_color_brightness(s.bright_bg_hsl[i], 0.2)
+			}
 		}
 		s.bright_colors[i] = bright
-		s.dark_colors[i] = engine.adjust_color_brightness(bright, 0.2)
+		s.bright_hsl[i] = engine.color_to_hsl(bright)
+		s.dark_colors[i] = engine.adjust_color_brightness(s.bright_hsl[i], 0.2)
 		engine.set_foreground(e, id, s.dark_colors[i])
 		engine.set_background(e, id, s.color_handling == .Dynamic ? s.dark_bg[i] : nil)
 		visible_flags[id] += {.Visible}
@@ -287,6 +296,8 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 			}
 		}
 	}
+	radius := f64(s.illuminate_range)
+	falloff_start := radius * (1 - s.config.beam_falloff)
 	it := bit_array.make_iterator(&s.candidates)
 	for i, ok := bit_array.iterate_by_set(&it); ok; i, ok = bit_array.iterate_by_set(&it) {
 		id := s.characters[i]
@@ -301,9 +312,9 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 			continue
 		}
 		p := initial_coords[id]
-		nearest := engine.line_length(s.spot_positions[0], p, true)
-		for j in 1 ..< spot_count do nearest = min(nearest, engine.line_length(s.spot_positions[j], p, true))
-		if nearest > f64(s.illuminate_range) {
+		nearest_squared := engine.line_length_squared(s.spot_positions[0], p, true)
+		for j in 1 ..< spot_count do nearest_squared = min(nearest_squared, engine.line_length_squared(s.spot_positions[j], p, true))
+		if nearest_squared > radius * radius {
 			appearance.colors.fg = s.dark_colors[i]
 			appearance.colors.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
 			engine.set_appearance(e, id, appearance)
@@ -312,16 +323,16 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
 		append(&s.lit, i)
 		bright := s.bright_colors[i]
 		if s.config.beam_falloff > 0 &&
-		   nearest > f64(s.illuminate_range) * (1 - s.config.beam_falloff) {
-			start := f64(s.illuminate_range) * (1 - s.config.beam_falloff)
-			factor := max(
-				1 - (nearest - start) / (f64(s.illuminate_range) * s.config.beam_falloff),
-				0.2,
-			)
-			appearance.colors.fg = engine.adjust_color_brightness(bright, factor)
+		   (falloff_start < 0 || nearest_squared > falloff_start * falloff_start) {
+			nearest := math.sqrt(nearest_squared)
+			factor := max(1 - (nearest - falloff_start) / (radius * s.config.beam_falloff), 0.2)
+			appearance.colors.fg = engine.adjust_color_brightness(s.bright_hsl[i], factor)
 			if s.color_handling == .Dynamic {
-				if bg, ok := s.bright_bg[i].?; ok {
-					appearance.colors.bg = engine.adjust_color_brightness(bg, factor)
+				if s.bright_bg[i] != nil {
+					appearance.colors.bg = engine.adjust_color_brightness(
+						s.bright_bg_hsl[i],
+						factor,
+					)
 				}
 			}
 		} else {

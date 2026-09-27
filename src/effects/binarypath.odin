@@ -62,13 +62,6 @@ binarypath_parse :: proc(cfg: ^Binarypath_Config, args: []string) -> bool {
 	return true
 }
 
-Binarypath_Rep_State :: enum u8 {
-	Pending,
-	Travel,
-	Collapse,
-	Ready,
-}
-
 // A source glyph owns exactly eight bit glyphs. The outer arrays are SoA
 // columns keyed by source-glyph index; bit ids are a flat index*8 + bit row.
 // This replaces the Rust port's per-glyph paths, scenes, callbacks, maps, and
@@ -87,7 +80,7 @@ Binarypath_State :: struct {
 	travel_steps:       [dynamic]int,
 	codes:              [dynamic]u32,
 	starts:             [dynamic]int,
-	states:             [dynamic]Binarypath_Rep_State,
+	collapsing:         [dynamic]int,
 	pending:            [dynamic]int,
 	active:             [dynamic]int,
 	final_wipe:         engine.Particle_Groups,
@@ -140,7 +133,6 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	s.travel_steps = make([dynamic]int, n)
 	s.codes = make([dynamic]u32, n)
 	s.starts = make([dynamic]int, n)
-	s.states = make([dynamic]Binarypath_Rep_State, n)
 	s.pending = make([dynamic]int, n)
 
 	initial_coords := e.particles.initial_coord
@@ -187,6 +179,7 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	}
 	s.max_active = max(engine.round_to_int(s.config.active_binary_groups * f64(n)), 1)
 	reserve(&s.active, min(n, s.max_active))
+	reserve(&s.collapsing, n)
 }
 
 binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int) -> engine.Coord {
@@ -235,7 +228,6 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 		last := len(s.pending) - 1
 		s.pending[pending_index] = s.pending[last]
 		resize(&s.pending, last)
-		s.states[rep] = .Travel
 		s.starts[rep] = s.tick
 		append(&s.active, rep)
 	}
@@ -243,7 +235,6 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 	visible_flags := e.particles.flags
 
 
-	any_collapse := false
 	write := 0
 	for rep in s.active {
 		age := s.tick - s.starts[rep]
@@ -266,7 +257,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 			for bit in 0 ..< 8 {
 				engine.set_particle(e, s.bit_ids[rep * 8 + bit], engine.Visible(false))
 			}
-			s.states[rep] = .Collapse
+			append(&s.collapsing, rep)
 			s.starts[rep] = s.tick
 			id := s.characters[rep]
 			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
@@ -275,10 +266,14 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 	}
 	resize(&s.active, write)
 
-	for id, i in s.characters {
-		if s.states[i] != .Collapse do continue
+	collapse_write := 0
+	for i in s.collapsing {
+		id := s.characters[i]
 		age := s.tick - s.starts[i]
 		if age < 21 {
+			s.collapsing[collapse_write] = i
+			collapse_write += 1
+			if age % 3 != 0 do continue
 			if s.color_handling == .Dynamic {
 				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 				appearance := engine.get_appearance(e, id)
@@ -299,16 +294,10 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 					engine.gradient_between_step(engine.Color{0xFF, 0xFF, 0xFF}, dim, 6, age / 3),
 				)
 			}
-			any_collapse = true
-		} else {
-			// Only the colour animation ends here; the character stays on
-			// screen. Hiding it again would leave nothing accumulating, so the
-			// whole logo would appear at once during the final wipe instead of
-			// filling in as each representation lands.
-			s.states[i] = .Ready
 		}
 	}
-	if len(s.pending) == 0 && len(s.active) == 0 && !any_collapse {
+	resize(&s.collapsing, collapse_write)
+	if len(s.pending) == 0 && len(s.active) == 0 && len(s.collapsing) == 0 {
 		s.wiping = true
 		return binarypath_next(s, e)
 	}

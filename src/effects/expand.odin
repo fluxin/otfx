@@ -60,6 +60,9 @@ Expand_State :: struct {
 	characters:     [dynamic]engine.Particle_Id,
 	colors:         [dynamic][11]engine.Color_Pair,
 	active_indexes: [dynamic]int,
+	motion_slots:   [dynamic]int,
+	motion_factors: [dynamic]f64,
+	color_steps:    [dynamic]int,
 	max_steps:      [dynamic]int,
 	step_limit:     int,
 	tick:           int,
@@ -94,7 +97,9 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.colors = make([dynamic][11]engine.Color_Pair, n)
 	s.active_indexes = make([dynamic]int, n)
-	s.max_steps = make([dynamic]int, n)
+	steps := make([]int, n, context.temp_allocator)
+	s.color_steps = make([dynamic]int, n)
+	for &step in s.color_steps do step = -1
 
 	for id, i in s.characters {
 		c := e.particles.initial_coord[id]
@@ -122,26 +127,31 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		}
 		s.active_indexes[i] = i
 		e.particles.current_coord[id] = e.canvas.center
-		s.max_steps[i] = max(
+		steps[i] = max(
 			engine.round_to_int(
 				engine.line_length(e.canvas.center, c, true) / s.config.movement_speed,
 			),
 			1,
 		)
-		s.step_limit = max(s.step_limit, s.max_steps[i])
+		s.step_limit = max(s.step_limit, steps[i])
 		e.particles.flags[id] += {.Visible}
 		e.particles.layer[id] = 1
 	}
+	s.max_steps, s.motion_slots = engine.group_values(steps)
+	s.motion_factors = make([dynamic]f64, len(s.max_steps))
 }
 
 expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 	if s.tick == s.step_limit do return false
+	for steps, slot in s.max_steps {
+		if s.tick < steps do s.motion_factors[slot] = ease.ease(s.config.expand_easing, f64(s.tick + 1) / f64(steps))
+	}
 	write := 0
 	for i in s.active_indexes {
 		id := s.characters[i]
-		maximum := s.max_steps[i]
-		progress := f64(s.tick + 1) / f64(maximum)
-		factor := ease.ease(s.config.expand_easing, progress)
+		slot := s.motion_slots[i]
+		maximum := s.max_steps[slot]
+		factor := s.motion_factors[slot]
 		position := engine.coord_on_line(e.canvas.center, e.particles.initial_coord[id], factor)
 		step := min(engine.round_to_int(factor * 10), 10)
 		if s.tick + 1 == maximum {
@@ -153,9 +163,12 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
 			write += 1
 		}
 		engine.set_particle(e, id, position)
-		appearance := engine.get_appearance(e, id)
-		appearance.colors = s.colors[i][step]
-		engine.set_appearance(e, id, appearance)
+		if step != s.color_steps[i] {
+			s.color_steps[i] = step
+			appearance := engine.get_appearance(e, id)
+			appearance.colors = s.colors[i][step]
+			engine.set_appearance(e, id, appearance)
+		}
 	}
 	resize(&s.active_indexes, write)
 	s.tick += 1

@@ -140,44 +140,50 @@ randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool
 		id := s.characters[slot]
 		life := s.palette_len * s.config.final_gradient_frames
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-			if style.colors.fg != nil || style.colors.bg != nil {
-				step := min(age / s.config.final_gradient_frames, 7)
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					e.cfg.terminal_background_color,
-					style,
-					7,
-					step,
-				)
-				engine.set_appearance(e, id, appearance)
-				life = 8 * s.config.final_gradient_frames
-			} else {
-				if age < 8 * s.config.final_gradient_frames {
-					engine.set_foreground(
-						e,
-						id,
-						engine.gradient_between_step(
-							e.cfg.terminal_background_color,
-							engine.Color{0x80, 0x80, 0x80},
-							7,
-							age / s.config.final_gradient_frames,
-						),
+			style := engine.get_initial_appearance(e, id)
+			life =
+				(8 if style.colors.fg != nil || style.colors.bg != nil else 9) *
+				s.config.final_gradient_frames
+		}
+		if age % s.config.final_gradient_frames == 0 {
+			if s.color_handling == .Dynamic {
+				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+				if style.colors.fg != nil || style.colors.bg != nil {
+					step := min(age / s.config.final_gradient_frames, 7)
+					appearance := engine.get_appearance(e, id)
+					engine.dynamic_gradient_to_input(
+						&appearance,
+						e.cfg.terminal_background_color,
+						style,
+						7,
+						step,
 					)
-					engine.set_background(e, id, nil)
+					engine.set_appearance(e, id, appearance)
 				} else {
-					engine.set_foreground(e, id, nil)
-					engine.set_background(e, id, nil)
+					if age < 8 * s.config.final_gradient_frames {
+						engine.set_foreground(
+							e,
+							id,
+							engine.gradient_between_step(
+								e.cfg.terminal_background_color,
+								engine.Color{0x80, 0x80, 0x80},
+								7,
+								age / s.config.final_gradient_frames,
+							),
+						)
+						engine.set_background(e, id, nil)
+					} else {
+						engine.set_foreground(e, id, nil)
+						engine.set_background(e, id, nil)
+					}
 				}
-				life = 9 * s.config.final_gradient_frames
+			} else {
+				engine.set_foreground(
+					e,
+					id,
+					s.palette[slot * s.palette_len + age / s.config.final_gradient_frames],
+				)
 			}
-		} else {
-			engine.set_foreground(
-				e,
-				id,
-				s.palette[slot * s.palette_len + age / s.config.final_gradient_frames],
-			)
 		}
 		if age + 1 < life {
 			s.active_slots[write] = slot

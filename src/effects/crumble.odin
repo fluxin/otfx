@@ -64,6 +64,7 @@ Crumble_State :: struct {
 	fall_steps:      [dynamic]int,
 	vacuum_starts:   [dynamic]int,
 	vacuum_steps:    [dynamic]int,
+	reset_active:    [dynamic]int,
 	reset_steps:     [dynamic]int,
 	dust_symbols:    [dynamic]rune, // five contiguous symbols per character
 	fall_order:      [dynamic]int,
@@ -121,6 +122,8 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 	s.vacuum_starts = make([dynamic]int, n)
 	s.vacuum_steps = make([dynamic]int, n)
 	s.reset_steps = make([dynamic]int, n)
+	s.reset_active = make([dynamic]int, n)
+	for &index, i in s.reset_active do index = i
 	s.dust_symbols = make([dynamic]rune, n * 5)
 	s.fall_order = make([dynamic]int, n)
 	s.vacuum_order = make([dynamic]int, n)
@@ -257,29 +260,35 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				age := s.phase_tick - start
 				if age >= 40 + s.fall_steps[i] do continue
 				if age < 40 {
-					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-					if s.has_dim_fg[i] != 0 {
-						engine.set_foreground(
+					if age % 4 == 0 {
+						engine.set_symbol(
 							e,
 							id,
-							engine.gradient_between_step(
-								s.weak_colors[i],
-								s.dust_colors[i],
-								9,
-								age / 4,
-							),
+							e.particles.initial_symbol[engine.Particle_Id(id)],
 						)
-					} else {
-						engine.set_foreground(e, id, nil)
-					}
-					if weak_bg, ok := s.weak_bg[i].?; ok {
-						engine.set_background(
-							e,
-							id,
-							engine.gradient_between_step(weak_bg, s.dust_bg[i].?, 9, age / 4),
-						)
-					} else {
-						engine.set_background(e, id, nil)
+						if s.has_dim_fg[i] != 0 {
+							engine.set_foreground(
+								e,
+								id,
+								engine.gradient_between_step(
+									s.weak_colors[i],
+									s.dust_colors[i],
+									9,
+									age / 4,
+								),
+							)
+						} else {
+							engine.set_foreground(e, id, nil)
+						}
+						if weak_bg, ok := s.weak_bg[i].?; ok {
+							engine.set_background(
+								e,
+								id,
+								engine.gradient_between_step(weak_bg, s.dust_bg[i].?, 9, age / 4),
+							)
+						} else {
+							engine.set_background(e, id, nil)
+						}
 					}
 					s.fall_active[fall_write] = i
 					fall_write += 1
@@ -299,8 +308,10 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				)
 				dust_index := min((fall_age * 5) / s.fall_steps[i], 4)
 				engine.set_symbol(e, id, s.dust_symbols[i * 5 + dust_index])
-				engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
-				engine.set_background(e, id, s.dust_bg[i])
+				if fall_age == 0 {
+					engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
+					engine.set_background(e, id, s.dust_bg[i])
+				}
 				s.fall_active[fall_write] = i
 				fall_write += 1
 			}
@@ -349,9 +360,15 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 
 		case .Resetting:
 			if s.phase_tick == s.reset_max_ticks do return false
-			for id, i in s.characters {
+			write := 0
+			for i in s.reset_active {
+				id := s.characters[i]
 				input := initial_coords[id]
 				steps := s.reset_steps[i]
+				if s.phase_tick < steps + 64 {
+					s.reset_active[write] = i
+					write += 1
+				}
 				if s.phase_tick < steps {
 					engine.set_particle(
 						e,
@@ -362,12 +379,19 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 							f64(s.phase_tick + 1) / f64(steps),
 						),
 					)
-					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-					engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
-					engine.set_background(e, id, s.dust_bg[i])
+					if s.phase_tick == 0 {
+						engine.set_symbol(
+							e,
+							id,
+							e.particles.initial_symbol[engine.Particle_Id(id)],
+						)
+						engine.set_foreground(e, id, s.has_dim_fg[i] != 0 ? s.dust_colors[i] : nil)
+						engine.set_background(e, id, s.dust_bg[i])
+					}
 					continue
 				}
 				flash_age := s.phase_tick - steps
+				if flash_age > 64 || flash_age % 4 != 0 do continue
 				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 				if flash_age < 28 {
 					if s.color_handling == .Dynamic {
@@ -445,6 +469,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 					}
 				}
 			}
+			resize(&s.reset_active, write)
 			s.phase_tick += 1
 			return true
 		}

@@ -313,6 +313,11 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 		id := s.characters[i]
 		start := s.source_starts[i]
 		age := s.tick - start
+		if age % 3 != 0 {
+			s.active_sources[source_write] = i
+			source_write += 1
+			continue
+		}
 		source_lifetime := 3 + (len(s.cool_spectrum) + 8) * 3
 		if s.color_handling == .Dynamic {
 			has_style :=
@@ -437,7 +442,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
 				),
 			)
 		}
-		engine.set_foreground(e, id, s.spark_spectrum[color_step])
+		if age % s.config.spark_cooling_frames == 0 do engine.set_foreground(e, id, s.spark_spectrum[color_step])
 		s.active_sparks[spark_write] = i
 		spark_write += 1
 	}

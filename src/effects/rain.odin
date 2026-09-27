@@ -211,34 +211,40 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
-			engine.set_symbol(e, id, s.drop_symbols[slot])
-			engine.set_foreground(e, id, s.drop_colors[slot])
+			if age == 0 {
+				engine.set_symbol(e, id, s.drop_symbols[slot])
+				engine.set_foreground(e, id, s.drop_colors[slot])
+			}
 		} else {
-			engine.set_particle(e, id, e.particles.initial_coord[id])
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			if age == s.max_steps[slot] - 1 {
+				engine.set_particle(e, id, e.particles.initial_coord[id])
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			}
 			fade_tick := age - (s.max_steps[slot] - 1)
-			fade_step := min(fade_tick / 3, 7)
-			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					s.drop_colors[slot],
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					7,
-					fade_step,
-				)
-				engine.set_appearance(e, id, appearance)
-			} else {
-				engine.set_foreground(
-					e,
-					id,
-					engine.gradient_between_step(
+			if fade_tick <= 21 && fade_tick % 3 == 0 {
+				fade_step := min(fade_tick / 3, 7)
+				if s.color_handling == .Dynamic {
+					appearance := engine.get_appearance(e, id)
+					engine.dynamic_gradient_to_input(
+						&appearance,
 						s.drop_colors[slot],
-						s.final_colors[slot],
+						engine.get_initial_appearance(e, engine.Particle_Id(id)),
 						7,
 						fade_step,
-					),
-				)
+					)
+					engine.set_appearance(e, id, appearance)
+				} else {
+					engine.set_foreground(
+						e,
+						id,
+						engine.gradient_between_step(
+							s.drop_colors[slot],
+							s.final_colors[slot],
+							7,
+							fade_step,
+						),
+					)
+				}
 			}
 		}
 		// The final full-color fade is at age max_steps + 22.

@@ -5,6 +5,26 @@ import "core:math/rand"
 
 // Particle queries, ordering, flat groups, and group reveal schedules.
 
+// Build-time grouping of equal calculation inputs, in first-occurrence order.
+// Playback indexes the unique inputs/results through slots; no map is retained.
+// Use all inputs that affect the calculation as the key (for example easing,
+// start and stop). Per-particle destinations belong to the consuming lane.
+group_values :: proc(values: []$T) -> (unique: [dynamic]T, slots: [dynamic]int) {
+	slots = make([dynamic]int, len(values))
+	indices := make(map[T]int)
+	defer delete(indices)
+	for value, i in values {
+		slot, found := indices[value]
+		if !found {
+			slot = len(unique)
+			indices[value] = slot
+			append(&unique, value)
+		}
+		slots[i] = slot
+	}
+	return
+}
+
 Particle_Filter :: bit_set[Particle_Kind;u8]
 
 PARTICLE_FILTER_INPUT :: Particle_Filter{.Input}

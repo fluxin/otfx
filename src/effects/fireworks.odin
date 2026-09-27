@@ -80,17 +80,19 @@ fireworks_parse :: proc(cfg: ^Fireworks_Config, args: []string) -> bool {
 }
 
 // Shell membership is one flat character array plus offsets. Every character
-// holds its own trajectory columns; shells only own launch time and color.
+// holds its own burst/return trajectory; shells own their shared launch motion.
 Fireworks_State :: struct {
 	config:             Fireworks_Config,
 	characters:         [dynamic]engine.Particle_Id,
 	fall_colors:        [dynamic][16]engine.Color_Pair,
+	color_steps:        [dynamic]u8, // last burst/fall sample; each phase publishes on entry
 	active_indexes:     [dynamic]int,
 	first_active:       int, // unlaunched shells occupy the untouched prefix
 	finish_ages:        [dynamic]int,
 	shell_index:        [dynamic]int,
 	shell_offsets:      [dynamic]int,
 	shell_origins:      [dynamic]engine.Coord,
+	shell_positions:    [dynamic]engine.Coord,
 	shell_colors:       [dynamic]engine.Color,
 	shell_bloom_colors: [dynamic][11]engine.Color,
 	shell_start_ticks:  [dynamic]int,
@@ -160,12 +162,12 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.fall_colors = make([dynamic][16]engine.Color_Pair, n)
+	s.color_steps = make([dynamic]u8, n)
 	s.active_indexes = make([dynamic]int, n)
 	for i in 0 ..< n do s.active_indexes[i] = i
 	s.first_active = n
 	s.finish_ages = make([dynamic]int, n)
 	s.shell_index = make([dynamic]int, n)
-	s.apex_steps = make([dynamic]int, n)
 	s.explode_steps = make([dynamic]int, n)
 	s.bloom_steps = make([dynamic]int, n)
 	s.fall_steps = make([dynamic]int, n)
@@ -181,6 +183,8 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 	append(&s.shell_offsets, n)
 	shell_count := len(s.shell_offsets) - 1
 	s.shell_origins = make([dynamic]engine.Coord, shell_count)
+	s.shell_positions = make([dynamic]engine.Coord, shell_count)
+	s.apex_steps = make([dynamic]int, shell_count)
 	s.shell_colors = make([dynamic]engine.Color, shell_count)
 	s.shell_bloom_colors = make([dynamic][11]engine.Color, shell_count)
 	s.shell_start_ticks = make([dynamic]int, shell_count)
@@ -203,6 +207,11 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 			rand.int_range(min_row, e.canvas.top + 1),
 		)
 		s.shell_origins[shell] = origin
+		launch := engine.coord(origin.column, e.canvas.bottom)
+		s.apex_steps[shell] = max(
+			engine.round_to_int(engine.line_length(launch, origin, true) / 0.35),
+			1,
+		)
 		s.shell_colors[shell] =
 			s.config.firework_colors[rand.int_max(len(s.config.firework_colors))]
 		for step in 0 ..< 11 {
@@ -249,11 +258,6 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 				s.fall_colors[i][step] = appearance.colors
 			}
 			visible_flags[id] -= {.Visible}
-			launch := engine.coord(origin.column, e.canvas.bottom)
-			s.apex_steps[i] = max(
-				engine.round_to_int(engine.line_length(launch, origin, true) / 0.35),
-				1,
-			)
 
 			explode := fireworks_random_explode_target(origin, explode_distance)
 			s.explode_targets[i] = explode
@@ -286,7 +290,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 			color_ticks :=
 				s.color_handling == .Dynamic && initial.colors.fg == nil && initial.colors.bg == nil ? 10 : 160
 			s.finish_ages[i] =
-				s.apex_steps[i] +
+				s.apex_steps[shell] +
 				s.explode_steps[i] +
 				s.bloom_steps[i] +
 				max(s.fall_steps[i], color_ticks)
@@ -310,6 +314,16 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 	}
 	s.launch_delay -= 1
 
+	for start, shell in s.shell_start_ticks {
+		age := s.tick - start
+		if start < 0 || age >= s.apex_steps[shell] do continue
+		origin := s.shell_origins[shell]
+		s.shell_positions[shell] = engine.coord_on_line(
+			engine.coord(origin.column, e.canvas.bottom),
+			origin,
+			ease.ease(.Exponential_Out, f64(age + 1) / f64(s.apex_steps[shell])),
+		)
+	}
 	initial_coords := e.particles.initial_coord
 	launch_phases := s.shell_launch_phase
 	write := s.first_active
@@ -319,31 +333,40 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 		start := s.shell_start_ticks[shell]
 		age := s.tick - start
 		origin := s.shell_origins[shell]
-		color := s.shell_colors[shell]
-		launch := engine.coord(origin.column, e.canvas.bottom)
-		apex_end := s.apex_steps[i]
+		apex_end := s.apex_steps[shell]
 		explode_steps := s.explode_steps[i]
 		bloom_steps := s.bloom_steps[i]
-		explode_end := apex_end + explode_steps
-		bloom_end := explode_end + bloom_steps
-		position := e.particles.current_coord[id]
-		appearance := engine.get_appearance(e, id)
+		bloom_end := apex_end + explode_steps + bloom_steps
+		position: engine.Coord
+		moving := true
 		if age < apex_end {
-			position = engine.coord_on_line(
-				launch,
-				origin,
-				ease.ease(.Exponential_Out, f64(age + 1) / f64(s.apex_steps[i])),
-			)
-			engine.set_symbol(e, id, s.config.firework_symbol)
-			appearance.colors.fg =
-				launch_phases[shell] == 2 ? engine.Color{0xFF, 0xFF, 0xFF} : color
-		} else if age < explode_end {
+			position = s.shell_positions[shell]
+			if age == 0 do engine.set_symbol(e, id, s.config.firework_symbol)
+			// The launch sequence holds its shell color for two frames, then white.
+			if launch_phases[shell] != 1 {
+				engine.set_foreground(
+					e,
+					id,
+					launch_phases[shell] == 2 ? engine.Color{0xFF, 0xFF, 0xFF} : s.shell_colors[shell],
+				)
+			}
+		} else if age < bloom_end {
 			move_age := age - apex_end
-			position = engine.coord_on_line(
-				origin,
-				s.explode_targets[i],
-				ease.ease(.Circular_Out, f64(move_age + 1) / f64(explode_steps)),
-			)
+			if move_age == 0 do engine.set_symbol(e, id, e.particles.initial_symbol[id])
+			if move_age < explode_steps {
+				position = engine.coord_on_line(
+					origin,
+					s.explode_targets[i],
+					ease.ease(.Circular_Out, f64(move_age + 1) / f64(explode_steps)),
+				)
+			} else {
+				position = engine.coord_on_quadratic_bezier(
+					s.explode_targets[i],
+					s.bloom_controls[i],
+					s.bloom_targets[i],
+					ease.ease(.Circular_Out, f64(move_age - explode_steps + 1) / f64(bloom_steps)),
+				)
+			}
 			// Rust activates the step-synced bloom scene as soon as the apex
 			// finishes. Its 11 colors are each held for two scene frames.
 			// Sample that 22-frame stream over both outgoing path segments.
@@ -357,28 +380,10 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 				gradient_frames - 1,
 			)
 			gradient_step := math.floor_div(frame_index, 2)
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-			appearance.colors.fg = s.shell_bloom_colors[shell][gradient_step]
-		} else if age < bloom_end {
-			move_age := age - explode_end
-			position = engine.coord_on_quadratic_bezier(
-				s.explode_targets[i],
-				s.bloom_controls[i],
-				s.bloom_targets[i],
-				ease.ease(.Circular_Out, f64(move_age + 1) / f64(bloom_steps)),
-			)
-			gradient_frames :: 22
-			path_steps := explode_steps + bloom_steps
-			frame_index := clamp(
-				engine.round_to_int(
-					f64(gradient_frames - 1) * f64(explode_steps + move_age + 1) / f64(path_steps),
-				),
-				0,
-				gradient_frames - 1,
-			)
-			entry := math.floor_div(frame_index, 2)
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-			appearance.colors.fg = s.shell_bloom_colors[shell][entry]
+			if move_age == 0 || u8(gradient_step) != s.color_steps[i] {
+				s.color_steps[i] = u8(gradient_step)
+				engine.set_foreground(e, id, s.shell_bloom_colors[shell][gradient_step])
+			}
 		} else {
 			fall_age := age - bloom_end
 			input := initial_coords[id]
@@ -389,12 +394,22 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 					input,
 					ease.ease(.Quartic_In_Out, f64(fall_age + 1) / f64(s.fall_steps[i])),
 				)
+			} else {
+				moving = false
 			}
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-			appearance.colors = s.fall_colors[i][min(fall_age / 10, 15)]
+			step := min(fall_age / 10, 15)
+			if fall_age == 0 || u8(step) != s.color_steps[i] {
+				s.color_steps[i] = u8(step)
+				appearance := engine.get_appearance(e, id)
+				appearance.colors = s.fall_colors[i][step]
+				engine.set_appearance(e, id, appearance)
+			}
 		}
-		engine.set_particle(e, id, coord = position, visible = true, layer = 2)
-		engine.set_appearance(e, id, appearance)
+		if age == 0 {
+			engine.set_placement(e, id, position, true, 2)
+		} else if moving {
+			engine.set_position(e, id, position)
+		}
 		if age + 1 < s.finish_ages[i] {
 			s.active_indexes[write] = i
 			write += 1

@@ -78,7 +78,9 @@ Slice_State :: struct {
 	config:           Slice_Config,
 	motion_ids:       [dynamic]engine.Particle_Id,
 	motion_origins:   [dynamic]engine.Coord,
-	motion_steps:     [dynamic]int,
+	motion_slots:     [dynamic]int,
+	motion_factors:   [dynamic]f64,
+	tick:             int,
 	motion_max_steps: [dynamic]int,
 	color_handling:   engine.Existing_Color_Handling,
 }
@@ -163,7 +165,6 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	}
 	n := len(s.motion_ids)
 	s.motion_origins = make([dynamic]engine.Coord, n)
-	s.motion_steps = make([dynamic]int, n)
 	s.motion_max_steps = make([dynamic]int, n)
 	slots := make([dynamic]int, len(e.particles), context.temp_allocator)
 	for i in 0 ..< len(slots) do slots[i] = -1
@@ -283,6 +284,10 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 			}
 		}
 	}
+	steps := s.motion_max_steps
+	s.motion_max_steps, s.motion_slots = engine.group_values(steps[:])
+	delete(steps)
+	s.motion_factors = make([dynamic]f64, len(s.motion_max_steps))
 	for id in s.motion_ids {
 		e.particles.flags[id] += {.Visible}
 	}
@@ -292,28 +297,30 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
 	if len(s.motion_ids) == 0 do return false
 	ids := s.motion_ids[:]
 	origins := s.motion_origins[:]
-	steps := s.motion_steps[:]
+	slots := s.motion_slots[:]
 	max_steps := s.motion_max_steps[:]
 	initial_coords := e.particles.initial_coord
+	for steps, slot in max_steps {
+		if s.tick < steps do s.motion_factors[slot] = ease.ease(s.config.movement_easing, f64(s.tick + 1) / f64(steps))
+	}
 	write := 0
 	for read in 0 ..< len(ids) {
 		id := ids[read]
-		step := steps[read] + 1
-		maximum := max_steps[read]
-		factor := ease.ease(s.config.movement_easing, f64(step) / f64(maximum))
+		slot := slots[read]
+		maximum := max_steps[slot]
+		factor := s.motion_factors[slot]
 		engine.set_particle(e, id, engine.coord_on_line(origins[read], initial_coords[id], factor))
-		if step == maximum do continue
+		if s.tick + 1 == maximum do continue
 		if write != read {
 			ids[write] = id
 			origins[write] = origins[read]
 		}
-		steps[write] = step
-		max_steps[write] = maximum
+		slots[write] = slot
 		write += 1
 	}
 	resize(&s.motion_ids, write)
 	resize(&s.motion_origins, write)
-	resize(&s.motion_steps, write)
-	resize(&s.motion_max_steps, write)
+	resize(&s.motion_slots, write)
+	s.tick += 1
 	return true
 }

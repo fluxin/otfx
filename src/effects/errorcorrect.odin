@@ -190,8 +190,10 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 		last_start := motion_start + s.max_steps[id] - 1
 		total := s.max_steps[id] + 137
 		if age >= total do continue
+		s.active[write] = id; write += 1
 		switch {
 		case age < 60:
+			if age % 3 != 0 do continue
 			if (age / 3) % 2 == 0 {
 				engine.set_symbol(e, id, '▓')
 				engine.set_foreground(e, id, s.config.error_color)
@@ -200,6 +202,7 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 				engine.set_foreground(e, id, white)
 			}
 		case age < 84:
+			if age % 3 != 0 do continue
 			engine.set_symbol(e, id, Errorcorrect_First_Wipe[(age - 60) / 3])
 			engine.set_foreground(e, id, s.config.error_color)
 		case age < last_start:
@@ -222,11 +225,15 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 				),
 			)
 		case age < last_start + 21:
-			engine.set_particle(e, id, e.particles.initial_coord[id])
-			engine.set_particle(e, id, engine.Layer(0))
+			if (age - last_start) % 3 != 0 do continue
+			if age == last_start {
+				engine.set_particle(e, id, e.particles.initial_coord[id])
+				engine.set_particle(e, id, engine.Layer(0))
+			}
 			engine.set_symbol(e, id, Errorcorrect_Last_Wipe[(age - last_start) / 3])
 			engine.set_foreground(e, id, s.config.correct_color)
 		case:
+			if (age - last_start - 21) % 3 != 0 do continue
 			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			step := min((age - last_start - 21) / 3, 10)
 			if s.color_handling == .Dynamic {
@@ -252,7 +259,6 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
 				)
 			}
 		}
-		s.active[write] = id; write += 1
 	}
 	resize(&s.active, write)
 	s.tick += 1

@@ -256,9 +256,11 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
 		if phase < 0 do continue
 		span := phase == 0 ? s.first_frame_spans[id] : s.second_frame_spans[id]
 		age := s.tick - s.start_ticks[id]
-		frame := age / 5
-		engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
-		engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
+		if age % 5 == 0 {
+			frame := age / 5
+			engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
+			engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
+		}
 		if age + 1 == (span.len - 1) * 5 + 1 {
 			s.active_phase[id] = -1
 		} else {

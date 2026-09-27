@@ -67,7 +67,19 @@ playback contracts are described in [architecture](docs/architecture.md).
 
 ## Performance
 
-The latest native comparison against **ttfx's ASM branch** measures **48.2 ms
+The [Spotlights follow-up](docs/spotlights-prepared.md) reduces its runtime by 14%
+using prepared HSL colors and squared-distance checks. All 282 captures match
+byte-for-byte; the full 35-effect screen found no regression above 2%.
+
+The preceding [37-effect pattern audit](docs/effect-patterns.md) records:
+23 effects now apply existing active-list, shared-calculation and held-sample
+patterns. The 21 changed finite effects improve 9.5% in mean best wall time.
+A [fresh 35-effect ASM comparison](docs/effect-patterns-asm.tsv) measures mean best
+wall time of 30.48 ms versus ASM 30.86 ms: roughly parity, with 12/35 individual
+wins and a 7.9% slower geometric time ratio.
+See the report for CPU/RSS, frame validation and measurement limits.
+
+The earlier row-renderer comparison against **ttfx's ASM branch** measured **48.2 ms
 for otfx versus 54.5 ms for ASM**, averaged over 35 finite effects: about 12%
 less mean wall time. otfx wins 19/35 effects; geometric mean is essentially tied
 at 1.01×, so this is not a uniform advantage.

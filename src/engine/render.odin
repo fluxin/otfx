@@ -19,9 +19,10 @@ Render_Key :: bit_field u64 {
 }
 
 Render_Cell :: struct {
-	stack: [dynamic]Render_Key, // ascending (layer, particle ID)
-	top:   Particle_Id, // NO_PARTICLE when the cell has no occupant
-	bytes: []byte, // borrowed fixed-width slot in canvas_bytes
+	stack:            [dynamic]Render_Key, // ascending (layer, particle ID)
+	needs_compaction: bool,
+	top:              Particle_Id, // NO_PARTICLE when the cell has no occupant
+	bytes:            []byte, // borrowed fixed-width slot in canvas_bytes
 }
 
 @(private = "file")
@@ -81,9 +82,8 @@ next_dirty_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (inde
 	return 0, false
 }
 
-// compose_frame supplies a queued, live particle with published cell membership.
-// The stack contains its retained key; a top member implies a nonempty stack.
-cell_remove :: proc(e: ^Engine, id: Particle_Id, layer: int) #no_bounds_check {
+// Leave its sorted key in place until this frame's membership changes are done.
+cell_remove :: proc(e: ^Engine, id: Particle_Id) #no_bounds_check {
 	index := e.particles[id].cell
 	cell := &e.cells[index]
 	if cell.top == id {
@@ -91,20 +91,28 @@ cell_remove :: proc(e: ^Engine, id: Particle_Id, layer: int) #no_bounds_check {
 		cell.top = NO_PARTICLE
 		if len(cell.stack) > 0 do cell.top = Particle_Id(cell.stack[len(cell.stack) - 1].id)
 		mark_cell_dirty(e, index)
-	} else {
-		slot := 0
-		if cell.stack[0].id != u32(id) {
-			key := Render_Key {
-				id    = u32(id),
-				layer = u32(layer),
-			}
-			found: bool
-			slot, found = slice.binary_search_by(cell.stack[:], key, render_key_compare)
-			assert(found)
-		}
-		ordered_remove(&cell.stack, slot)
+	} else if !cell.needs_compaction {
+		cell.needs_compaction = true
+		append(&e.compact_cells, index)
 	}
 	e.particles[id].cell = -1
+}
+
+// Published keys stay ordered; filter departed and relayered entries once.
+cell_compact :: proc(e: ^Engine, index: int) #no_bounds_check {
+	cell := &e.cells[index]
+	write := 0
+	for key in cell.stack {
+		id := Particle_Id(key.id)
+		if e.particles[id].cell != index || e.particles[id].layer != int(key.layer) do continue
+		cell.stack[write] = key
+		write += 1
+	}
+	resize(&cell.stack, write)
+	top := NO_PARTICLE
+	if write > 0 do top = Particle_Id(cell.stack[write - 1].id)
+	if top != cell.top {cell.top = top; mark_cell_dirty(e, index)}
+	cell.needs_compaction = false
 }
 
 // compose_frame supplies a live particle and a nonnegative cell_index result.
@@ -147,8 +155,8 @@ cell_index :: #force_inline proc(e: ^Engine, coord: Coord) -> int {
 	return (e.layout.visible_top - row) * e.layout.visible_right + column - 1
 }
 
-// Each stack retains its published keys, so remove and insert one particle at
-// a time. Cell bytes are patched only after every queued update is applied.
+// Insert arrivals in sorted order. Departures are compacted once per affected
+// cell after the queue is drained; only then can cell bytes be patched.
 compose_frame :: proc(e: ^Engine) -> (width, height: int) {
 	width, height = max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	// Queue insertion accesses the particle with checks on; IDs are never removed.
@@ -164,7 +172,7 @@ compose_frame :: proc(e: ^Engine) -> (width, height: int) {
 			cell = cell_index(e, e.particles[id].current_coord) if .Visible in changes else -1
 			if previous_cell >= 0 &&
 			   (cell != previous_cell || e.particles[id].layer != update.previous_layer) {
-				cell_remove(e, id, update.previous_layer)
+				cell_remove(e, id)
 			}
 			if cell >= 0 && e.particles[id].cell < 0 {
 				cell_insert(e, cell, id)
@@ -172,6 +180,8 @@ compose_frame :: proc(e: ^Engine) -> (width, height: int) {
 		}
 		if cell >= 0 && .Content_Changed in changes && e.cells[cell].top == id do mark_cell_dirty(e, cell)
 	}
+	for cell in e.compact_cells do cell_compact(e, cell)
+	clear(&e.compact_cells)
 	clear(&e.updates)
 	return
 }

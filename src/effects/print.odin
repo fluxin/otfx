@@ -238,34 +238,36 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
 	for id in s.active_chars {
 		age := s.tick - s.char_start_ticks[id]
 		if age >= 18 do continue
-		frame := min(age / 3, 5)
-		if frame < 4 {
-			engine.set_symbol(e, id, Print_Typing_Symbols[frame])
-		} else if frame == 4 {
-			engine.set_symbol(e, id, '░')
-		} else {
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		}
-		if s.color_handling == .Dynamic {
-			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-			if fg, ok := style.colors.fg.?; ok {
-				engine.set_foreground(e, id, engine.gradient_between_step(white, fg, 5, frame))
-			} else if style.colors.bg == nil && frame < 5 {
-				engine.set_foreground(e, id, white)
+		if age % 3 == 0 {
+			frame := min(age / 3, 5)
+			if frame < 4 {
+				engine.set_symbol(e, id, Print_Typing_Symbols[frame])
+			} else if frame == 4 {
+				engine.set_symbol(e, id, '░')
 			} else {
-				engine.set_foreground(e, id, nil)
+				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			}
-			if bg, ok := style.colors.bg.?; ok {
-				engine.set_background(e, id, engine.gradient_between_step(white, bg, 5, frame))
+			if s.color_handling == .Dynamic {
+				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+				if fg, ok := style.colors.fg.?; ok {
+					engine.set_foreground(e, id, engine.gradient_between_step(white, fg, 5, frame))
+				} else if style.colors.bg == nil && frame < 5 {
+					engine.set_foreground(e, id, white)
+				} else {
+					engine.set_foreground(e, id, nil)
+				}
+				if bg, ok := style.colors.bg.?; ok {
+					engine.set_background(e, id, engine.gradient_between_step(white, bg, 5, frame))
+				} else {
+					engine.set_background(e, id, nil)
+				}
 			} else {
-				engine.set_background(e, id, nil)
+				engine.set_foreground(
+					e,
+					id,
+					engine.gradient_between_step(white, s.final_colors[id], 5, frame),
+				)
 			}
-		} else {
-			engine.set_foreground(
-				e,
-				id,
-				engine.gradient_between_step(white, s.final_colors[id], 5, frame),
-			)
 		}
 		if age + 1 < 18 {
 			s.active_chars[write] = id
