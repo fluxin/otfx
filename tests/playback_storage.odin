@@ -3,7 +3,6 @@ package regression
 import "../src/effects"
 import "../src/engine"
 import "core:fmt"
-import "core:math/rand"
 import "core:mem"
 import "core:testing"
 
@@ -68,8 +67,7 @@ rebuilt_output_storage_does_not_grow :: proc(t: ^testing.T) {
 			cfg.ignore_terminal_dimensions, cfg.no_color = true, no_color
 			e, err := engine.engine_make("A", cfg)
 			testing.expect(t, err == .None)
-			capacity := 0
-			for row in e.rows do capacity += len(row.bytes)
+			capacity := len(e.slots) + len(e.output)
 			if index > 0 do testing.expect_value(t, capacity > previous_capacity, index < 3)
 			previous_capacity = capacity
 			allocations := track.total_allocation_count
@@ -102,9 +100,7 @@ rebuilt_output_storage_does_not_grow :: proc(t: ^testing.T) {
 				}
 				engine.frame_build(&e)
 				testing.expect_value(t, track.total_allocation_count, allocations)
-				current_capacity := 0
-				for row in e.rows do current_capacity += len(row.bytes)
-				testing.expect_value(t, current_capacity, capacity)
+				testing.expect_value(t, len(e.slots) + len(e.output), capacity)
 			}
 		}
 	}
@@ -127,7 +123,7 @@ bounded_playback_reuses_build_storage :: proc(t: ^testing.T) {
 		cfg := engine.config_default()
 		cfg.canvas_width, cfg.canvas_height, cfg.frame_rate = 40, 12, 0
 		cfg.ignore_terminal_dimensions, cfg.virtual_clock = true, true
-		rand.reset_u64(42)
+		engine.random_seed(42)
 		e, err := engine.engine_make("Playback storage\nA B C D\nFinal row", cfg)
 		testing.expect(t, err == .None)
 		fx, ok := effects.make_effect(kind, nil)

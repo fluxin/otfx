@@ -1,0 +1,3 @@
+effect	reference_frames_observed_through_pipe	candidate_frames_observed_through_pipe	reference_mean_ms	candidate_mean_ms	reference_cpu_ms	candidate_cpu_ms	reference_rss_kib	candidate_rss_kib
+matrix	80122	425816	5017.4	5021.3	5001.8	5005.9	14040	10584
+thunderstorm	10093	114318	1006.6	1005.7	1003.1	1002.3	71008	12376

@@ -5,7 +5,6 @@ import "../engine"
 import "core:fmt"
 import "core:math"
 import "core:math/ease"
-import "core:math/rand"
 
 Fireworks_Config :: struct {
 	explode_anywhere:         bool,
@@ -124,7 +123,7 @@ fireworks_random_explode_target :: proc(origin: engine.Coord, diameter: int) -> 
 		row_offset := int(math.sqrt(b_squared * (1 - math.pow(x, 2) / a_squared)))
 		count += row_offset * 2 + 1
 	}
-	entry := rand.int_max(count)
+	entry := engine.random_below(count)
 	for column in origin.column - diameter ..= origin.column + diameter {
 		x := f64(column - origin.column)
 		row_offset := int(math.sqrt(b_squared * (1 - math.pow(x, 2) / a_squared)))
@@ -203,8 +202,8 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 		min_row :=
 			s.config.explode_anywhere ? e.canvas.bottom : initial_coords[s.characters[first]].row
 		origin := engine.coord(
-			rand.int_range(e.canvas.left, e.canvas.right + 1),
-			rand.int_range(min_row, e.canvas.top + 1),
+			engine.random_range(e.canvas.left, e.canvas.right + 1),
+			engine.random_range(min_row, e.canvas.top + 1),
 		)
 		s.shell_origins[shell] = origin
 		launch := engine.coord(origin.column, e.canvas.bottom)
@@ -213,7 +212,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 			1,
 		)
 		s.shell_colors[shell] =
-			s.config.firework_colors[rand.int_max(len(s.config.firework_colors))]
+			s.config.firework_colors[engine.random_below(len(s.config.firework_colors))]
 		for step in 0 ..< 11 {
 			if step <= 5 {
 				s.shell_bloom_colors[shell][step] = engine.gradient_between_step(
@@ -261,7 +260,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 
 			explode := fireworks_random_explode_target(origin, explode_distance)
 			s.explode_targets[i] = explode
-			explode_speed := rand.float64_range(0.2, 0.4)
+			explode_speed := engine.random_float_range(0.2, 0.4)
 			s.explode_steps[i] = max(
 				engine.round_to_int(engine.line_length(origin, explode, true) / explode_speed),
 				1,
@@ -299,7 +298,7 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 	s.next_shell = shell_count - 1
 }
 
-fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
+fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.next_shell < 0 && len(s.active_indexes) == s.first_active do return false
 
 	if s.next_shell >= 0 && s.launch_delay <= 0 {
@@ -309,7 +308,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool {
 		s.shell_launch_phase[shell] = 0
 		s.next_shell -= 1
 		s.launch_delay = engine.round_to_int(
-			f64(s.config.launch_delay) * rand.float64_range(0.5, 1.5),
+			f64(s.config.launch_delay) * engine.random_float_range(0.5, 1.5),
 		)
 	}
 	s.launch_delay -= 1

@@ -6,7 +6,6 @@ import "core:container/bit_array"
 import "core:fmt"
 import "core:math"
 import "core:math/ease"
-import "core:math/rand"
 
 Spotlights_Config :: struct {
 	beam_width_ratio:         f64,
@@ -108,7 +107,7 @@ spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) {
 	s.spot_origins[i] = origin
 	s.spot_targets[i] = target
 	s.spot_controls[i] = control
-	s.spot_speeds[i] = rand.float64_range(
+	s.spot_speeds[i] = engine.random_float_range(
 		s.config.search_speed_range.lo,
 		s.config.search_speed_range.hi,
 	)
@@ -232,7 +231,7 @@ spotlights_update_positions :: proc(
 	return
 }
 
-spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool {
+spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	// Illumination depends on integer positions, range, and the Expand color rule.
 	restore_input := false
 	repaint := !s.illumination_initialized || s.phase == .Expand

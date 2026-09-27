@@ -2,7 +2,6 @@ package regression
 
 import "../src/effects"
 import "../src/engine"
-import "core:math/rand"
 import "core:mem"
 import "core:testing"
 
@@ -15,7 +14,7 @@ unstable_settled_motion_keeps_dynamic_color_finish :: proc(t: ^testing.T) {
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	cfg.existing_color_handling = .Dynamic
-	rand.reset_u64(42)
+	engine.random_seed(42)
 	e, err := engine.engine_make("\x1b[31;44mA\x1b[0m B", cfg)
 	testing.expect(t, err == .None)
 	s := effects.Unstable_State {
@@ -147,7 +146,7 @@ fireworks_retires_after_motion_and_color_finish :: proc(t: ^testing.T) {
 		cfg := engine.config_default()
 		cfg.ignore_terminal_dimensions = true
 		cfg.existing_color_handling = mode
-		rand.reset_u64(42)
+		engine.random_seed(42)
 		e, err := engine.engine_make("\x1b[31;44mABCDEFGH\x1b[0m\nIJKLMNOP\nQRSTUVWX", cfg)
 		testing.expect(t, err == .None)
 		s := effects.Fireworks_State {

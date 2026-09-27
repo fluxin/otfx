@@ -23,10 +23,10 @@ Engine :: struct {
 	render_nodes:          xar.Array(Render_Node, 2),
 	render_keys:           [dynamic]Render_Key,
 	rows:                  []Render_Row,
-	dirty_cells:           bit_array.Bit_Array,
-	dirty_rows, emit_rows: bit_array.Bit_Array,
-	canvas_bytes:          []byte, // contiguous fixed-width cell slots, borrowed by rows
-	cell_stride:           int,
+	dirty_cells:           bit_array.Bit_Array, // cells to patch in the next frame build
+	emit_cells:            bit_array.Bit_Array, // cells the last frame build changed
+	slots:                 [][SLOT_MAX]byte, // each cell's encoded bytes, indexed like cells
+	output:                []byte, // the last frame's terminal bytes
 	shared_appearances:    [dynamic]Appearance,
 	last_print:            time.Tick,
 	logical_frame:         int,
@@ -56,21 +56,14 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	for &cell in e.cells do cell.top = NO_PARTICLE
 	reserve(&e.resolve_cells, len(e.cells))
 	e.rows = make([]Render_Row, height)
+	for &row, i in e.rows do row.cells = e.cells[i * width:(i + 1) * width]
 	bit_array.init(&e.dirty_cells, width * height)
-	bit_array.init(&e.dirty_rows, height)
-	bit_array.init(&e.emit_rows, height)
-	for &row, i in e.rows {
-		row.cells = e.cells[i * width:(i + 1) * width]
-		bit_array.set(&e.dirty_rows, i)
-	}
-	e.cell_stride = 4 if cfg.no_color else 51
-	e.canvas_bytes = make([]byte, width * height * e.cell_stride)
-	for &cell, i in e.cells {
-		cell.bytes = e.canvas_bytes[i * e.cell_stride:(i + 1) * e.cell_stride]
-		cell.bytes[0] = ' '
-	}
-	row_length := width * e.cell_stride
-	for &row, i in e.rows do row.bytes = e.canvas_bytes[i * row_length:(i + 1) * row_length]
+	bit_array.init(&e.emit_cells, width * height)
+	e.slots = make([][SLOT_MAX]byte, width * height)
+	// The first frame paints every cell, blanks included.
+	for i in 0 ..< len(e.cells) do mark_cell_dirty(&e, i)
+	// Worst case: every cell starts its own run, with both cursor moves.
+	e.output = make([]byte, len(Frame_Origin) + len(e.cells) * (SLOT_MAX + 2 * MOVE_MAX))
 	reserve(&e.shared_appearances, max(e.canvas.top * e.canvas.right, 64))
 	setup_input_particles(&e, lines)
 	// drop characters that landed outside the canvas (same as upstream)

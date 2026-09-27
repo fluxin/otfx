@@ -177,7 +177,7 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 	}
 }
 
-colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool {
+colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	ids := e.particle_sets.input[:]
 	n := len(s.gradient)
 	frames := s.config.gradient_frames

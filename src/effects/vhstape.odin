@@ -3,7 +3,6 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import "core:math/rand"
 
 Vhs_Noise_Symbols :: [4]rune{'#', '*', '.', ':'}
 
@@ -120,9 +119,6 @@ Vhstape_Noise_Frame :: struct {
 
 VHSTAPE_SNOW_FRAMES :: 25
 VHSTAPE_FINAL_SNOW_FRAMES :: 30
-// An activated path can only span from one 25-column glitch endpoint to the
-// opposite endpoint. At its slowest, that is exactly 50 one-cell frames.
-VHSTAPE_LANE_COORD_CAPACITY :: 50
 
 Vhstape_State :: struct {
 	config:                Vhstape_Config,
@@ -136,10 +132,12 @@ Vhstape_State :: struct {
 	active_wave_rows:      [dynamic]int,
 	active_glitch_rows:    [dynamic]int,
 	active_wave_top:       int,
+	noise_codes:           []engine.Appearance_Id, // one prepared appearance per noise color
 	snow_frames:           []Vhstape_Noise_Frame,
 	final_snow_frames:     []Vhstape_Noise_Frame,
 	motions:               []Vhstape_Motion,
-	motion_coords:         []engine.Coord,
+	motion_origins:        []engine.Coord,
+	motion_targets:        []engine.Coord,
 	motion_frame:          []int,
 	motion_frame_count:    []int,
 	motion_holds:          []int,
@@ -215,32 +213,37 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 
 	// Python/Rust draw all snow choices while constructing each line. Keep the
 	// fixed sequences compact and indexed by dense character slot.
+	s.noise_codes = make([]engine.Appearance_Id, len(s.config.noise_colors))
+	for color, i in s.config.noise_colors {
+		s.noise_codes[i] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+	}
 	s.snow_frames = make([]Vhstape_Noise_Frame, n * VHSTAPE_SNOW_FRAMES)
 	s.final_snow_frames = make([]Vhstape_Noise_Frame, n * VHSTAPE_FINAL_SNOW_FRAMES)
 	for row in 0 ..< row_count {
-		offset := rand.int_range(4, 26)
-		if rand.int_max(2) == 0 do offset = -offset
+		offset := engine.random_range(4, 26)
+		if engine.random_below(2) == 0 do offset = -offset
 		s.row_offsets[row] = offset
-		_ = rand.int_range(1, 51) // initial path hold; runtime activation replaces it
+		_ = engine.random_range(1, 51) // initial path hold; runtime activation replaces it
 		for id in engine.group_members(s.rows, row) {
 			i := s.index_by_id[id]
 			for frame in 0 ..< VHSTAPE_SNOW_FRAMES {
 				s.snow_frames[i * VHSTAPE_SNOW_FRAMES + frame] = {
-					u8(rand.int_max(len(Vhs_Noise_Symbols))),
-					u16(rand.int_max(len(s.config.noise_colors))),
+					u8(engine.random_below(len(Vhs_Noise_Symbols))),
+					u16(engine.random_below(len(s.config.noise_colors))),
 				}
 			}
 			for frame in 0 ..< VHSTAPE_FINAL_SNOW_FRAMES {
 				s.final_snow_frames[i * VHSTAPE_FINAL_SNOW_FRAMES + frame] = {
-					u8(rand.int_max(len(Vhs_Noise_Symbols))),
-					u16(rand.int_max(len(s.config.noise_colors))),
+					u8(engine.random_below(len(Vhs_Noise_Symbols))),
+					u16(engine.random_below(len(s.config.noise_colors))),
 				}
 			}
 		}
 	}
 
 	s.motions = make([]Vhstape_Motion, storage_len)
-	s.motion_coords = make([]engine.Coord, storage_len * VHSTAPE_LANE_COORD_CAPACITY)
+	s.motion_origins = make([]engine.Coord, storage_len)
+	s.motion_targets = make([]engine.Coord, storage_len)
 	s.motion_frame = make([]int, storage_len)
 	s.motion_frame_count = make([]int, storage_len)
 	s.motion_holds = make([]int, storage_len)
@@ -306,12 +309,12 @@ vhstape_noise_appearance :: proc(
 	frame: int,
 ) -> (
 	rune,
-	engine.Appearance,
+	engine.Appearance_Id,
 ) {
 	i := s.index_by_id[id]
 	choice := frames[i * frame_count + frame]
 	symbols := Vhs_Noise_Symbols
-	return symbols[choice.symbol], {colors = {fg = s.config.noise_colors[choice.color]}}
+	return symbols[choice.symbol], s.noise_codes[choice.color]
 }
 
 vhstape_start_scene :: proc(
@@ -392,15 +395,8 @@ vhstape_start_motion :: proc(
 	s.motion_frame[id] = 0
 	s.motion_frame_count[id] = max_steps
 	s.motion_holds[id] = hold
-	assert(max_steps <= VHSTAPE_LANE_COORD_CAPACITY)
-	base := int(id) * VHSTAPE_LANE_COORD_CAPACITY
-	for frame in 1 ..= max_steps {
-		s.motion_coords[base + frame - 1] = engine.coord_on_line(
-			e.particles.current_coord[id],
-			target,
-			f64(frame) / f64(max_steps),
-		)
-	}
+	s.motion_origins[id] = e.particles.current_coord[id]
+	s.motion_targets[id] = target
 	vhstape_start_scene(s, e, id, kind == .Restore ? .Backward : .Forward)
 	vhstape_activate_character(s, id)
 }
@@ -423,7 +419,7 @@ vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 		steps := vhstape_steps(
 			e.particles.current_coord[id],
 			e.particles.initial_coord[id],
-			rand.int_range(20, 41),
+			engine.random_range(20, 41),
 		)
 		vhstape_start_restore(s, e, id, steps)
 	}
@@ -433,8 +429,8 @@ vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold
 	for id in engine.group_members(s.rows, row) {
 		p := e.particles.initial_coord[id]
 		target := engine.coord(p.column + s.row_offsets[row], p.row)
-		out_steps := vhstape_steps(e.particles.current_coord[id], target, rand.int_range(20, 41))
-		s.return_steps[id] = vhstape_steps(target, p, rand.int_range(20, 41))
+		out_steps := vhstape_steps(e.particles.current_coord[id], target, engine.random_range(20, 41))
+		s.return_steps[id] = vhstape_steps(target, p, engine.random_range(20, 41))
 		vhstape_start_motion(s, e, id, .Glitch, target, out_steps, hold)
 	}
 }
@@ -480,9 +476,9 @@ vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine
 	if s.active_wave_top < 0 {
 		if canvas.text_height < 3 do return
 		lower := max(3, engine.round_to_int(f64(canvas.text_height) * 0.5))
-		s.active_wave_top = canvas.text_bottom + rand.int_range(lower, canvas.text_height + 1)
+		s.active_wave_top = canvas.text_bottom + engine.random_range(lower, canvas.text_height + 1)
 	} else if len(s.active_wave_rows) > 0 {
-		if rand.float64() < 0.3 do s.active_wave_top += rand.float64() < 0.3 ? 1 : -1
+		if engine.random_float() < 0.3 do s.active_wave_top += engine.random_float() < 0.3 ? 1 : -1
 		s.active_wave_top = clamp(s.active_wave_top, 2, canvas.text_top)
 	}
 
@@ -524,7 +520,8 @@ vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Par
 	if kind == .Idle do return
 	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
 	if frame < frame_count {
-		engine.set_particle(e, id, s.motion_coords[int(id) * VHSTAPE_LANE_COORD_CAPACITY + frame])
+		t := f64(frame + 1) / f64(frame_count)
+		engine.set_particle(e, id, engine.coord_on_line(s.motion_origins[id], s.motion_targets[id], t))
 		frame += 1
 		s.motion_frame[id] = frame
 	}
@@ -694,7 +691,7 @@ vhstape_start_redraw_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int)
 	}
 }
 
-vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
+vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.phase == .Complete && len(s.active_characters) == 0 do return false
 	switch s.phase {
 	case .Glitching:
@@ -711,15 +708,15 @@ vhstape_next :: proc(s: ^Vhstape_State, e: ^engine.Engine) -> bool {
 			}
 		}
 		resize(&s.active_glitch_rows, write)
-		if rand.float64() < s.config.glitch_line_chance && len(s.active_glitch_rows) < 3 {
-			row := rand.int_max(len(s.rows.spans))
+		if engine.random_float() < s.config.glitch_line_chance && len(s.active_glitch_rows) < 3 {
+			row := engine.random_below(len(s.rows.spans))
 			if s.row_is_wave[row] == 0 && s.row_is_glitch[row] == 0 {
 				s.row_is_glitch[row] = 1
 				append(&s.active_glitch_rows, row)
-				vhstape_start_glitch_row(s, e, row, rand.int_range(20, 76))
+				vhstape_start_glitch_row(s, e, row, engine.random_range(20, 76))
 			}
 		}
-		if rand.float64() < s.config.noise_chance do vhstape_start_snow(s, e, false)
+		if engine.random_float() < s.config.noise_chance do vhstape_start_snow(s, e, false)
 		s.tick += 1
 		if s.tick >= s.config.total_glitch_time {
 			for row in s.active_wave_rows do vhstape_restore_row(s, e, row)

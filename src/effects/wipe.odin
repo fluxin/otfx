@@ -64,8 +64,9 @@ wipe_parse :: proc(cfg: ^Wipe_Config, args: []string) -> bool {
 
 Wipe_State :: struct {
 	config:         Wipe_Config,
-	frames:         engine.Frame_Timeline,
-	frame_spans:    [dynamic]engine.Span,
+	final_index:    [dynamic]int, // spectrum index by particle; unused when dynamic
+	fades:          engine.Gradient_Steps, // fades to each spectrum entry
+	gradient_steps: int,
 	start_ticks:    [dynamic]int,
 	active:         [dynamic]engine.Particle_Id,
 	active_by_id:   [dynamic]u8,
@@ -117,39 +118,22 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 	defer delete(chars[:])
 	reserve(&s.active, len(chars))
 	s.color_handling = e.cfg.existing_color_handling
-	s.frame_spans = make([dynamic]engine.Span, len(e.particles))
+	s.final_index = make([dynamic]int, len(e.particles))
 	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	s.active_by_id = make([dynamic]u8, len(e.particles))
-	gradient_steps := s.config.final_gradient_steps[0]
-	reserve(&s.frames, len(chars) * (gradient_steps + 1))
-
-	for id in chars {
-		switch s.color_handling {
-		case .Dynamic:
-			s.frame_spans[id] = engine.create_timeline(
-				&s.frames,
-				e.particles.initial_symbol[id],
-				engine.Appearance{colors = engine.get_initial_appearance(e, id).colors},
-				s.config.final_gradient_frames,
-				gradient_steps + 1,
-			)
-		case .Ignore, .Always:
-			final := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
-			s.frame_spans[id] = engine.create_timeline(
-				&s.frames,
-				e.particles.initial_symbol[engine.Particle_Id(id)],
-				s.config.final_gradient_frames,
-				spectrum[0],
-				final,
-				gradient_steps,
-			)
+	s.gradient_steps = s.config.final_gradient_steps[0]
+	if s.color_handling != .Dynamic {
+		// Every character fades from the first spectrum color to its own entry.
+		s.fades = engine.gradient_steps_make(e, spectrum[0], spectrum[:], s.gradient_steps)
+		for id in chars {
+			s.final_index[id] = engine.gradient_sample_index(sampler, len(spectrum), e.particles.initial_coord[id])
 		}
 	}
 	s.wipe_delay = s.config.wipe_delay
 }
 
-wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
+wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.active) == 0 && engine.group_reveal_complete(s.reveal) {
 		return false
 	}
@@ -179,15 +163,18 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool {
 	write := 0
 	for id in s.active {
 		if s.active_by_id[id] == 0 do continue
-		span := s.frame_spans[id]
 		age := s.tick - s.start_ticks[id]
-		// Activation (including re-entry) publishes sample zero; held ticks do not.
+		// Activation (including re-entry) publishes step zero; held ticks do not.
 		if age % s.config.final_gradient_frames == 0 {
-			frame := age / s.config.final_gradient_frames
-			engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
-			engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
+			step := age / s.config.final_gradient_frames
+			engine.set_symbol(e, id, e.particles.initial_symbol[id])
+			if s.color_handling == .Dynamic {
+				engine.set_appearance(e, id, engine.Appearance{colors = engine.get_initial_appearance(e, id).colors})
+			} else {
+				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[id], step))
+			}
 		}
-		if age + 1 == span.len * s.config.final_gradient_frames {
+		if age + 1 == (s.gradient_steps + 1) * s.config.final_gradient_frames {
 			s.active_by_id[id] = 0
 		} else {
 			s.active[write] = id

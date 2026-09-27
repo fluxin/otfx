@@ -141,7 +141,7 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	s.motion_factors = make([dynamic]f64, len(s.max_steps))
 }
 
-expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool {
+expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.tick == s.step_limit do return false
 	for steps, slot in s.max_steps {
 		if s.tick < steps do s.motion_factors[slot] = ease.ease(s.config.expand_easing, f64(s.tick + 1) / f64(steps))

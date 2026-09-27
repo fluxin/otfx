@@ -2,7 +2,6 @@ package effects
 
 import "../engine"
 import "core:fmt"
-import "core:math/rand"
 
 @(private, rodata)
 Errorcorrect_First_Wipe: [8]rune = {'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
@@ -141,10 +140,10 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	append(&available, ..characters[:])
 	for _ in 0 ..< int(s.config.error_pairs * f64(len(characters))) {
 		if len(available) < 2 do break
-		first_index := rand.int_max(
+		first_index := engine.random_below(
 			len(available),
 		); first := available[first_index]; ordered_remove(&available, first_index)
-		second_index := rand.int_max(
+		second_index := engine.random_below(
 			len(available),
 		); second := available[second_index]; ordered_remove(&available, second_index)
 		first_home, second_home :=
@@ -174,7 +173,7 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 	reserve(&s.active, 2 * len(s.swapped))
 }
 
-errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool {
+errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.swapped_head < len(s.swapped) && s.swap_delay == 0 {
 		pair := s.swapped[s.swapped_head]; s.swapped_head += 1
 		s.start_ticks[pair.first] = s.tick

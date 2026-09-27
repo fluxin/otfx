@@ -1,10 +1,10 @@
 package regression
 
 import "../src/engine"
+import "core:container/bit_array"
 import "core:testing"
 
-// Padding is intentionally present on the wire. Existing protocol witnesses
-// compare all non-NUL bytes; dedicated slot tests verify padding and aliasing.
+// Frames carry no slot padding; this also strips any NUL a test glyph emits.
 frame_without_padding :: proc(e: ^engine.Engine, allocator := context.temp_allocator) -> []byte {
 	bytes := engine.frame_bytes(e, allocator)
 	used := 0
@@ -24,6 +24,7 @@ draw_at :: proc(e: ^engine.Engine, cell: int) -> i32 {
 	return -1
 }
 
+// A cell's slot holds exactly what the terminal last received for it.
 expect_frame_cell :: proc(
 	t: ^testing.T,
 	e: ^engine.Engine,
@@ -31,14 +32,14 @@ expect_frame_cell :: proc(
 	expected_symbol: rune,
 	expected: engine.Appearance,
 ) {
-	lines, err := engine.preprocess_input(string(frame_without_padding(e)), 4)
+	encoded := engine.cell_encoding(e, row * e.layout.visible_right + column)
+	lines, err := engine.preprocess_input(string(encoded), 4)
 	testing.expect_value(t, err, engine.Input_Error.None)
 	actual_symbol := ' '
 	actual := engine.Appearance{}
-	if row < len(lines) && column < lines[row].width {
-		cell := lines[row].cells[column]
-		actual = cell.style
-		actual_symbol = cell.symbol
+	if len(lines) > 0 && lines[0].width > 0 {
+		actual = lines[0].cells[0].style
+		actual_symbol = lines[0].cells[0].symbol
 	}
 	testing.expect_value(t, actual_symbol, expected_symbol)
 	expect_appearance(t, actual, expected)
@@ -49,10 +50,9 @@ expect_visible_draws :: proc(t: ^testing.T, e: ^engine.Engine) {
 	testing.expect_value(t, err, engine.Input_Error.None)
 	for entry, index in e.cells {
 		id := entry.top
-		if id == engine.NO_PARTICLE do continue
+		// A delta contains only rewritten cells. The rest remain on screen.
+		if id == engine.NO_PARTICLE || !bit_array.get(&e.emit_cells, index) do continue
 		row, col := index / e.layout.visible_right, index % e.layout.visible_right
-		// A delta contains only rewritten rows. Held rows remain on screen.
-		if row >= len(lines) || lines[row].width == 0 do continue
 		expected := engine.get_render_appearance(e, id)^
 		if e.cfg.no_color do expected.colors.fg, expected.colors.bg, expected.bold = nil, nil, false
 		testing.expect(t, row < len(lines) && col < lines[row].width)

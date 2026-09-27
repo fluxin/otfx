@@ -57,7 +57,7 @@ frame_capture_owns_its_bytes :: proc(t: ^testing.T) {
 }
 
 @(test)
-row_bytes_preserve_fixed_cell_slots :: proc(t: ^testing.T) {
+cell_slots_hold_final_encoding :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -97,7 +97,9 @@ row_bytes_preserve_fixed_cell_slots :: proc(t: ^testing.T) {
 					}
 				}
 				actual := strings.builder_make(allocator = context.temp_allocator)
-				for b in e.rows[row].bytes do if b != 0 do strings.write_byte(&actual, b)
+				for column in 0 ..< len(e.rows[row].cells) {
+					strings.write_bytes(&actual, engine.cell_encoding(&e, row * len(e.rows[row].cells) + column))
+				}
 				testing.expect_value(t, strings.to_string(actual), strings.to_string(builder))
 			}
 		}
@@ -105,7 +107,7 @@ row_bytes_preserve_fixed_cell_slots :: proc(t: ^testing.T) {
 }
 
 @(test)
-fixed_slots_share_grid_and_clear_shorter_glyphs :: proc(t: ^testing.T) {
+slots_follow_cells_and_track_glyph_lengths :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -116,29 +118,20 @@ fixed_slots_share_grid_and_clear_shorter_glyphs :: proc(t: ^testing.T) {
 		cfg.ignore_terminal_dimensions, cfg.no_color = true, no_color
 		e, err := engine.engine_make("AB\nCD", cfg)
 		testing.expect_value(t, err, engine.Input_Error.None)
-		stride := 4 if no_color else 51
-		testing.expect_value(t, e.cell_stride, stride)
-		for &row, i in e.rows {
-			testing.expect_value(t, len(row.bytes), 2 * stride)
-			testing.expect(t, raw_data(row.bytes) == &e.canvas_bytes[i * 2 * stride])
-			testing.expect(t, raw_data(row.cells) == &e.cells[i * 2])
-		}
+		testing.expect_value(t, len(e.slots), len(e.cells))
+		for &row, i in e.rows do testing.expect(t, raw_data(row.cells) == &e.cells[i * 2])
 		for id in e.particle_sets.input do engine.set_particle(&e, id, engine.Visible(true))
 		id := e.particle_sets.input[0]
 		expected_glyphs := []string{"𐍈", "A", ""}
 		for glyph, index in ([]rune{'𐍈', 'A', 0}) {
 			engine.set_symbol(&e, id, glyph)
 			engine.frame_build(&e)
-			slot := e.canvas_bytes[:stride]
-			expected := expected_glyphs[index]
-			testing.expect_value(t, string(slot[:len(expected)]), expected)
-			for b in slot[len(expected):] do testing.expect_value(t, b, u8(0))
-			// Its neighbor retains its location, regardless of glyph byte length.
-			testing.expect_value(t, e.canvas_bytes[stride], u8('B'))
+			testing.expect_value(t, string(engine.cell_encoding(&e, 0)), expected_glyphs[index])
+			// Its neighbor keeps its own slot, regardless of glyph byte length.
+			testing.expect_value(t, string(engine.cell_encoding(&e, 1)), "B")
 		}
 		engine.set_particle(&e, id, engine.Visible(false))
 		engine.frame_build(&e)
-		testing.expect_value(t, e.canvas_bytes[0], u8(' '))
-		for b in e.canvas_bytes[1:stride] do testing.expect_value(t, b, u8(0))
+		testing.expect_value(t, string(engine.cell_encoding(&e, 0)), " ")
 	}
 }

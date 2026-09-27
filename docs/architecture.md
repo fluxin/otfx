@@ -24,6 +24,7 @@ with their existing owner; file boundaries do not add runtime layers.
 | `input.odin` | Input decoding, escape/SGR handling, and input-particle materialization |
 | `geometry.odin` | Coordinates, path geometry, rounding, and easing names |
 | `color.odin` | RGB/xterm conversion, gradients, and brightness |
+| `random.odin` | The single random stream: seeding, bounded and float draws, shuffle |
 
 ## Effect API
 
@@ -116,8 +117,8 @@ frame path checks population length once. This also supports Thunderstorm's
 playback-created particles. One reusable key array reserves against particle
 capacity for winner resolution.
 
-A 40-byte `Render_Cell` contains its intrusive-list header, winning ID,
-`unordered`/`needs_resolve` flags, and borrowed byte slice. Arrivals append and
+A 24-byte `Render_Cell` contains its intrusive-list header, winning ID,
+`unordered`/`needs_resolve` flags, and the encoded length of its slot. Arrivals append and
 compare their published key with the cached winner. An append below the previous
 tail marks the list unordered. Departures unlink their exact node directly;
 covered departures need neither a scan nor pixel dirtiness. An ordered winner
@@ -135,18 +136,14 @@ insertion shifts, tombstones, or compaction passes. See the
 [current integrated benchmark](intrusive-main.md) for results and known tradeoffs.
 
 `rows[row].cells[column]` gives the row-oriented grid view. Each `Render_Row`
-holds only a borrowed cell slice and a borrowed byte slice.
-Row slices borrow the same contiguous `cells` allocation used by flat cell
+borrows a slice of the same contiguous `cells` allocation used by flat cell
 indexing; these are two views of one grid, not duplicate state. The winning
 particle supplies its glyph and appearance; there is no second appearance-ID grid.
-Each `Render_Cell.bytes` also borrows its fixed-width slot in `canvas_bytes`.
-Clearing an occupied cell copies `Blank_Cell`: one space to erase the glyph
-and advance the cursor, followed by NUL padding. An all-NUL slot would not erase
-the previous terminal glyph. The same template serves both slot widths.
-Construction sets these views once; `patch_cell(e, &cell)` writes through that
-slice. Cells, rows, and the flat canvas share bytes, with no per-cell allocation
-or duplicated packets. The canvas allocation remains fixed for the engine's
-lifetime. This adds one 16-byte slice header per cell on the 64-bit build.
+`slots: [][SLOT_MAX]byte` holds each cell's encoded bytes, indexed like `cells`.
+`patch_cell(e, index)` encodes the winner into its slot, or a single space when
+the cell empties, which erases the departed glyph and advances the cursor.
+`cell_encoding(e, index)` returns exactly what the terminal last received for
+that cell. Slots are allocated once and remain fixed for the engine's lifetime.
 
 `prepare_appearance(e, appearance)` appends a value and returns a new ID every
 time. There is no lookup map or deduplication in this creation API. `add_particle(e, glyph, appearance_id, position)` requires an existing ID.
@@ -160,9 +157,11 @@ only its gradient appearance palette, with no symbol-to-palette map. Decrypt
 keeps glyph indices separate from its ciphertext appearance palette. Input
 loading creates initial appearances and applies its existing color policy.
 
-`Appearance` contains `colors: Color_Pair`, `bold`, a 43-byte encoded style
-prefix, and a dirty flag. The prefix has no stored length: styled output uses
-all 43 bytes; plain/no-color output omits it. There is no `using`. Each
+`Appearance` contains `colors: Color_Pair`, `bold`, an encoded style prefix with
+its length, and a dirty flag. The prefix holds bold and each set color lane as one
+fixed-width SGR field (`ESC[38;2;rrr;ggg;bbbm`), at most 42 bytes. Every styled
+cell ends in a reset, so unset lanes need no field; plain and no-color
+appearances have length zero. There is no `using`. Each
 color channel remains optional so terminal default and explicit black are distinct.
 A nonzero `shared_appearance_id` selects the shared value; zero selects the
 particle's `private_appearance: Appearance`. A local style edit detaches that
@@ -179,10 +178,10 @@ flag clears. Hidden/covered private appearances remain dirty until exposed.
 Glyph edits and appearance-ID switches queue publication without invalidating
 unchanged appearance bytes. Patching a cell marks its row for output.
 `set_appearance` compares only colors and bold and ignores supplied cached bytes.
-Ordinary setters detach local edits from shared appearances. A caller directly
-editing shared storage must invalidate its prefix and queue `set_appearance`
-with that shared ID for every affected particle; the dirty flag alone is not a
-broadcast notification. All queued publication happens before any prefix is encoded.
+Ordinary setters detach local edits from shared appearances. Shared appearances
+never change once prepared: selecting the ID a particle already uses is a no-op,
+and a different style is a new prepared appearance or a local edit. All queued
+publication happens before any prefix is encoded.
 
 The renderer copies that prefix, encodes the particle's rune, appends the reset,
 and clears the cell slot's unused tail. There are no glyph or appearance maps.
@@ -210,33 +209,29 @@ and validation are in [the integrated report](intrusive-main.md). The previous
 [immediate particle updates](particle-queue.md) and
 [uncoalesced commands](deferred-actions.md) experiments remain preserved.
 
-## Row emission
+## Frame emission
 
-The current [fixed-cell experiment](fixed-cell-experiment.md) uses one engine-owned
-`canvas_bytes` grid: 51 bytes per cell, or four in no-color mode. Rows borrow slices into
-this allocation. Changed winners mark a cell in Odin's `bit_array.Bit_Array`;
-repeated changes coalesce. Frame construction updates only marked cells, including blank cells. Unused
-bytes in each fixed slot are cleared to NUL. There are no row
-offsets, byte shifts, row reservations, dense-rebuild thresholds, or row rebuilds.
+Changed winners mark a cell in `dirty_cells`, an Odin `bit_array.Bit_Array`;
+repeated changes coalesce. Frame construction patches only marked cells,
+including cells that became blank, then swaps `dirty_cells` with `emit_cells`.
+Construction marks every cell, so the first frame paints the whole canvas.
 
-Cells contain no string references. There is no long-symbol path, row counter,
-or output iterator: each emitted row is one borrowed byte slice.
+`frame_output` walks `emit_cells` in ascending order and writes one contiguous
+frame into the engine-owned `output` buffer: the frame origin, then each run of
+adjacent changed cells. A run starts with a cursor-next-line (`ESC[nE`) when its
+row differs from the cursor's, and a cursor-character-absolute (`ESC[nG`) unless
+it starts in column one. Unchanged cells never reach the terminal, and absolute
+columns keep glyph-width differences from drifting along a row. Each slot is
+copied whole at its fixed size, and the frame advances only past the cell's
+encoded bytes, so slot padding is never emitted. `output` is sized at
+construction for the worst case, every cell its own run with both moves.
 
-Dirty rows preserve the existing output protocol: emit each whole changed row,
-including blanks that erase departed particles. Two engine-level row bit arrays
-track pending changes and completed emission. Frame construction swaps them and
-clears the pending set. Rows have no dirty or emit flags. `print_frame`
-constructs stack-local `writev` descriptors directly from those rows and cursor
-moves, retaining partial-write and EINTR handling. There is no stored output-part
-list. `frame_bytes(e, allocator)` allocates an exact-size contiguous copy only
-when requested; its allocator defaults to `context.temp_allocator`. The engine
-retains no capture buffer. Emit or capture before advancing the effect again,
-because terminal output borrows mutable row storage. A captured copy remains
-independent until its allocator is reset or the caller deletes it.
-
-Row gaps emit one counted cursor-next-line command (`ESC[nE`). Adjacent rows
-reuse the constant `ESC[1E`; larger gaps are formatted into stack storage that
-remains live through `writev`. The engine retains no cursor-command buffer.
+`print_frame` writes that buffer with `write_all`, which retries short writes
+from the exact byte and handles EINTR. `frame_bytes(e, allocator)` returns a
+copy without the frame origin; its allocator defaults to
+`context.temp_allocator`. Emit or capture before advancing the effect again,
+because both read the engine's buffers. A captured copy remains independent
+until its allocator is reset or the caller deletes it.
 
 The playback loop owns temporary memory: consume captures and scratch data,
 then reset `context.temp_allocator` exactly once at the end of each iteration.
@@ -245,9 +240,9 @@ and resize exits also clean up. `frame`, `frame_build`, `compose_frame`, and
 output helpers do not reset it. Phase and parity/accuracy/docs loops own their
 cleanup in the same way.
 
-`compose_frame` updates admission independently of emission. Pending row/cell
-changes survive composition-only calls. The byte grid is allocated once at
-construction and is never grown during playback.
+`compose_frame` updates admission independently of emission. Pending cell
+changes survive composition-only calls. Slots and the output buffer are
+allocated once at construction and never grow during playback.
 Playback storage tests enforce allocation-free bounded cases. Four currently
 fail because the experimental cell arrays grow during playback; those tests
 have not been weakened.

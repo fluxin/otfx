@@ -4,7 +4,6 @@ import effects "./effects"
 import engine "./engine"
 
 import "core:fmt"
-import rand "core:math/rand"
 import "core:mem"
 import "core:os"
 import "core:strconv"
@@ -415,7 +414,7 @@ random_effect_pick :: proc(include, exclude: []string) -> (Effect_Kind, bool) {
 		candidate_count += 1
 	}
 	if candidate_count == 0 do return .Slide, false
-	selected := rand.int_max(candidate_count)
+	selected := engine.random_below(candidate_count)
 	for kind in Random_Effect_Order {
 		name := effect_kind_name(kind)
 		if len(include) > 0 && !effect_name_in(name, include) do continue
@@ -767,7 +766,11 @@ main :: proc() {
 		os.exit(1)
 	}
 
-	if seed, has_seed := opts.seed.?; has_seed do rand.reset_u64(seed)
+	if seed, has_seed := opts.seed.?; has_seed {
+		engine.random_seed(seed)
+	} else {
+		engine.random_seed_from_clock()
+	}
 	if opts.random {
 		kind, found := random_effect_pick(opts.include_effects[:], opts.exclude_effects[:])
 		if !found {

@@ -115,7 +115,7 @@ new_particles_publish_through_update_queue :: proc(t: ^testing.T) {
 	engine.frame_build(&e)
 	testing.expect_value(t, e.cells[0].top, added)
 	testing.expect_value(t, cell_layer_count(e.cells[0], 2), 1)
-	testing.expect_value(t, string(frame_without_padding(&e)), "C ")
+	testing.expect_value(t, string(frame_without_padding(&e)), "C")
 
 	// A new particle hidden again before rendering never joins the grid.
 	hidden := engine.add_particle(&e, 'D', shared, {1, 1})
@@ -299,26 +299,26 @@ content_changes_follow_final_cell_winner :: proc(t: ^testing.T) {
 	// Content-only publication preserves membership and updates the winner.
 	engine.set_symbol(&e, b, 'Y')
 	engine.frame_build(&e)
-	testing.expect_value(t, string(frame_without_padding(&e)), "Y  ")
+	testing.expect_value(t, string(frame_without_padding(&e)), "Y")
 	testing.expect_value(t, cell_layer_count(e.cells[0], 1), 1)
 
 	// A content edit queued before the covering particle departs is exposed.
 	engine.set_symbol(&e, a, 'Z')
 	engine.set_position(&e, b, {2, 1})
 	engine.frame_build(&e)
-	testing.expect_value(t, string(frame_without_padding(&e)), "ZY ")
+	testing.expect_value(t, string(frame_without_padding(&e)), "ZY")
 
 	// Both change kinds must accumulate on the same entry, in either order.
 	engine.set_symbol(&e, a, 'Q')
 	engine.set_position(&e, a, {3, 1})
 	testing.expect_value(t, len(e.updates), 1)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(frame_without_padding(&e)), " YQ")
+	testing.expect_value(t, string(frame_without_padding(&e)), " \x1b[3GQ")
 	engine.set_position(&e, a, {1, 1})
 	engine.set_symbol(&e, a, 'R')
 	testing.expect_value(t, len(e.updates), 1)
 	engine.frame_build(&e)
-	testing.expect_value(t, string(frame_without_padding(&e)), "RY ")
+	testing.expect_value(t, string(frame_without_padding(&e)), "R\x1b[3G ")
 
 	// Content of an offscreen particle is retained until it enters the canvas.
 	engine.set_position(&e, a, {-1, 1})
@@ -328,5 +328,5 @@ content_changes_follow_final_cell_winner :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(frame_without_padding(&e)), 0)
 	engine.set_position(&e, a, {1, 1})
 	engine.frame_build(&e)
-	testing.expect_value(t, string(frame_without_padding(&e)), "SY ")
+	testing.expect_value(t, string(frame_without_padding(&e)), "S")
 }

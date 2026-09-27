@@ -175,7 +175,7 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 	}
 }
 
-middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool {
+middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.characters) == 0 do return false
 	if s.phase_full && s.phase_tick >= s.full_limit do return false
 	if !s.phase_full && s.phase_tick >= s.center_limit {

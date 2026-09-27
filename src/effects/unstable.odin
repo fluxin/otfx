@@ -4,7 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math/ease"
-import "core:math/rand"
 
 Unstable_Config :: struct {
 	unstable_color:           engine.Color,
@@ -143,7 +142,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 
 	for id, i in s.characters {
 		s.active_indexes[i] = i
-		edge := rand.int_max(4)
+		edge := engine.random_below(4)
 		target: engine.Coord
 		switch edge {
 		case 0:
@@ -155,7 +154,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 		case:
 			target = engine.coord(engine.canvas_random_column(e.canvas, false), e.canvas.top)
 		}
-		coord_index := rand.int_max(len(available))
+		coord_index := engine.random_below(len(available))
 		jumbled := available[coord_index]
 		unordered_remove(&available, coord_index)
 
@@ -200,7 +199,7 @@ unstable_build :: proc(s: ^Unstable_State, e: ^engine.Engine) {
 	s.rumble_delay = 18
 }
 
-unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
+unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	initial_coords := e.particles.initial_coord
 
 	for {
@@ -215,8 +214,8 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool {
 			jitter := s.phase_tick > 30 && s.phase_tick % s.rumble_delay == 0
 			row_offset, column_offset := 0, 0
 			if jitter {
-				row_offset = rand.int_range(-1, 2)
-				column_offset = rand.int_range(-1, 2)
+				row_offset = engine.random_range(-1, 2)
+				column_offset = engine.random_range(-1, 2)
 			}
 			color_step := min(s.phase_tick / 10, 12)
 			color_changed := s.phase_tick <= 120 && s.phase_tick % 10 == 0

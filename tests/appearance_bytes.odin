@@ -6,7 +6,7 @@ import "core:strings"
 import "core:testing"
 
 @(test)
-shared_appearance_dirty_updates_all_top_cells :: proc(t: ^testing.T) {
+shared_appearance_reuse_updates_top_cells :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
@@ -26,18 +26,12 @@ shared_appearance_dirty_updates_all_top_cells :: proc(t: ^testing.T) {
 		engine.set_visible(&e, id, true)
 	}
 	engine.frame_build(&e)
-
-	// The flag invalidates encoded bytes; it does not schedule particle changes.
-	e.shared_appearances[shared - 1].colors.fg = engine.Color{0, 255, 0}
-	engine.dirty_appearance(&e.shared_appearances[shared - 1])
-	engine.frame_build(&e)
-	testing.expect_value(t, len(frame_without_padding(&e)), 0)
-	testing.expect(t, e.shared_appearances[shared - 1].dirty)
-	// A caller editing shared storage directly queues every affected particle.
-	for id in e.particle_sets.input do engine.set_appearance(&e, id, shared)
-	engine.frame_build(&e)
 	testing.expect(t, !e.shared_appearances[shared - 1].dirty)
 	expect_visible_draws(t, &e)
+	// Selecting the same shared appearance again publishes nothing.
+	for id in e.particle_sets.input do engine.set_appearance(&e, id, shared)
+	engine.frame_build(&e)
+	testing.expect_value(t, len(frame_without_padding(&e)), 0)
 
 	// Returning to an already encoded shared appearance must still update the cell.
 	engine.set_foreground(&e, b, engine.Color{0, 0, 255})
@@ -97,10 +91,7 @@ appearance_prefix_survives_glyph_changes_and_private_edits :: proc(t: ^testing.T
 			strings.builder_reset(&preview)
 			engine.write_particle(&e, a, &preview)
 			encoded := strings.to_string(preview)
-			testing.expect_value(t, string(e.rows[0].bytes[:len(encoded)]), encoded)
-			for byte in e.rows[0].bytes[len(encoded):e.cell_stride] {
-				testing.expect_value(t, byte, u8(0))
-			}
+			testing.expect_value(t, string(engine.cell_encoding(&e, 0)), encoded)
 		}
 		// A caller edits logical fields on a returned value; its old bytes must be ignored.
 		changed := engine.get_appearance(&e, a)

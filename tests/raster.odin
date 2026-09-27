@@ -434,7 +434,7 @@ frame_composition_clips_signed_extremes_and_empty_viewport :: proc(t: ^testing.T
 	}
 	// An inverted interval is empty; unsigned interval widths must not admit it.
 	e.layout.visible_left = 4
-	for i in 0 ..< len(e.rows) do bit_array.set(&e.dirty_rows, i)
+	for i in 0 ..< len(e.cells) do engine.mark_cell_dirty(&e, i)
 	engine.set_particle(&e, id, engine.Coord{2 - e.layout.col_offset, 2 - e.layout.row_offset})
 	engine.frame_build(&e)
 	for cell in e.cells do testing.expect(t, cell.top == engine.NO_PARTICLE)
@@ -507,7 +507,7 @@ particle_id_zero_is_distinct_from_an_empty_cell :: proc(t: ^testing.T) {
 	engine.set_visible(&e, id, false)
 	engine.frame_build(&e)
 	testing.expect(t, e.cells[0].top == engine.NO_PARTICLE)
-	testing.expect_value(t, e.cells[0].bytes[0], u8(' '))
+	testing.expect_value(t, string(engine.cell_encoding(&e, 0)), " ")
 	testing.expect_value(t, engine.NO_PARTICLE, max(engine.Particle_Id))
 }
 

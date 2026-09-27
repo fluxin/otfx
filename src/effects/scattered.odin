@@ -69,7 +69,8 @@ Scattered_State :: struct {
 	config:         Scattered_Config,
 	characters:     [dynamic]engine.Particle_Id,
 	active_indexes: [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
+	final_index:    [dynamic]int, // spectrum index by slot
+	fades:          engine.Gradient_Steps, // fades to each spectrum entry
 	origins:        [dynamic]engine.Coord,
 	motion_slots:   [dynamic]int,
 	motion_steps:   [dynamic]int,
@@ -107,7 +108,8 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.final_index = make([dynamic]int, n)
+	s.fades = engine.gradient_steps_make(e, s.config.final_gradient_stops[0], spectrum[:], 10)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.active_indexes = make([dynamic]int, n)
 	steps_by_particle := make([]int, n)
@@ -116,7 +118,7 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	for id, i in s.characters {
 		s.active_indexes[i] = i
 		c := e.particles.initial_coord[id]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
+		s.final_index[i] = engine.gradient_sample_index(sampler, len(spectrum), c)
 
 		start :=
 			e.canvas.right < 2 || e.canvas.top < 2 ? engine.coord(1, 1) : engine.canvas_random_coord(e.canvas, false, false)
@@ -130,16 +132,11 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		s.step_limit = max(s.step_limit, steps)
 		e.particles.layer[id] = 1
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance {
-				colors = {
-					fg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg : spectrum[0],
-					bg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg : nil,
-				},
-			},
-		)
+		if s.color_handling == .Dynamic {
+			engine.set_appearance(e, id, engine.Appearance{colors = engine.get_initial_appearance(e, id).colors})
+		} else {
+			engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], 0))
+		}
 		e.particles.flags[id] += {.Visible}
 	}
 	// Start tick and easing are common to the effect; duration is the only key.
@@ -148,7 +145,7 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.initial_hold = 25
 }
 
-scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
+scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.tick == s.step_limit do return false
 	if s.initial_hold > 0 {
 		s.initial_hold -= 1
@@ -176,22 +173,13 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool {
 			step := min(engine.round_to_int(progress * 9), 10)
 			if u8(step) != s.color_steps[i] {
 				s.color_steps[i] = u8(step)
-				engine.set_foreground(
-					e,
-					id,
-					engine.gradient_between_step(
-						s.config.final_gradient_stops[0],
-						s.final_colors[i],
-						10,
-						step,
-					),
-				)
+				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], step))
 			}
 		}
 		if s.tick + 1 >= steps {
 			engine.set_particle(e, id, e.particles.initial_coord[id])
 			if s.color_handling != .Dynamic {
-				engine.set_foreground(e, id, s.final_colors[i])
+				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], s.fades.steps))
 			}
 			engine.set_particle(e, id, engine.Layer(0))
 		} else {

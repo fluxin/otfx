@@ -5,7 +5,6 @@ import "../engine"
 import "core:fmt"
 import "core:math"
 import "core:math/ease"
-import "core:math/rand"
 
 Spray_Position :: enum {
 	N,
@@ -179,8 +178,8 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		s.index_by_id[id] = i
 		initial_coord := e.particles.initial_coord[id]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coord)
-		s.start_colors[i] = spectrum[rand.int_max(len(spectrum))]
-		speed := rand.float64_range(
+		s.start_colors[i] = spectrum[engine.random_below(len(spectrum))]
+		speed := engine.random_float_range(
 			s.config.movement_speed_range.lo,
 			s.config.movement_speed_range.hi,
 		)
@@ -192,14 +191,14 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		s.start_ticks[i] = -1
 		append(&s.pending, id)
 	}
-	rand.shuffle(s.pending[:])
+	engine.random_shuffle(s.pending[:])
 	s.volume = max(int(f64(len(s.pending)) * s.config.spray_volume), 1)
 }
 
-spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool {
+spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.pending) == 0 && s.tick >= s.last_tick do return false
 	if len(s.pending) > 0 {
-		for _ in 0 ..< rand.int_range(1, s.volume + 1) {
+		for _ in 0 ..< engine.random_range(1, s.volume + 1) {
 			if len(s.pending) == 0 do break
 			id := pop(&s.pending)
 			i := s.index_by_id[id]

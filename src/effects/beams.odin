@@ -1,7 +1,6 @@
 package effects
 
 import "../engine"
-import "core:math/rand"
 import "core:slice"
 
 import "core:fmt"
@@ -177,10 +176,10 @@ beams_make_group :: proc(
 	direction: Beam_Direction,
 	rng: Int_Range_Value,
 ) -> Beam_Group {
-	speed := f64(rand.int_range(rng.lo, rng.hi + 1)) * 0.1
+	speed := f64(engine.random_range(rng.lo, rng.hi + 1)) * 0.1
 	// get_particles_grouped already orders row groups by column and column
 	// groups by row. Consume that producer contract instead of sorting again.
-	if rand.int_max(2) == 0 do slice.reverse(g)
+	if engine.random_below(2) == 0 do slice.reverse(g)
 	span := engine.Span {
 		start = len(group_chars),
 		len   = len(g),
@@ -292,7 +291,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 
 	for gi in 0 ..< len(s.groups) do append(&s.pending, gi)
 	reserve(&s.active, len(s.groups))
-	rand.shuffle(s.pending[:])
+	engine.random_shuffle(s.pending[:])
 }
 
 beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Group) {
@@ -435,7 +434,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	resize(&s.appearance_active, write)
 }
 
-beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
+beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.phase == .Complete && s.tick >= s.wipe_end {
 		return false
 	}
@@ -443,7 +442,7 @@ beams_next :: proc(s: ^Beams_State, e: ^engine.Engine) -> bool {
 	case .Beams:
 		if s.delay == 0 {
 			if s.pending_head < len(s.pending) {
-				for _ in 0 ..< rand.int_range(1, 6) {
+				for _ in 0 ..< engine.random_range(1, 6) {
 					if s.pending_head == len(s.pending) do break
 					append(&s.active, s.pending[s.pending_head])
 					s.pending_head += 1

@@ -2,7 +2,6 @@ package regression
 
 import effects "../src/effects"
 import engine "../src/engine"
-import "core:math/rand"
 import "core:mem"
 import "core:testing"
 
@@ -109,7 +108,7 @@ thunderstorm_recursive_geometry :: proc(t: ^testing.T) {
 	recursive, exceeds_old_capacity := false, false
 	for height in ([]int{1, 2, 24, 50, 100}) {
 		for seed in 1 ..= 64 {
-			rand.reset(u64(seed))
+			engine.random_seed(u64(seed))
 			work: effects.Thunderstorm_Strike_Work
 			canvas := engine.canvas_make(height, 200)
 			effects.thunderstorm_strike_generate(&work, canvas, 100)
@@ -176,7 +175,7 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 		config = effects.thunderstorm_config_default(),
 	}
 	effects.thunderstorm_build(&s, &e)
-	rand.reset(42)
+	engine.random_seed(42)
 	effects.thunderstorm_begin_strike(&s, &e)
 	count := len(s.strike_pending)
 	expected := make([]engine.Coord, count)
@@ -194,7 +193,7 @@ thunderstorm_replay_survives_scratch_reset :: proc(t: ^testing.T) {
 	// The same seed must rebuild the same geometry and reuse the pool.
 	for id in s.strike_pending do e.particles.flags[id] -= {.Visible}
 	allocated_chars := len(e.particles)
-	rand.reset(42)
+	engine.random_seed(42)
 	effects.thunderstorm_begin_strike(&s, &e)
 	testing.expect_value(t, track.total_allocation_count, before)
 	testing.expect_value(t, len(e.particles), allocated_chars)

@@ -4,7 +4,6 @@ import engine "../engine"
 
 import "core:fmt"
 import ease "core:math/ease"
-import rand "core:math/rand"
 
 Rings_Config :: struct {
 	ring_colors:              [dynamic]engine.Color,
@@ -223,7 +222,7 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			ccw            = coords,
 			ring_gap       = ring_gap,
 			color          = s.config.ring_colors[len(s.rings) % len(s.config.ring_colors)],
-			rotation_speed = rand.float64_range(s.config.spin_speed.lo, s.config.spin_speed.hi),
+			rotation_speed = engine.random_float_range(s.config.spin_speed.lo, s.config.spin_speed.hi),
 		}
 		ring.cw = make([dynamic]engine.Coord, len(coords))
 		for i in 0 ..< len(coords) do ring.cw[len(coords) - 1 - i] = coords[i]
@@ -232,7 +231,7 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 
 	pending := make([dynamic]int, n)
 	for i in 0 ..< n do pending[i] = i
-	rand.shuffle(pending[:])
+	engine.random_shuffle(pending[:])
 	next := 0
 	for ri in 0 ..< len(s.rings) {
 		ring := &s.rings[ri]
@@ -279,7 +278,7 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 		// Keep the same five draws and coordinate ordering as the old pool.
 		side := 2 * ring.ring_gap + 1
 		for waypoint in 0 ..< 5 {
-			index := rand.int_max(side * side)
+			index := engine.random_below(side * side)
 			s.waypoints[slot][waypoint] = engine.coord(
 				center.column - ring.ring_gap + index / side,
 				center.row - ring.ring_gap + index % side,
@@ -457,7 +456,7 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	resize(&s.active_slots, write)
 }
 
-rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool {
+rings_next :: proc(s: ^Rings_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.phase == .Complete do return false
 	previous_phase, previously_dispersed := s.phase, s.initial_disperse
 	switch s.phase {

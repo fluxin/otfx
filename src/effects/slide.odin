@@ -95,7 +95,8 @@ Slide_State :: struct {
 	config:         Slide_Config,
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
+	final_index:    [dynamic]int, // spectrum index by slot
+	fades:          engine.Gradient_Steps, // fades to each spectrum entry
 	groups:         engine.Particle_Groups,
 	heads:          [dynamic]int,
 	origins:        [dynamic]engine.Coord,
@@ -135,20 +136,17 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 	reserve(&s.active_slots, n)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.final_index = make([dynamic]int, n)
+	s.fades = engine.gradient_steps_make(e, s.config.final_gradient_stops[0], spectrum[:], 10)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.steps = make([dynamic]int, n)
 	s.max_steps = make([dynamic]int, n)
 	for id, i in s.characters {
 		c := e.particles.initial_coord[id]
 		s.index_by_id[id] = i
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
+		s.final_index[i] = engine.gradient_sample_index(sampler, len(spectrum), c)
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance{colors = {fg = s.config.final_gradient_stops[0]}},
-		)
+		engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], 0))
 	}
 
 	grouping: engine.Particle_Group = .Row_T2B
@@ -244,7 +242,7 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 	s.heads = make([dynamic]int, len(s.groups.spans))
 }
 
-slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
+slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.next_group >= len(s.groups.spans) && len(s.active_slots) == 0 {
 		return false
 	}
@@ -274,7 +272,6 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 		}
 	}
 	write := 0
-	base_color := s.config.final_gradient_stops[0]
 	gradient_ticks := 10 * s.config.final_gradient_frames
 	gradient_hold := max(s.config.final_gradient_frames, 1)
 	for i in s.active_slots {
@@ -305,18 +302,9 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool {
 				engine.set_appearance(e, id, appearance)
 			}
 		} else if finished {
-			engine.set_foreground(e, id, s.final_colors[i])
+			engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], s.fades.steps))
 		} else if step <= 10 * gradient_hold && step % gradient_hold == 0 {
-			engine.set_foreground(
-				e,
-				id,
-				engine.gradient_between_step(
-					base_color,
-					s.final_colors[i],
-					10,
-					min(step / gradient_hold, 10),
-				),
-			)
+			engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], min(step / gradient_hold, s.fades.steps)))
 		}
 		s.steps[i] += 1
 		if !finished {

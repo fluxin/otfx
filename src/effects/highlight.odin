@@ -148,7 +148,7 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 	}
 }
 
-highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool {
+highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.active_slots) == 0 && engine.group_reveal_complete(s.reveal) {
 		return false
 	}

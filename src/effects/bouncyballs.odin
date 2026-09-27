@@ -4,7 +4,6 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math/ease"
-import "core:math/rand"
 
 Bouncyballs_Config :: struct {
 	ball_colors:              [dynamic]engine.Color,
@@ -130,10 +129,10 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		initial_coord := e.particles.initial_coord[id]
-		s.ball_colors[i] = s.config.ball_colors[rand.int_max(len(s.config.ball_colors))]
-		s.ball_symbols[i] = s.config.ball_symbols[rand.int_max(len(s.config.ball_symbols))]
+		s.ball_colors[i] = s.config.ball_colors[engine.random_below(len(s.config.ball_colors))]
+		s.ball_symbols[i] = s.config.ball_symbols[engine.random_below(len(s.config.ball_symbols))]
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coord)
-		drop_row := int(f64(e.canvas.top) * rand.float64_range(1, 1.5))
+		drop_row := int(f64(e.canvas.top) * engine.random_float_range(1, 1.5))
 		s.origins[i] = engine.coord(initial_coord.column, drop_row)
 		e.particles.current_coord[id] = s.origins[i]
 		s.max_steps[i] = max(
@@ -146,7 +145,7 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	}
 }
 
-bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
+bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	active :=
 		s.next_group < len(s.row_groups.spans) || len(s.pending) > 0 || len(s.active_slots) > 0
 	if !active do return false
@@ -156,9 +155,9 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool {
 	}
 	if len(s.pending) > 0 {
 		if s.ball_delay == 0 {
-			for _ in 0 ..< rand.int_range(2, 7) {
+			for _ in 0 ..< engine.random_range(2, 7) {
 				if len(s.pending) == 0 do break
-				index := rand.int_max(len(s.pending))
+				index := engine.random_below(len(s.pending))
 				id := s.pending[index]
 				ordered_remove(&s.pending, index)
 				slot := s.index_by_id[id]

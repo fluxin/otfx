@@ -4,8 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math/ease"
-import "core:math/rand"
-import "core:mem"
 import "core:time"
 
 // Thunderstorm keeps its weather as dense particle rows.  It deliberately does
@@ -319,11 +317,11 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canva
 		s.rain_delay -= 1
 		return
 	}
-	count := rand.int_range(1, 7)
+	count := engine.random_range(1, 7)
 	for _ in 0 ..< count {
 		slot := thunderstorm_take_rain(s)
 		origin := engine.coord(
-			rand.int_range(1 - canvas.top, canvas.right + 1) - 1,
+			engine.random_range(1 - canvas.top, canvas.right + 1) - 1,
 			canvas.top + 1,
 		)
 		target := engine.coord(origin.column + canvas.top + 1, canvas.bottom - 1)
@@ -331,7 +329,7 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canva
 		s.rain_origins[slot], s.rain_targets[slot] = origin, target
 		s.rain_steps[slot] = max(
 			engine.round_to_int(
-				engine.line_length(origin, target, true) / rand.float64_range(0.5, 1.5),
+				engine.line_length(origin, target, true) / engine.random_float_range(0.5, 1.5),
 			),
 			1,
 		)
@@ -340,13 +338,13 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canva
 		engine.set_symbol(
 			e,
 			id,
-			s.config.raindrop_symbols[rand.int_max(len(s.config.raindrop_symbols))],
+			s.config.raindrop_symbols[engine.random_below(len(s.config.raindrop_symbols))],
 		)
 		engine.set_foreground(e, id, engine.Color{0xAA, 0xAA, 0xFF})
 		engine.set_particle(e, id, engine.Visible(true))
 		append(&s.rain_active, slot)
 	}
-	s.rain_delay = rand.int_range(1, 8)
+	s.rain_delay = engine.random_range(1, 8)
 }
 
 // Random words are filled in bulk before this independent branch-tip pass.
@@ -382,7 +380,7 @@ thunderstorm_strike_generate :: proc(
 	for len(work.tips) > 0 {
 		n := len(work.tips)
 		resize(&work.draws, 2 * n)
-		_ = rand.read(mem.slice_to_bytes(work.draws[:]))
+		for &draw in work.draws do draw = u32(engine.random_u64() >> 32)
 		thunderstorm_branch_step(work.tips[:], work.draws[:])
 		clear(&work.next_tips)
 		for tip in work.tips {
@@ -460,7 +458,7 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	thunderstorm_strike_generate(
 		&work,
 		e.canvas,
-		rand.int_range(e.canvas.left, e.canvas.right + 1),
+		engine.random_range(e.canvas.left, e.canvas.right + 1),
 		context.temp_allocator,
 	)
 	count := len(work.order)
@@ -495,15 +493,15 @@ thunderstorm_spawn_sparks :: proc(
 	e: ^engine.Engine,
 	impact: engine.Coord,
 ) {
-	count := rand.int_range(12, 19)
+	count := engine.random_range(12, 19)
 	for _ in 0 ..< count {
 		slot := thunderstorm_take_spark(s, e)
-		offset := rand.int_range(4, 21)
-		if rand.int_max(2) == 0 do offset = -offset
+		offset := engine.random_range(4, 21)
+		if engine.random_below(2) == 0 do offset = -offset
 		target := engine.coord(impact.column + offset, e.canvas.bottom)
 		control := engine.coord(
 			impact.column - engine.round_to_int(f64(impact.column - target.column) / 2),
-			rand.int_range(e.canvas.bottom, e.canvas.top + 1),
+			engine.random_range(e.canvas.bottom, e.canvas.top + 1),
 		)
 		s.spark_starts[slot] = s.tick
 		s.spark_origins[slot], s.spark_controls[slot], s.spark_targets[slot] =
@@ -511,13 +509,13 @@ thunderstorm_spawn_sparks :: proc(
 		s.spark_steps[slot] = max(
 			engine.round_to_int(
 				engine.quadratic_bezier_length(impact, control, target) /
-				rand.float64_range(0.1, 0.25),
+				engine.random_float_range(0.1, 0.25),
 			),
 			1,
 		)
 		id := s.spark_ids[slot]
 		engine.set_particle(e, id, impact)
-		engine.set_symbol(e, id, s.config.spark_symbols[rand.int_max(len(s.config.spark_symbols))])
+		engine.set_symbol(e, id, s.config.spark_symbols[engine.random_below(len(s.config.spark_symbols))])
 		engine.set_foreground(e, id, s.config.spark_glow_color)
 		engine.set_particle(e, id, engine.Visible(true))
 		append(&s.spark_active, slot)
@@ -531,7 +529,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			s.strike_delay -= 1
 			return
 		}
-		count := rand.int_range(1, 4)
+		count := engine.random_range(1, 4)
 		for _ in 0 ..< count {
 			if s.strike_pending_head == len(s.strike_pending) do break
 			id := s.strike_pending[s.strike_pending_head]
@@ -719,7 +717,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	resize(&s.glow_active, write)
 }
 
-thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
+thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	switch s.phase {
 	case .Prestorm:
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
@@ -751,7 +749,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool {
 		}
 	case .Storm:
 		thunderstorm_spawn_rain(s, e, e.canvas)
-		if !s.strike_live && rand.float64() < 0.008 do thunderstorm_begin_strike(s, e)
+		if !s.strike_live && engine.random_float() < 0.008 do thunderstorm_begin_strike(s, e)
 		thunderstorm_reveal_strike(s, e)
 		thunderstorm_update_rain(s, e)
 		thunderstorm_update_sparks(s, e, e.cfg.terminal_background_color)

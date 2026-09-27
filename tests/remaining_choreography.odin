@@ -3,7 +3,6 @@ package regression
 import "../src/effects"
 import "../src/engine"
 import "core:math/ease"
-import "core:math/rand"
 import "core:mem"
 import "core:strings"
 import "core:testing"
@@ -284,7 +283,7 @@ swarm_keeps_tail_and_interrupted_motion :: proc(t: ^testing.T) {
 	}
 	s.config.swarm_size = 0.3 // groups of seven plus a two-character tail
 	s.config.swarm_area_count_range = {5, 5}
-	rand.reset_u64(42)
+	engine.random_seed(42)
 	effects.swarm_build(&s, &e)
 	free_all(context.temp_allocator)
 	count := 0
@@ -376,7 +375,7 @@ decrypt_supports_large_color_palettes :: proc(t: ^testing.T) {
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
 	context.allocator = mem.dynamic_arena_allocator(&arena)
-	rand.reset_u64(42)
+	engine.random_seed(42)
 	cfg := engine.config_default()
 	cfg.ignore_terminal_dimensions = true
 	e, _ := engine.engine_make("ABCDEFGHIJKLMNOPQRSTUVWXYZ", cfg)

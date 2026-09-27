@@ -293,7 +293,7 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	}
 }
 
-slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool {
+slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.motion_ids) == 0 do return false
 	ids := s.motion_ids[:]
 	origins := s.motion_origins[:]

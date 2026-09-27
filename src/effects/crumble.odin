@@ -4,7 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math/ease"
-import "core:math/rand"
 
 Crumble_Dust_Symbols :: [3]rune{'*', '.', ','}
 
@@ -188,7 +187,7 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 			reset_tail = 32
 		}
 		s.reset_max_ticks = max(s.reset_max_ticks, s.reset_steps[i] + reset_tail)
-		for j in 0 ..< 5 do s.dust_symbols[i * 5 + j] = dust_choices[rand.int_max(len(dust_choices))]
+		for j in 0 ..< 5 do s.dust_symbols[i * 5 + j] = dust_choices[engine.random_below(len(dust_choices))]
 		s.fall_order[i] = i
 		s.vacuum_order[i] = i
 		if s.has_dim_fg[i] != 0 {
@@ -199,8 +198,8 @@ crumble_build :: proc(s: ^Crumble_State, e: ^engine.Engine) {
 		engine.set_background(e, id, s.weak_bg[i])
 		visible_flags[id] += {.Visible}
 	}
-	rand.shuffle(s.fall_order[:])
-	rand.shuffle(s.vacuum_order[:])
+	engine.random_shuffle(s.fall_order[:])
+	engine.random_shuffle(s.vacuum_order[:])
 	s.fall_delay, s.min_fall_delay, s.max_fall_delay, s.fall_group_size = 12, 9, 12, 1
 	s.phase = .Falling
 }
@@ -221,7 +220,7 @@ crumble_vacuum_active :: proc(s: Crumble_State) -> bool {
 	return false
 }
 
-crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
+crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	initial_coords := e.particles.initial_coord
 
 
@@ -235,7 +234,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 			}
 			if s.next_fall < len(s.fall_order) {
 				if s.fall_delay == 0 {
-					count := rand.int_range(1, s.fall_group_size + 1)
+					count := engine.random_range(1, s.fall_group_size + 1)
 					for _ in 0 ..< count {
 						if s.next_fall == len(s.fall_order) do break
 						i := s.fall_order[s.next_fall]
@@ -243,8 +242,8 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 						s.fall_starts[i] = s.phase_tick
 						append(&s.fall_active, i)
 					}
-					s.fall_delay = rand.int_range(s.min_fall_delay, s.max_fall_delay + 1)
-					if rand.int_range(1, 11) > 4 {
+					s.fall_delay = engine.random_range(s.min_fall_delay, s.max_fall_delay + 1)
+					if engine.random_range(1, 11) > 4 {
 						s.fall_group_size += 1
 						s.min_fall_delay = max(s.min_fall_delay - 1, 0)
 						s.max_fall_delay = max(s.max_fall_delay - 1, 0)
@@ -325,7 +324,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool {
 				s.phase_tick = 0
 				continue
 			}
-			for _ in 0 ..< rand.int_range(3, 10) {
+			for _ in 0 ..< engine.random_range(3, 10) {
 				if s.next_vacuum == len(s.vacuum_order) do break
 				i := s.vacuum_order[s.next_vacuum]
 				s.next_vacuum += 1

@@ -1,167 +1,180 @@
 # Release benchmark and refreshed previews
 
-2026-09-27, source commit `643a980a`. Single-core renderer, no background writer.
-This report supersedes the assertion-enabled timings in
-[the integration report](intrusive-main.md) for the current release comparison.
+2026-10-05, working copy on top of `4f9c140` (jj change `nzrkrxtm`): one engine
+RNG, changed-cell run emission, lane-only SGR prefixes, immutable shared
+appearances with prepared gradient fades, per-frame `#no_bounds_check`, and
+storage fixes in Wipe, Sweep, Binarypath, Decrypt, Vhstape, Smoke, Overflow,
+Print and Orbittingvolley. The reference is ttfx `921bd551` (v0.5.0 plus two
+merges), whose fx engine replaced the ASM engine of the previous report. It runs
+single-threaded (`TTFX_THREADS=1`); OTFX is single-threaded.
 
-## Release versus frozen ASM
+## Summary
 
 OTFX uses **`-o:speed -microarch:native -disable-assert`**, without `-debug`.
-Across 35 finite effects, arithmetic mean wall is **28.903 versus
-30.854 ms (-6.32%)**. Geometric OTFX/ASM time is
-**1.0182, or 1.82% slower**. OTFX wins **16/35** effects.
-These are distinct aggregations; neither establishes a uniform advantage.
 
-| Metric | OTFX | ttfx ASM |
+| Metric | OTFX | ttfx v0.5.0 |
 |---|---:|---:|
-| Mean wall per effect | 28.90 ms | 30.85 ms |
-| Mean child CPU per effect | 28.76 ms | 30.70 ms |
-| Mean per-effect maximum RSS | 11.83 MiB | 50.73 MiB |
-| Binary size, as built | 1.27 MiB | 2.74 MiB |
-| Binary size, stripped copy | 1.25 MiB | 2.74 MiB |
+| Mean wall per effect, /dev/null | 29.54 ms | 25.29 ms |
+| Mean wall per effect, pipe | 31.95 ms | 59.07 ms |
+| Mean wall per effect, pty | 41.81 ms | 287.55 ms |
+| Bytes written, 35 effects | 584 MB | 9,602 MB |
+| Mean per-effect maximum RSS | 11.90 MiB | 23.07 MiB |
+| Startup (slide) | 0.3 ms | 0.6 ms |
+| Binary size, as built | 1.20 MiB | 3.02 MiB |
+| Binary size, stripped copy | 1.18 MiB | 3.02 MiB |
 
-The [complete raw table](release-asm.tsv) includes best/mean wall, child CPU,
-maximum RSS, and frame counts. The chart uses mean wall; negative change means
-OTFX is faster. RSS is the maximum child RSS across measured samples for that
-effect, not a sum across processes. Frame counts differ for 21/35 effects;
-this compares completed animations, not equal-frame throughput.
+## Throughput by sink
 
-| Effect | OTFX ms | ASM ms | OTFX time change | OTFX RSS MiB | ASM RSS MiB | Frames OTFX / ASM |
+`bench/bench.odin` takes `BENCH_SINK=null|pipe|pty`. With a pipe or a raw
+200x50 pseudo-terminal the harness drains every byte itself, 64 KiB per read,
+and wall time runs until the last byte arrives; a terminal emulator's parsing
+is excluded. The pipe and pty sweeps give the harness a second core
+(`taskset -c 1,2`) so the reader does not share the writer's core. Both
+programs see the same sink, input, seed and canvas. ttfx publishes its own
+speeds into `/dev/null`.
+
+| Sink | OTFX mean wall | ttfx mean wall | Geometric OTFX speedup | OTFX mean CPU | ttfx mean CPU | OTFX faster |
 |---|---:|---:|---:|---:|---:|---:|
-| beams | 13.5 | 11.7 | +15.4% | 11.53 | 37.33 | 890 / 732 |
-| binarypath | 157.8 | 183.7 | -14.1% | 19.40 | 223.64 | 1932 / 1891 |
-| blackhole | 50.2 | 55.0 | -8.7% | 9.46 | 61.71 | 1743 / 1800 |
-| bouncyballs | 33.0 | 29.6 | +11.5% | 9.59 | 43.04 | 10393 / 9093 |
-| bubbles | 47.8 | 46.7 | +2.4% | 10.93 | 58.53 | 11658 / 11742 |
-| burn | 21.6 | 25.9 | -16.6% | 13.85 | 47.95 | 3237 / 3175 |
-| colorshift | 16.3 | 17.2 | -5.2% | 8.53 | 39.06 | 528 / 528 |
-| crumble | 37.6 | 49.5 | -24.0% | 9.50 | 66.63 | 2159 / 1835 |
-| decrypt | 23.6 | 16.9 | +39.6% | 17.91 | 39.07 | 5480 / 5438 |
-| errorcorrect | 12.3 | 22.5 | -45.3% | 9.03 | 43.53 | 5221 / 5237 |
-| expand | 17.9 | 16.6 | +7.8% | 9.65 | 45.05 | 302 / 302 |
-| fireworks | 51.8 | 62.7 | -17.4% | 10.41 | 60.97 | 1516 / 1553 |
-| highlight | 3.3 | 2.8 | +17.9% | 10.59 | 28.88 | 129 / 129 |
-| laseretch | 44.1 | 59.6 | -26.0% | 12.62 | 39.63 | 14307 / 14306 |
-| middleout | 7.7 | 8.5 | -9.4% | 9.09 | 47.45 | 235 / 235 |
-| orbittingvolley | 18.4 | 17.5 | +5.1% | 12.09 | 35.38 | 1156 / 1156 |
-| overflow | 10.8 | 12.3 | -12.2% | 17.07 | 18.05 | 164 / 306 |
-| pour | 16.7 | 16.8 | -0.6% | 9.46 | 43.09 | 7160 / 7160 |
-| print | 6.8 | 6.7 | +1.5% | 12.09 | 38.89 | 10057 / 10057 |
-| rain | 16.4 | 19.2 | -14.6% | 9.27 | 47.63 | 4736 / 4737 |
-| randomsequence | 3.8 | 3.7 | +2.7% | 9.65 | 28.73 | 208 / 208 |
-| rings | 75.0 | 104.4 | -28.2% | 10.38 | 64.94 | 1566 / 1566 |
-| scattered | 30.0 | 24.9 | +20.5% | 9.28 | 44.94 | 420 / 418 |
-| slice | 5.3 | 6.6 | -19.7% | 9.81 | 31.28 | 368 / 368 |
-| slide | 18.1 | 12.7 | +42.5% | 9.65 | 43.17 | 375 / 375 |
-| smoke | 13.7 | 9.6 | +42.7% | 11.66 | 67.12 | 630 / 565 |
-| spotlights | 31.1 | 26.7 | +16.5% | 9.28 | 48.53 | 780 / 800 |
-| spray | 24.1 | 27.1 | -11.1% | 9.08 | 49.88 | 1253 / 661 |
-| swarm | 103.3 | 95.4 | +8.3% | 21.57 | 90.03 | 4312 / 5041 |
-| sweep | 4.8 | 4.2 | +14.3% | 16.15 | 30.81 | 220 / 220 |
-| synthgrid | 8.3 | 5.1 | +62.7% | 13.39 | 33.23 | 617 / 619 |
-| unstable | 33.7 | 35.2 | -4.3% | 9.46 | 43.71 | 592 / 530 |
-| vhstape | 27.0 | 24.3 | +11.1% | 17.79 | 59.74 | 726 / 736 |
-| waves | 21.2 | 15.8 | +34.2% | 9.65 | 45.21 | 633 / 633 |
-| wipe | 4.6 | 2.8 | +64.3% | 15.29 | 28.78 | 138 / 138 |
+| `/dev/null` | 29.54 ms | 25.29 ms | 0.86x | 29.40 ms | 25.13 ms | 8/35 |
+| pipe | 31.95 ms | 59.07 ms | 1.79x | 31.35 ms | 48.39 ms | 32/35 |
+| pty | 41.81 ms | 287.55 ms | 5.17x | 34.47 ms | 96.62 ms | 35/35 |
 
-## Assertion-only control
+Into `/dev/null` OTFX wins crumble, errorcorrect, fireworks, middleout,
+overflow, rings, slice and spray. Through a pipe ttfx keeps binarypath,
+scattered and slide. On a pty OTFX finishes first on every effect.
+[Raw data for all three sinks](release-fx-sinks.tsv).
 
-Both control binaries retain `-debug` and identical optimized/native flags;
-the only changed flag is `-disable-assert`. Mean wall is
-**28.609 → 28.686 ms**
-(+0.27%),
-with geometric time +0.37%.
-There is **no measured aggregate speedup from disabling assertions**. Individual
-results are mixed: Wipe is 4.2→4.6 ms in this sweep. All native frame counts match.
-See [all 35 assertion-control results](release-assert.tsv); this is not an
-argument that assertion overhead is universally zero.
+| Effect | /dev/null OTFX / ttfx | pipe OTFX / ttfx | pty OTFX / ttfx |
+|---|---:|---:|---:|
+| beams | 14.6 / 10.1 | 15.8 / 21.2 | 19.8 / 102.6 |
+| binarypath | 156.1 / 90.8 | 167.4 / 128.5 | 251.6 / 296.7 |
+| blackhole | 52.6 / 51.1 | 54.3 / 70.6 | 64.3 / 185.3 |
+| bouncyballs | 36.4 / 26.0 | 39.4 / 117.6 | 43.0 / 816.3 |
+| bubbles | 52.2 / 39.6 | 55.8 / 167.1 | 62.1 / 1043.8 |
+| burn | 22.3 / 17.5 | 24.8 / 78.9 | 26.1 / 531.5 |
+| colorshift | 18.3 / 15.8 | 23.5 / 26.8 | 62.8 / 95.0 |
+| crumble | 41.0 / 44.2 | 43.0 / 57.1 | 50.3 / 129.7 |
+| decrypt | 19.2 / 14.6 | 22.6 / 74.1 | 37.6 / 488.5 |
+| errorcorrect | 12.9 / 17.2 | 13.8 / 121.1 | 16.4 / 853.1 |
+| expand | 18.3 / 16.3 | 18.4 / 20.0 | 20.9 / 49.8 |
+| fireworks | 53.4 / 53.5 | 54.3 / 70.5 | 56.5 / 175.2 |
+| highlight | 3.5 / 2.6 | 3.7 / 5.1 | 4.5 / 21.7 |
+| laseretch | 45.9 / 44.5 | 48.8 / 193.7 | 56.4 / 1239.6 |
+| middleout | 7.7 / 7.8 | 7.8 / 9.1 | 9.8 / 15.8 |
+| orbittingvolley | 20.9 / 15.8 | 22.0 / 29.5 | 23.9 / 127.0 |
+| overflow | 12.4 / 12.9 | 14.6 / 19.4 | 27.8 / 55.8 |
+| pour | 18.3 / 15.9 | 19.3 / 87.6 | 21.7 / 628.2 |
+| print | 7.2 / 6.5 | 9.3 / 132.4 | 19.1 / 1089.0 |
+| rain | 18.5 / 17.0 | 19.7 / 66.6 | 21.8 / 422.0 |
+| randomsequence | 4.1 / 3.4 | 4.5 / 7.2 | 4.7 / 23.6 |
+| rings | 82.4 / 92.1 | 88.7 / 109.4 | 105.2 / 178.6 |
+| scattered | 30.0 / 23.2 | 32.4 / 31.3 | 45.1 / 79.5 |
+| slice | 5.2 / 5.8 | 5.7 / 11.2 | 7.4 / 45.3 |
+| slide | 17.1 / 11.8 | 19.1 / 16.9 | 28.2 / 41.7 |
+| smoke | 9.5 / 7.3 | 10.6 / 23.7 | 15.0 / 123.2 |
+| spotlights | 30.2 / 25.7 | 32.7 / 45.4 | 37.3 / 144.8 |
+| spray | 25.8 / 26.1 | 28.6 / 35.2 | 32.3 / 103.1 |
+| swarm | 98.5 / 89.9 | 103.0 / 148.7 | 106.6 / 490.5 |
+| sweep | 4.2 / 3.3 | 4.6 / 7.8 | 5.8 / 35.9 |
+| synthgrid | 7.0 / 4.6 | 8.0 / 13.1 | 10.9 / 67.9 |
+| unstable | 35.9 / 34.0 | 39.2 / 44.3 | 55.8 / 90.6 |
+| vhstape | 28.5 / 20.1 | 32.1 / 39.2 | 49.2 / 137.8 |
+| waves | 20.8 / 15.4 | 27.4 / 32.3 | 58.5 / 118.9 |
+| wipe | 2.9 / 2.6 | 3.2 / 4.7 | 5.1 / 16.1 |
 
-`-debug` emits debugging information and sets `ODIN_DEBUG`; it does not disable
-assertions. `-disable-assert` suppresses built-in runtime assertions. No global
-`-no-bounds-check` or `-no-type-assert` flag was added. Existing scoped bounds
-exclusions remain. The final release/ASM sweep removes `-debug` as requested.
-The earlier assertion-enabled release-comparison sample was slightly faster;
-these new flags must not be described as a demonstrated performance improvement.
+## Complete finite-effect comparison
 
-## Binary size
+Mean wall into `/dev/null`; negative change means OTFX is faster. RSS is the
+maximum child RSS across measured samples. Bytes are one complete run's output.
+Frame counts differ for 21/35 effects, so these are complete-animation costs
+rather than equal-frame throughput. [Raw CPU, wall, RSS and frame data](release-fx.tsv).
 
-`stat` file sizes, before and after `strip --strip-all -o COPY ORIGINAL`.
-Only disposable copies were stripped. Timed binaries and the ASM oracle remain
-unchanged. MiB in the README means 1,048,576 bytes. Binary size is separate from
-RSS, which includes runtime allocations.
+| Effect | OTFX ms | ttfx ms | OTFX time change | OTFX RSS MiB | ttfx RSS MiB | OTFX MB written | ttfx MB written | Frames OTFX / ttfx |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| beams | 14.6 | 10.1 | +44.6% | 11.90 | 16.54 | 10.8 | 97.7 | 878 / 732 |
+| binarypath | 156.1 | 90.8 | +71.9% | 19.89 | 39.69 | 103.0 | 215.8 | 1909 / 1891 |
+| blackhole | 52.6 | 51.1 | +2.9% | 10.20 | 35.55 | 15.4 | 149.0 | 1793 / 1800 |
+| bouncyballs | 36.4 | 26.0 | +40.0% | 10.20 | 18.70 | 15.5 | 826.4 | 10378 / 9093 |
+| bubbles | 52.2 | 39.6 | +31.8% | 11.42 | 27.44 | 26.5 | 1056.0 | 12184 / 11742 |
+| burn | 22.3 | 17.5 | +27.4% | 14.59 | 19.63 | 14.8 | 536.9 | 3218 / 3175 |
+| colorshift | 18.3 | 15.8 | +15.8% | 9.02 | 28.02 | 47.1 | 85.3 | 528 / 528 |
+| crumble | 41.0 | 44.2 | -7.2% | 10.02 | 33.39 | 19.7 | 94.4 | 2200 / 1835 |
+| decrypt | 19.2 | 14.6 | +31.5% | 12.20 | 25.82 | 20.1 | 493.1 | 5442 / 5438 |
+| errorcorrect | 12.9 | 17.2 | -25.0% | 9.77 | 18.20 | 8.1 | 862.1 | 5259 / 5237 |
+| expand | 18.3 | 16.3 | +12.3% | 10.30 | 18.84 | 3.9 | 32.4 | 302 / 302 |
+| fireworks | 53.4 | 53.5 | -0.2% | 10.88 | 29.54 | 10.7 | 136.7 | 1367 / 1553 |
+| highlight | 3.5 | 2.6 | +34.6% | 11.27 | 15.02 | 1.3 | 21.5 | 129 / 129 |
+| laseretch | 45.9 | 44.5 | +3.1% | 15.26 | 21.66 | 22.9 | 1270.0 | 14307 / 14306 |
+| middleout | 7.7 | 7.8 | -1.3% | 9.58 | 18.84 | 1.6 | 9.6 | 235 / 235 |
+| orbittingvolley | 20.9 | 15.8 | +32.3% | 11.64 | 16.82 | 10.3 | 109.3 | 1156 / 1156 |
+| overflow | 12.4 | 12.9 | -3.9% | 17.66 | 21.12 | 16.2 | 48.4 | 231 / 306 |
+| pour | 18.3 | 15.9 | +15.1% | 9.96 | 17.21 | 8.3 | 623.6 | 7160 / 7160 |
+| print | 7.2 | 6.5 | +10.8% | 11.46 | 15.81 | 6.4 | 1084.5 | 10057 / 10057 |
+| rain | 18.5 | 17.0 | +8.8% | 9.93 | 20.55 | 7.8 | 424.5 | 4760 / 4737 |
+| randomsequence | 4.1 | 3.4 | +20.6% | 12.14 | 14.29 | 1.7 | 22.5 | 208 / 208 |
+| rings | 82.4 | 92.1 | -10.5% | 11.04 | 36.70 | 27.9 | 94.9 | 1563 / 1566 |
+| scattered | 30.0 | 23.2 | +29.3% | 9.95 | 19.68 | 14.9 | 58.4 | 418 / 418 |
+| slice | 5.2 | 5.8 | -10.3% | 12.12 | 14.05 | 3.3 | 40.8 | 368 / 368 |
+| slide | 17.1 | 11.8 | +44.9% | 10.33 | 16.01 | 12.4 | 33.3 | 375 / 375 |
+| smoke | 9.5 | 7.3 | +30.1% | 12.36 | 18.34 | 8.1 | 117.0 | 549 / 565 |
+| spotlights | 30.2 | 25.7 | +17.5% | 9.94 | 35.98 | 9.6 | 122.1 | 779 / 800 |
+| spray | 25.8 | 26.1 | -1.1% | 9.69 | 20.48 | 13.1 | 76.6 | 1275 / 661 |
+| swarm | 98.5 | 89.9 | +9.6% | 22.18 | 55.96 | 28.6 | 461.6 | 4051 / 5041 |
+| sweep | 4.2 | 3.3 | +27.3% | 11.27 | 16.04 | 2.5 | 35.6 | 220 / 220 |
+| synthgrid | 7.0 | 4.6 | +52.2% | 13.89 | 19.20 | 5.0 | 67.8 | 617 / 619 |
+| unstable | 35.9 | 34.0 | +5.6% | 11.88 | 22.35 | 20.3 | 57.4 | 594 / 530 |
+| vhstape | 28.5 | 20.1 | +41.8% | 12.21 | 30.25 | 23.9 | 123.0 | 748 / 736 |
+| waves | 20.8 | 15.4 | +35.1% | 10.32 | 15.93 | 39.6 | 98.6 | 633 / 633 |
+| wipe | 2.9 | 2.6 | +11.5% | 9.88 | 13.93 | 2.4 | 14.8 | 138 / 138 |
 
-| Build | File bytes | Stripped bytes |
-|---|---:|---:|
-| assert-debug | 6,131,584 | 1,347,832 |
-| noassert-debug | 5,892,456 | 1,310,968 |
-| release | 1,327,552 | 1,306,872 |
-| asm | 2,872,192 | 2,872,184 |
+## Timing-gated comparison
 
-`assert-debug` is the integrated assertion-enabled binary; `noassert-debug`
-is the assertion-only control. `release` has no debug information or runtime
-assertions. The ASM binary is already effectively stripped. Debug information
-explains most of the original Odin file-size difference; the release file is
-1,327,552 bytes and its stripped copy is 1,306,872 bytes.
-
-## Timing-gated diagnostics
-
-Matrix and Thunderstorm are excluded from the 35-effect aggregate. These are
-**unpaced wall-clock diagnostics**, with `--rain-time 1` / `--storm-time 1`,
-three samples, and the same canvas/seed/output sink as above. Their elapsed
-limits dominate wall time and their logical work/frame counts differ. No
-throughput ratio is inferred. Unpaced CPU duty is about 99.75% for both.
-
-| Effect | OTFX wall ms | ASM wall ms | OTFX CPU ms | ASM CPU ms | OTFX RSS MiB | ASM RSS MiB | Frames OTFX / ASM |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| matrix | 1054.4 | 1017.8 | 1051.7 | 1015.3 | 9.55 | 27.50 | 5484 / 14072 |
-| thunderstorm | 1003.9 | 1012.9 | 1001.4 | 1010.4 | 11.52 | 52.51 | 5174 / 8076 |
-
-[Exact diagnostic values](release-weather.tsv). Finite-effect performance must
-not be combined with these duration-gated runs.
+Matrix (`--rain-time 5`) and Thunderstorm (`--storm-time 1`) run for their
+configured time and are excluded above. The harness counts their frames on a
+separate run whose output goes through a pipe, so the counts reflect how much
+each frame costs to deliver as well as to build: OTFX observed 425,816 and
+114,318 frames against ttfx's 80,122 and 10,093. Wall and CPU are bounded by the
+duration gates. [Diagnostic values](release-fx-weather.tsv).
 
 ## Validation and previews
 
-The assertion-enabled source passed **87/87 tests**, `odin check`, parity
-(13 frame matches, 24 diagnostic differences, zero failures), and all 37 smoke
-cases. The release executable additionally passes **756/756 byte-identical
-captures** against that assertion-enabled binary: 222 standard cases and 534
-option/seed/color cases, including virtual-clock weather. Tests that deliberately
-expect assertions continue to run with assertions enabled.
+- 88/88 tests pass; `odin check` passes for `src` (with and without frame
+  stats), `tools/docs`, `tools/accuracy`, `tools/parity`, `bench` and
+  `bench/phases`.
+- All 37 effects run to completion at 200x50 with assertions enabled.
+- The release executable matches the assertion-enabled executable byte for byte
+  on **740/740 captures**: the 222 cases of `bench/capture.py` and 518
+  option, seed and color cases (14 cases across 37 effects, including
+  virtual-clock weather, xterm, no-color, all three existing-color modes,
+  Unicode and tab input, clipping, anchors, wrapping and reused canvases).
+- Run emission was checked by replaying both terminal streams into a screen
+  model: every frame of all 37 effects shows the same glyph, bold and colors in
+  every cell, in default, no-color, xterm and all existing-color modes. The
+  later effect changes are byte-identical for seeds 1, 2 and 7.
+- Parity: 13 frame matches, 24 diagnostic differences, 0 failures.
+- All **37 GIF previews were regenerated**; 27 changed with the new random
+  stream, exactly the effects that draw random numbers. All decode at 588x169
+  with multiple frames.
 
-All **37 GIF previews were regenerated** from this source using the native
-`tools/docs` pipeline; **1 files differ** from the preceding gallery.
-The original gallery is backed up in the artifact directory. All 37 regenerated
-GIFs decode successfully at 588×169 pixels, with multiple frames; midpoint and
-final-frame contact sheets were generated for visual inspection. Previews use
-the existing seed 3, 84×13 canvas, Omarchy input, pinned font chain, and virtual
-60 fps clock. Sampling and GIF delays remain tied to logical frame time.
+## Reproduce
 
-## Reproduce and artifacts
-
-Ryzen 9 9900X3D, CPU 2 only. Seed 1, terminal 200×50, dense input/default canvas
-190×46, `--frame-rate 0`, stdout `/dev/null`. Each binary/effect has three batched
-samples targeting at least 0.3 seconds. The reference runs first. Whole CLI
-construction/build/playback/teardown are included; CPU and maximum RSS use
-`wait4`. Own compilation, captures, and GIF generation ran outside timed sweeps.
-Terminal-emulator work is excluded. Small differences are not formal
-significance claims.
+Ryzen 9 9900X3D. Seed 1, terminal 200x50, dense input/default canvas 190x46,
+`--frame-rate 0`. Three batched samples of at least 0.3 seconds per binary and
+effect; the reference runs first. CPU and maximum RSS use `wait4`. An unrelated
+process used about 1.8 cores on the other CCD (CPUs 6-11 and 18-23) throughout;
+small differences are not significance claims.
 
 ```sh
 odin build src -o:speed -microarch:native -disable-assert -out:/tmp/otfx-release
-odin build bench -o:speed -define:OTFX_BENCH_BINARY=/tmp/otfx-release -define:REFERENCE_BENCH_BINARY=/tmp/ttfx-asm-c2be6411/target/release/ttfx -out:/tmp/otfx-release-bench
-TTFX_ASM=force BENCH_MIN_SECONDS=0.3 taskset -c 2 /tmp/otfx-release-bench 3
+# ttfx v0.5.0+: git archive 921bd551 from the ttfx checkout, then cargo build --release
+odin build bench -o:speed -define:OTFX_BENCH_BINARY=/tmp/otfx-release -define:REFERENCE_BENCH_BINARY=/path/to/ttfx-921bd551/target/release/ttfx -out:/tmp/otfx-release-bench
+TTFX_THREADS=1 BENCH_MIN_SECONDS=0.3 taskset -c 2 /tmp/otfx-release-bench 3
+TTFX_THREADS=1 BENCH_MIN_SECONDS=0.3 BENCH_SINK=pipe taskset -c 1,2 /tmp/otfx-release-bench 3
+TTFX_THREADS=1 BENCH_MIN_SECONDS=0.3 BENCH_SINK=pty taskset -c 1,2 /tmp/otfx-release-bench 3
 odin build tools/docs -o:speed -microarch:native -out:/tmp/otfx-previews
 /tmp/otfx-previews
 ```
 
-The default harness invocation also reports weather separately; the published
-finite sweep explicitly selected the 35 finite effects. Exact invocations,
-frozen binaries, hashes, size metadata, all timing/capture/preview logs, and
-contact sheets are in `/tmp/otfx-release-20260927/`. ASM was not fetched or
-rebuilt: revision `c2be6411d3e4d5002f160dc0cbd10af7cb3a3889`, selected with
-`TTFX_ASM=force`.
-
 ```text
-release 059bb801980d714cfe56035c92f6487b640b4c80c8c048a75b5e1afabcf635bf
-ASM     ae0cf2e8a62c208b42f78cee60d9d4c948ac9c07145a83a96aef6235934a7171
+otfx release 52c93af00bed1663fceced3694a954f17b7a4459d589e9a136e6c8ab98deefb9
 ```

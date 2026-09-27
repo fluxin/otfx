@@ -4,7 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math/ease"
-import "core:math/rand"
 
 Bubbles_Pop_Condition :: enum {
 	Row,
@@ -186,7 +185,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	read := 0
 	for read < len(rows.members) {
 		remaining := len(rows.members) - read
-		count := remaining < 5 ? remaining : rand.int_range(5, min(remaining, 20) + 1)
+		count := remaining < 5 ? remaining : engine.random_range(5, min(remaining, 20) + 1)
 		start := len(s.bubbles.members)
 		append(&s.bubbles.members, ..rows.members[read:read + count])
 		append(&s.bubbles.spans, engine.Span{start, count})
@@ -210,10 +209,10 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			for id in members do lowest = min(lowest, initial_coords[id].row)
 		}
 		origin := engine.coord(
-			rand.int_range(e.canvas.left, e.canvas.right + 1),
+			engine.random_range(e.canvas.left, e.canvas.right + 1),
 			e.canvas.top + 10,
 		)
-		target := engine.coord(rand.int_range(e.canvas.left, e.canvas.right + 1), lowest)
+		target := engine.coord(engine.random_range(e.canvas.left, e.canvas.right + 1), lowest)
 		s.bubble_origins[bi] = origin
 		s.bubble_targets[bi] = target
 		s.bubble_steps[bi] = max(
@@ -221,7 +220,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			1,
 		)
 		s.bubble_radii[bi] = radius
-		s.bubble_colors[bi] = s.config.bubble_colors[rand.int_max(len(s.config.bubble_colors))]
+		s.bubble_colors[bi] = s.config.bubble_colors[engine.random_below(len(s.config.bubble_colors))]
 		circle_points := engine.find_coords_on_circle(
 			engine.coord(0, 0),
 			radius,
@@ -273,7 +272,7 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	s.delay = s.config.bubble_delay
 }
 
-bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
+bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.next_bubble == len(s.bubbles.spans) && len(s.active_bubbles) == 0 do return false
 	if s.next_bubble < len(s.bubbles.spans) {
 		if s.delay == 0 {
@@ -319,7 +318,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool {
 					engine.set_foreground(e, id, s.bubble_colors[bi])
 				}
 			}
-			if landed || (s.config.pop_condition == .Anywhere && rand.float64() < 0.002) {
+			if landed || (s.config.pop_condition == .Anywhere && engine.random_float() < 0.002) {
 				s.bubble_states[bi] = .Pop
 				s.pop_starts[bi] = s.tick + 1
 				for id in members {

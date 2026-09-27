@@ -3,7 +3,6 @@ package effects
 import engine "../engine"
 
 import "core:fmt"
-import "core:math/rand"
 
 Smoke_Config :: struct {
 	starting_color:           engine.Color,
@@ -70,8 +69,10 @@ smoke_parse :: proc(cfg: ^Smoke_Config, args: []string) -> bool {
 Smoke_State :: struct {
 	config:         Smoke_Config,
 	characters:     [dynamic]engine.Particle_Id,
-	arrivals:       [dynamic]int,
+	arrivals:       [dynamic]int, // nondecreasing: characters are in flood order
 	previous:       [dynamic]int,
+	settled:        int, // characters[:settled] hold their final sample
+	arrived:        int, // characters[:arrived] have been reached by the flood
 	changes:        [dynamic]engine.Sample_Change,
 	samples:        [dynamic]int,
 	final_colors:   [dynamic]engine.Color,
@@ -87,7 +88,8 @@ Smoke_State :: struct {
 // Generate Python's weighted Prim tree once, then retain only BFS arrival
 // ticks. Cells are row-major, top to bottom. Four bits encode tree neighbors;
 // equal-weight candidate edges share flat buckets with random removal.
-smoke_arrivals :: proc(arrivals: []int, width: int) {
+// `order` receives the cells in BFS order, so their arrivals never decrease.
+smoke_arrivals :: proc(arrivals, order: []int, width: int) {
 	n := len(arrivals)
 	if n == 0 do return
 	context.allocator = context.temp_allocator
@@ -95,9 +97,10 @@ smoke_arrivals :: proc(arrivals: []int, width: int) {
 	links := make([]u8, n)
 	visited := make([]bool, n)
 	buckets: [100]engine.Span
-	current := rand.int_max(n)
+	lowest := len(buckets) // no bucket below this one holds an edge
+	current := engine.random_below(n)
 	for &weight in weights {
-		weight = u8(rand.int_max(100))
+		weight = u8(engine.random_below(100))
 		buckets[weight].len += 4
 	}
 	start := 0
@@ -126,11 +129,13 @@ smoke_arrivals :: proc(arrivals: []int, width: int) {
 			bucket := &buckets[weights[next]]
 			edges[bucket.start + bucket.len] = {current, direction}
 			bucket.len += 1
+			lowest = min(lowest, int(weights[next]))
 		}
 		found := false
-		for &bucket in buckets {
+		for ; lowest < len(buckets); lowest += 1 {
+			bucket := &buckets[lowest]
 			for bucket.len > 0 {
-				pick := rand.int_max(bucket.len)
+				pick := engine.random_below(bucket.len)
 				edge := edges[bucket.start + pick]
 				bucket.len -= 1
 				edges[bucket.start + pick] = edges[bucket.start + bucket.len]
@@ -146,9 +151,9 @@ smoke_arrivals :: proc(arrivals: []int, width: int) {
 		}
 		if !found do break
 	}
-	queue := make([]int, n)
+	queue := order
 	for &arrival in arrivals do arrival = -1
-	root := rand.int_max(n)
+	root := engine.random_below(n)
 	queue[0], arrivals[root] = root, 0
 	tail := 1
 	for head := 0; head < tail; head += 1 {
@@ -209,13 +214,21 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	// whole-canvas option expands that population with outer fill cells.
 	filter := engine.Particle_Filter{.Input, .Inner_Fill}
 	if s.config.use_whole_canvas do filter += {.Outer_Fill}
-	s.characters = engine.get_particles(query, filter, .Top_Bottom_Left_Right)
-	n := len(s.characters)
-	s.arrivals = make([dynamic]int, n)
-	s.final_colors = make([dynamic]engine.Color, n)
-
+	cells := engine.get_particles(query, filter, .Top_Bottom_Left_Right)
+	defer delete(cells)
+	n := len(cells)
 	width := s.config.use_whole_canvas ? e.canvas.width : e.canvas.text_width
-	smoke_arrivals(s.arrivals[:], width)
+	arrivals := make([]int, n, context.temp_allocator)
+	order := make([]int, n, context.temp_allocator)
+	smoke_arrivals(arrivals, order, width)
+	// Store characters in flood order: the animating ones form one window.
+	s.characters = make([dynamic]engine.Particle_Id, n)
+	s.arrivals = make([dynamic]int, n)
+	for cell, i in order {
+		s.characters[i] = cells[cell]
+		s.arrivals[i] = arrivals[cell]
+	}
+	s.final_colors = make([dynamic]engine.Color, n)
 	initial_coords := e.particles.initial_coord
 
 	visible_flags := e.particles.flags
@@ -280,19 +293,20 @@ smoke_paint_color :: proc(
 	return engine.gradient_between_step(start, finish, 5, step)
 }
 
-smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
+smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.tick == s.last_tick do return false
 	smoke_count :=
 		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
+	for s.arrived < len(s.arrivals) && s.arrivals[s.arrived] <= s.tick do s.arrived += 1
 	changes := engine.sample_timeline_changes(
 		s.changes[:],
-		s.arrivals[:],
-		s.previous[:],
+		s.arrivals[s.settled:s.arrived],
+		s.previous[s.settled:s.arrived],
 		s.tick,
 		s.samples[:],
 	)
 	for change in changes {
-		i, sample := change.slot, change.sample
+		i, sample := s.settled + change.slot, change.sample
 		id := s.characters[i]
 		if sample < smoke_count {
 			if s.color_handling == .Dynamic {
@@ -331,6 +345,8 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool {
 			}
 		}
 	}
+	final_sample := s.samples[len(s.samples) - 1]
+	for s.settled < s.arrived && s.previous[s.settled] == final_sample do s.settled += 1
 	s.tick += 1
 	return true
 }

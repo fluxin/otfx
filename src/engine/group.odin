@@ -1,7 +1,6 @@
 package engine
 
 import "core:math/ease"
-import "core:math/rand"
 
 // Particle queries, ordering, flat groups, and group reveal schedules.
 
@@ -160,7 +159,7 @@ get_particles :: proc(
 	}
 	particle_order_rows(rows)
 	for row, i in rows do all[i] = row.id
-	if srt == .Random do rand.shuffle(all[:])
+	if srt == .Random do random_shuffle(all[:])
 	return all
 }
 

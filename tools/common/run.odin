@@ -3,7 +3,6 @@ package common
 import "../../src/effects"
 import "../../src/engine"
 
-import "core:math/rand"
 import "core:reflect"
 import "core:strings"
 
@@ -44,7 +43,7 @@ run_make :: proc(
 	run: Run,
 	ok: bool,
 ) {
-	rand.reset_u64(seed)
+	engine.random_seed(seed)
 	input_error: engine.Input_Error
 	run.engine_state, input_error = engine.engine_make(input, cfg)
 	if input_error != .None do return {}, false

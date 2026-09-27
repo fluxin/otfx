@@ -5,6 +5,7 @@ import "core:c/libc"
 import "core:container/bit_array"
 import "core:fmt"
 import "core:os"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import "core:sys/linux"
@@ -14,17 +15,6 @@ import "core:time"
 // Terminal I/O, cursor lifecycle, resize handling, and explicit capture.
 
 Frame_Origin :: string(ansi.DECRC + ansi.DECSC)
-
-// Cursor-next-line also returns to column one. Storage lives through writev.
-row_move :: proc(buf: []byte, rows: int) -> []byte {
-	if rows == 0 do return nil
-	if rows == 1 do return transmute([]byte)string("\x1b[1E")
-	buf[0], buf[1] = '\x1b', '['
-	digits := strconv.write_uint(buf[2:], u64(rows), 10)
-	end := 2 + len(digits)
-	buf[end] = 'E'
-	return buf[:end + 1]
-}
 
 prep_canvas :: proc(reuse_canvas: bool, visible_right, visible_top: int) {
 	os.write_string(os.stdout, ansi.CSI + ansi.DECTCEM_HIDE)
@@ -60,78 +50,79 @@ move_cursor_up :: proc(n: int) -> string {
 	return fmt.tprintf("%s%d%s", ansi.CSI, n, ansi.CUU)
 }
 
-// Capture owns its contiguous copy. Terminal output borrows row bytes instead.
-frame_bytes :: proc(e: ^Engine, allocator := context.temp_allocator) -> []byte {
-	move: [24]byte
-	length, cursor := 0, 0
-	rows := bit_array.make_iterator(&e.emit_rows)
-	for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
-		row := &e.rows[i]
-		length += len(row_move(move[:], i - cursor)) + len(row.bytes)
-		cursor = i
+// The longest cursor move: ESC [ <up to 20 digits> E|G.
+MOVE_MAX :: len("\x1b[") + 20 + 1
+
+// Writes ESC [ n final and returns its length. A constant base lets the
+// compiler replace the divisions with multiplies.
+write_cursor_move :: proc(buf: []byte, n: int, final: byte) -> int #no_bounds_check {
+	count := 1
+	for rest := n / 10; rest > 0; rest /= 10 do count += 1
+	buf[0], buf[1] = '\x1b', '['
+	value := n
+	for i := 1 + count; i >= 2; i -= 1 {
+		buf[i] = '0' + byte(value % 10)
+		value /= 10
 	}
-	out := make([]byte, length, allocator)
-	used := 0
-	cursor = 0
-	rows = bit_array.make_iterator(&e.emit_rows)
-	for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
-		used += copy(out[used:], row_move(move[:], i - cursor))
-		used += copy(out[used:], e.rows[i].bytes)
-		cursor = i
-	}
-	return out
+	buf[2 + count] = final
+	return 3 + count
 }
 
-// The syscall boundary is the only consumer needing native iovec descriptors.
-// A short write may end inside any slice; retry from that exact byte.
-write_vectors :: proc(fd: linux.Fd, vectors: []linux.IO_Vec, e: ^Engine = nil) -> linux.Errno {
-	remaining := vectors
-	for len(remaining) != 0 {
-		if remaining[0].len == 0 {
-			remaining = remaining[1:]
-			continue
+// The bytes the terminal last received for a cell.
+cell_encoding :: proc(e: ^Engine, index: int) -> []byte {
+	return e.slots[index][:e.cells[index].length]
+}
+
+// Changed cells go out as runs. Each run starts at an absolute column, so
+// unchanged cells cost nothing and glyph widths cannot drift along a row.
+// Slots copy whole; the frame advances only past each cell's encoded bytes.
+frame_output :: proc(e: ^Engine) -> []byte #no_bounds_check {
+	width := e.layout.visible_right
+	used := copy(e.output, Frame_Origin)
+	cursor_row, row_end, previous := 0, 0, -1
+	cells := bit_array.make_iterator(&e.emit_cells)
+	for index, ok := next_dirty_bit(&cells); ok; index, ok = next_dirty_bit(&cells) {
+		if index != previous + 1 || index == row_end {
+			row, column := index / width, index % width
+			row_end = (row + 1) * width
+			// Cursor-next-line also returns to column one.
+			if row != cursor_row do used += write_cursor_move(e.output[used:], row - cursor_row, 'E')
+			if column != 0 do used += write_cursor_move(e.output[used:], column + 1, 'G')
+			cursor_row = row
+			when FRAME_STATS_ENABLED {e.stats.runs += 1}
 		}
+		copy(e.output[used:][:SLOT_MAX], e.slots[index][:])
+		used += int(e.cells[index].length)
+		previous = index
+	}
+	when FRAME_STATS_ENABLED {e.stats.output_bytes += used}
+	return e.output[:used]
+}
+
+// Capture owns its copy, without the frame origin. Terminal output borrows
+// the engine's buffer instead.
+frame_bytes :: proc(e: ^Engine, allocator := context.temp_allocator) -> []byte {
+	return slice.clone(frame_output(e)[len(Frame_Origin):], allocator)
+}
+
+// A short write may stop anywhere; retry from that exact byte.
+write_all :: proc(fd: linux.Fd, bytes: []byte, e: ^Engine = nil) -> linux.Errno {
+	remaining := bytes
+	for len(remaining) != 0 {
 		when FRAME_STATS_ENABLED {if e != nil do e.stats.write_calls += 1}
-		count, err := linux.writev(fd, remaining[:min(len(remaining), 1024)])
-		when FRAME_STATS_ENABLED {if e != nil && count > 0 do e.stats.write_bytes += int(count)}
+		count, err := linux.write(fd, remaining)
 		if err == .EINTR do continue
 		if err != nil do return err
 		if count == 0 do return .EIO
-		consumed := uint(count)
-		for len(remaining) > 0 && consumed >= remaining[0].len {
-			consumed -= remaining[0].len
-			remaining = remaining[1:]
-		}
-		if consumed != 0 {
-			remaining[0].base = remaining[0].base[consumed:]
-			remaining[0].len -= consumed
-		}
+		when FRAME_STATS_ENABLED {if e != nil do e.stats.write_bytes += count}
+		remaining = remaining[count:]
 	}
 	return nil
 }
 
 print_frame :: proc(e: ^Engine) {
 	when FRAME_STATS_ENABLED {e.stats.clock = time.tick_now()}
-	storage: [1024]linux.IO_Vec = ---
-	moves: [1024][24]byte = ---
-	prefix := transmute([]byte)Frame_Origin
-	storage[0] = {raw_data(prefix), uint(len(prefix))}
-	count := 1
-	cursor := 0
-	rows := bit_array.make_iterator(&e.emit_rows)
-	for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
-		for bytes in ([2][]byte{row_move(moves[count][:], i - cursor), e.rows[i].bytes}) {
-			if len(bytes) == 0 do continue
-			storage[count] = {raw_data(bytes), uint(len(bytes))}
-			count += 1
-			if count == len(storage) {
-				if write_vectors(1, storage[:count], e) != nil do return
-				count = 0
-			}
-		}
-		cursor = i
-	}
-	if count != 0 do write_vectors(1, storage[:count], e)
+	write_all(1, frame_output(e), e)
 	os.flush(os.stdout)
 	when FRAME_STATS_ENABLED {e.stats.write += time.tick_diff(e.stats.clock, time.tick_now())}
 }

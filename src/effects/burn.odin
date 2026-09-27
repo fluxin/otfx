@@ -3,7 +3,6 @@ package effects
 import "../engine"
 
 import "core:fmt"
-import "core:math/rand"
 import "core:slice"
 
 Burn_Char_Order :: [9]rune{'\'', '.', '▖', '▙', '█', '▜', '▀', '▝', '.'}
@@ -111,12 +110,12 @@ burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
 	for id, i in s.characters do index_by_id[id] = i
 	width := e.canvas.text_width
 	offsets := [4]int{-width, 1, width, -1}
-	root := rand.int_max(n)
+	root := engine.random_below(n)
 	visited[root] = true
 	append(&order, root)
 	append(&frontier, root)
 	for len(frontier) > 0 {
-		pick := rand.int_max(len(frontier))
+		pick := engine.random_below(len(frontier))
 		current := frontier[pick]
 		last := pop(&frontier)
 		if pick < len(frontier) do frontier[pick] = last
@@ -134,13 +133,13 @@ burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
 			append(&neighbors, next)
 		}
 		if len(neighbors) == 0 do continue
-		next := neighbors[rand.int_max(len(neighbors))]
+		next := neighbors[engine.random_below(len(neighbors))]
 		visited[next] = true
 		append(&order, next)
 		if len(neighbors) > 1 do append(&frontier, current)
 		append(&frontier, next)
 	}
-	tick, remaining := 0, rand.int_range(2, 5)
+	tick, remaining := 0, engine.random_range(2, 5)
 	for cell in order {
 		id := cells[cell]
 		if (.Fill not_in e.particles.flags[id]) &&
@@ -157,7 +156,7 @@ burn_start_ticks :: proc(s: ^Burn_State, e: ^engine.Engine) {
 			s.last_fire_tick = max(s.last_fire_tick, tick + len(s.fire_palette) * 4 + final_ticks)
 		}
 		remaining -= 1
-		if remaining == 0 {tick += 1; remaining = rand.int_range(2, 5)}
+		if remaining == 0 {tick += 1; remaining = engine.random_range(2, 5)}
 	}
 }
 
@@ -234,13 +233,13 @@ burn_build :: proc(s: ^Burn_State, e: ^engine.Engine) {
 }
 
 burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
-	if rand.float64() > s.config.smoke_chance || s.next_smoke >= len(s.smoke_ids) do return
+	if engine.random_float() > s.config.smoke_chance || s.next_smoke >= len(s.smoke_ids) do return
 	particle := s.next_smoke
 	s.next_smoke += 1
 	append(&s.active_smoke, particle)
 	id := s.smoke_ids[particle]
 	origin := e.particles.initial_coord[s.characters[source_index]]
-	target := engine.coord(rand.int_range(origin.column - 4, origin.column + 5), e.canvas.top + 1)
+	target := engine.coord(engine.random_range(origin.column - 4, origin.column + 5), e.canvas.top + 1)
 	s.smoke_start_ticks[particle] = s.tick
 	s.smoke_origins[particle] = origin
 	s.smoke_targets[particle] = target
@@ -250,12 +249,12 @@ burn_emit_smoke :: proc(s: ^Burn_State, e: ^engine.Engine, source_index: int) {
 	)
 	engine.set_particle(e, id, origin)
 	symbols := Burn_Smoke_Symbols
-	engine.set_symbol(e, id, symbols[rand.int_max(len(symbols))])
+	engine.set_symbol(e, id, symbols[engine.random_below(len(symbols))])
 	engine.set_foreground(e, id, engine.Color{0x50, 0x4F, 0x4F})
 	engine.set_particle(e, id, engine.Visible(true))
 }
 
-burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool {
+burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	fire_ticks := len(s.fire_palette) * 4
 	active := s.tick < s.last_fire_tick
 	for i in s.active_smoke do active ||= s.tick - s.smoke_start_ticks[i] < max(s.smoke_steps[i], 100)

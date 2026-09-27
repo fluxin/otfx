@@ -8,7 +8,7 @@ import stbtt "vendor:stb/truetype"
 
 // Cell glyphs come from two sources. Block elements are filled as exact cell
 // rectangles, because a rasterized outline lands on fractional pixel boundaries
-// at these cell sizes and puts seams through solid areas -- the Omarchy logo is
+// at these cell sizes and puts seams through solid areas -- the FLUXIN banner is
 // nothing but U+2580..U+259F, so that path has to be exact. Everything else is
 // rasterized from a vendored font chain.
 //

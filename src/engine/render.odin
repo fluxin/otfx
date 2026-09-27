@@ -9,11 +9,6 @@ import "core:time"
 
 // Cell ownership, dirty tracking, and retained row construction.
 
-@(rodata)
-Blank_Cell: [51]byte = {
-	0 = ' ',
-}
-
 // Numeric order is layer first, then particle ID; both are checked before packing.
 Render_Key :: bit_field u64 {
 	id:    u32 | 32,
@@ -30,7 +25,7 @@ Render_Cell :: struct {
 	top:           Particle_Id,
 	unordered:     bool,
 	needs_resolve: bool,
-	bytes:         []byte,
+	length:        u8, // encoded bytes at the front of the cell's slot
 }
 
 // Prepare once after engine/effect build, and again only if playback adds IDs.
@@ -53,11 +48,10 @@ cell_tail :: #force_inline proc(cell: ^Render_Cell) -> ^Render_Node {
 
 Render_Row :: struct {
 	cells: []Render_Cell, // borrowed from the cell grid
-	bytes: []byte, // borrowed from the fixed-slot byte grid
 }
 
 // Accumulate change kinds; queue each ID once. Published placement lives in its node.
-queue_particle :: #force_inline proc(e: ^Engine, id: Particle_Id, change: Particle_Flag) {
+queue_particle :: #force_inline proc(e: ^Engine, id: Particle_Id, change: Particle_Flag) #no_bounds_check {
 	flags := e.particles[id].flags
 	e.particles[id].flags = flags + {change, .Update_Queued}
 	if .Update_Queued in flags do return
@@ -78,7 +72,7 @@ mark_cell_dirty :: #force_inline proc(e: ^Engine, cell: int) {
 // Native iterator state and ascending order, with the traversal itself inlined.
 // Inlining bit_array.iterate_by_set alone leaves its private helper as a call.
 @(private)
-next_dirty_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (index: int, ok: bool) {
+next_dirty_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (index: int, ok: bool) #no_bounds_check {
 	for it.word_idx < len(it.array.bits) {
 		word := it.array.bits[it.word_idx] >> it.bit_idx
 		if word == 0 {
@@ -201,47 +195,32 @@ compose_frame :: proc(e: ^Engine) {
 	clear(&e.updates)
 }
 
-// Encode the winning glyph and appearance directly into its fixed cell slot.
-patch_cell :: proc(e: ^Engine, cell: ^Render_Cell) {
-	bytes := cell.bytes
+// Encode the winning glyph and appearance directly into the cell's slot.
+patch_cell :: proc(e: ^Engine, index: int) #no_bounds_check {
+	cell, slot := &e.cells[index], &e.slots[index]
 	if id := cell.top; id != NO_PARTICLE {
-		encode_particle(e, id, bytes)
+		cell.length = u8(encode_particle(e, id, slot[:]))
 	} else {
-		copy(bytes, Blank_Cell[:])
+		// A space erases the departed glyph and advances the cursor.
+		slot[0] = ' '
+		cell.length = 1
 	}
 	when FRAME_STATS_ENABLED {
 		e.stats.patched_cells += 1
-		e.stats.cell_bytes_written += len(bytes)
+		e.stats.cell_bytes_written += int(cell.length)
 	}
 }
 
-frame_build :: proc(e: ^Engine) {
+frame_build :: proc(e: ^Engine) #no_bounds_check {
 	when FRAME_STATS_ENABLED {e.stats.clock = time.tick_now()}
 	compose_frame(e)
 	when FRAME_STATS_ENABLED {stats_composed(e)}
 	it := bit_array.make_iterator(&e.dirty_cells)
 	for cell, ok := next_dirty_bit(&it); ok; cell, ok = next_dirty_bit(&it) {
 		// dirty_cells has exactly len(cells) bits; only clipped/published cells are marked.
-		#no_bounds_check {patch_cell(e, &e.cells[cell])}
-		// Nonempty dirty_cells implies positive width; this quotient is a valid row.
-		bit_array.unsafe_set(&e.dirty_rows, cell / e.layout.visible_right)
+		patch_cell(e, cell)
 	}
+	e.dirty_cells, e.emit_cells = e.emit_cells, e.dirty_cells
 	bit_array.clear(&e.dirty_cells)
-	e.dirty_rows, e.emit_rows = e.emit_rows, e.dirty_rows
-	bit_array.clear(&e.dirty_rows)
-	when FRAME_STATS_ENABLED {
-		e.stats.emit += time.tick_diff(e.stats.clock, time.tick_now())
-		stats_rows(e)
-		count, cursor := 1, 0
-		move: [24]byte
-		e.stats.output_bytes += len(Frame_Origin)
-		rows := bit_array.make_iterator(&e.emit_rows)
-		for i, ok := next_dirty_bit(&rows); ok; i, ok = next_dirty_bit(&rows) {
-			count += int(i != cursor) + int(len(e.rows[i].bytes) != 0)
-			e.stats.output_bytes += len(row_move(move[:], i - cursor)) + len(e.rows[i].bytes)
-			cursor = i
-		}
-		e.stats.parts += count
-		e.stats.max_parts = max(e.stats.max_parts, count)
-	}
+	when FRAME_STATS_ENABLED {e.stats.emit += time.tick_diff(e.stats.clock, time.tick_now())}
 }

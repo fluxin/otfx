@@ -2,7 +2,6 @@ package effects
 
 import "../engine"
 import "core:math/ease"
-import "core:math/rand"
 import "core:slice"
 
 import "core:fmt"
@@ -187,7 +186,7 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 			current_coords[id] = start
 			s.origins[slot] = start
 			s.final_colors[slot] = engine.gradient_sample(sampler, spectrum[:], c)
-			speed := rand.float64_range(
+			speed := engine.random_float_range(
 				s.config.movement_speed_range.lo,
 				s.config.movement_speed_range.hi,
 			)
@@ -201,7 +200,7 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 	engine.groups_delete(&groups)
 }
 
-pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool {
+pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	spans := s.group_spans[:]
 	pool := s.pool[:]
 	visible_flags := e.particles.flags[:]

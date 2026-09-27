@@ -1,7 +1,6 @@
 package engine
 
 import "core:math"
-import "core:math/rand"
 
 // Canvas bounds, anchoring, and the clipped terminal viewport.
 
@@ -82,13 +81,13 @@ canvas_in_text :: proc(c: Canvas, p: Coord) -> bool {
 canvas_random_column :: proc(canvas: Canvas, within_text: bool) -> int {
 	lo, hi := canvas.left, canvas.right
 	if within_text do lo, hi = canvas.text_left, canvas.text_right
-	return rand.int_range(lo, hi + 1)
+	return random_range(lo, hi + 1)
 }
 
 canvas_random_row :: proc(canvas: Canvas, within_text: bool) -> int {
 	lo, hi := canvas.bottom, canvas.top
 	if within_text do lo, hi = canvas.text_bottom, canvas.text_top
-	return rand.int_range(lo, hi + 1)
+	return random_range(lo, hi + 1)
 }
 
 canvas_random_coord :: proc(canvas: Canvas, outside_scope, within_text: bool) -> Coord {
@@ -97,7 +96,7 @@ canvas_random_coord :: proc(canvas: Canvas, outside_scope, within_text: bool) ->
 		below := coord(canvas_random_column(canvas, false), canvas.bottom - 1)
 		left := coord(canvas.left - 1, canvas_random_row(canvas, false))
 		right := coord(canvas.right + 1, canvas_random_row(canvas, false))
-		return ([4]Coord{above, below, left, right})[rand.int_max(4)]
+		return ([4]Coord{above, below, left, right})[random_below(4)]
 	}
 	return coord(canvas_random_column(canvas, within_text), canvas_random_row(canvas, within_text))
 }
@@ -223,7 +222,7 @@ anchor_text :: proc(e: ^Engine, characters: []Particle_Id, anchor: Anchor) {
 	if input_height != e.canvas.height {
 		switch anchor {
 		case .W, .E, .C:
-			row_delta = e.canvas.center_row - math.floor_div(input_height, 2)
+			row_delta = math.floor_div(e.canvas.height - input_height, 2)
 		case .Nw, .N, .Ne:
 			row_delta = e.canvas.top - input_height
 		case .Sw, .S, .Se:

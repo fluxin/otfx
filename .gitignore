@@ -2,6 +2,7 @@
 third_party/
 PERFORMANCE_METHODOLOGY.md
 src.bin
+tests.bin
 otfx
 bench/bench
 bench/bench.bin

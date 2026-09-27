@@ -148,7 +148,7 @@ add_particle_single :: proc(
 	return id
 }
 
-set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: rune) {
+set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: rune) #no_bounds_check {
 	if e.particles[id].symbol == value do return
 	assert(utf8.valid_rune(value), "symbol must be a valid Unicode scalar value")
 	queue_particle(e, id, .Content_Changed)
@@ -164,21 +164,21 @@ set_particle :: proc {
 	set_particle_frames,
 }
 
-set_position :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Coord) {
+set_position :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Coord) #no_bounds_check {
 	old := e.particles[id].current_coord
 	if old == value do return
 	queue_particle(e, id, .Placement_Changed)
 	e.particles[id].current_coord = value
 }
 
-set_visible :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Visible) {
+set_visible :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Visible) #no_bounds_check {
 	visible := bool(value)
 	if (.Visible in e.particles[id].flags) == visible do return
 	queue_particle(e, id, .Placement_Changed)
 	if visible {e.particles[id].flags += {.Visible}} else {e.particles[id].flags -= {.Visible}}
 }
 
-set_layer :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Layer) {
+set_layer :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Layer) #no_bounds_check {
 	layer := int(value)
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
 	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
@@ -195,7 +195,7 @@ set_placement :: #force_inline proc(
 	coord: Coord,
 	visible: bool,
 	layer: int,
-) {
+) #no_bounds_check {
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
 	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
 	old_coord := e.particles[id].current_coord
@@ -213,13 +213,13 @@ set_placement :: #force_inline proc(
 // publication uses the same deduplicated queue as individual setters.
 // Glyph, bold, visibility and layer are left to their own writers.
 @(private = "file")
-set_particle_frames :: proc(e: ^Engine, ids: []Particle_Id, frames: #soa[]Sequence_Frame) {
+set_particle_frames :: proc(e: ^Engine, ids: []Particle_Id, frames: #soa[]Sequence_Frame) #no_bounds_check {
 	assert(len(ids) == len(frames))
 	for id, i in ids do set_particle_frame(e, id, frames[i])
 }
 
 @(private = "file")
-set_particle_frame :: #force_inline proc(e: ^Engine, id: Particle_Id, frame: Sequence_Frame) {
+set_particle_frame :: #force_inline proc(e: ^Engine, id: Particle_Id, frame: Sequence_Frame) #no_bounds_check {
 	position_changed := e.particles.current_coord[id] != frame.coord
 	colors_changed := get_appearance(e, id).colors != frame.colors
 	if !position_changed && !colors_changed do return

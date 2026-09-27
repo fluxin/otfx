@@ -24,24 +24,16 @@ wide_raster_preserves_cursor_distances_and_utf8_symbols :: proc(t: ^testing.T) {
 	}
 	engine.frame_build(&e)
 	testing.expect_value(t, string(frame_without_padding(&e)), input)
-	// Sparse output needs the full distance, including values beyond u16.
+	// Sparse output needs the full column, including values beyond u16.
 	last := e.particle_sets.input[len(e.particle_sets.input) - 1]
 	engine.set_symbol(&e, last, 'B')
 	engine.frame_build(&e)
-	testing.expect_value(
-		t,
-		string(frame_without_padding(&e)[:len(input) - 1]),
-		input[:len(input) - 1],
-	)
-	testing.expect_value(t, frame_without_padding(&e)[len(input) - 1], u8('B'))
+	testing.expect_value(t, string(frame_without_padding(&e)), "\x1b[65537GB")
 	engine.frame_build(&e)
 	testing.expect_value(t, len(frame_without_padding(&e)), 0)
-	// Four UTF-8 bytes fit the same slot without moving the next cell.
+	// Four UTF-8 bytes fit a slot; the next cell follows its encoded bytes.
 	engine.set_symbol(&e, e.particle_sets.input[0], '𐍈')
 	engine.set_symbol(&e, e.particle_sets.input[1], 'C')
 	engine.frame_build(&e)
-	bytes := frame_without_padding(&e)
-	testing.expect_value(t, len(bytes), len(input) + 3)
-	testing.expect_value(t, string(bytes[:4]), "𐍈")
-	testing.expect_value(t, bytes[4], u8('C'))
+	testing.expect_value(t, string(frame_without_padding(&e)), "𐍈C")
 }

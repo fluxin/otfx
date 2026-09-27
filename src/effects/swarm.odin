@@ -5,7 +5,6 @@ import engine "../engine"
 import "core:fmt"
 import "core:math"
 import "core:math/ease"
-import "core:math/rand"
 import "core:sort"
 
 Swarm_Config :: struct {
@@ -194,13 +193,13 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 
 	for group in 0 ..< groups {
 		for id in engine.group_members(s.swarms, group) do s.group_by_index[s.index_by_id[id]] = group
-		area_count := rand.int_range(
+		area_count := engine.random_range(
 			s.config.swarm_area_count_range.lo,
 			s.config.swarm_area_count_range.hi + 1,
 		)
 		stages := area_count * 3 + 1
 		s.group_stage_counts[group] = stages
-		base_color := s.config.base_colors[rand.int_max(len(s.config.base_colors))]
+		base_color := s.config.base_colors[engine.random_below(len(s.config.base_colors))]
 		for entry in 0 ..< SWARM_FLASH_ENTRIES {
 			step := entry < 8 ? entry : (entry < 18 ? 7 : 25 - entry)
 			s.flash_colors[group * SWARM_FLASH_ENTRIES + entry] = engine.gradient_between_step(
@@ -221,7 +220,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 			// chooses the next focus from a large circle around it. That shared
 			// area data is the coordination domain for every member of a swarm.
 			circle := engine.find_coords_on_circle(last_focus, focus_radius, 0, false)
-			rand.shuffle(circle[:])
+			engine.random_shuffle(circle[:])
 			next_focus: engine.Coord
 			found := false
 			for p in circle {
@@ -242,7 +241,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 				base_stage := area * 3
 				for inner in 0 ..< 3 {
 					s.waypoints[i * s.stage_stride + base_stage + inner] =
-						area_coords[area][rand.int_max(len(area_coords[area]))]
+						area_coords[area][engine.random_below(len(area_coords[area]))]
 				}
 			}
 			s.waypoints[i * s.stage_stride + stages - 1] = initial_coords[id]
@@ -348,7 +347,7 @@ swarm_plan_coordinate_area :: proc(
 	for id in engine.group_members(s.swarms, group) {
 		i := s.index_by_id[id]
 		if i == leader || plan_stages[i] < 0 || plan_stages[i] >= stage do continue
-		if rand.float64() >= s.config.swarm_coordination do continue
+		if engine.random_float() >= s.config.swarm_coordination do continue
 		old_stage := plan_stages[i]
 		old_row := swarm_lane_index(s, i, old_stage)
 		s.lane_ends[old_row] = tick
@@ -427,7 +426,7 @@ swarm_launch_group :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 	}
 }
 
-swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool {
+swarm_next :: proc(s: ^Swarm_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	for s.next_launch_group >= 0 && s.tick >= s.group_start_ticks[s.next_launch_group] do swarm_launch_group(s, e)
 	if len(s.active_indexes) == 0 && s.next_launch_group < 0 do return false
 

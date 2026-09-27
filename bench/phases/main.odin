@@ -3,7 +3,6 @@ package main
 import "../../src/effects"
 import "../../src/engine"
 import "core:fmt"
-import "core:math/rand"
 import "core:mem"
 import "core:os"
 import "core:time"
@@ -13,7 +12,7 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 	mem.dynamic_arena_init(&arena)
 	defer mem.dynamic_arena_destroy(&arena)
 	context.allocator = mem.dynamic_arena_allocator(&arena)
-	rand.reset_u64(1)
+	engine.random_seed(1)
 	cfg := engine.config_default()
 	cfg.frame_rate = 0
 	e, err := engine.engine_make(input, cfg)
@@ -44,7 +43,7 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 		s := e.stats
 		other := playback - update - s.compose - s.emit - s.write
 		fmt.eprintf(
-			"%v\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			"%v\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
 			kind,
 			sample,
 			frames,
@@ -54,17 +53,11 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 			time.duration_milliseconds(s.write),
 			time.duration_milliseconds(playback),
 			time.duration_milliseconds(other),
-			s.dirty_rows,
-			s.max_dirty_rows,
-			s.parts,
-			s.max_parts,
+			s.runs,
+			s.output_bytes,
 			s.write_calls,
 			s.write_bytes,
 			s.candidate_visits,
-			s.cells,
-			s.blank_cells,
-			s.blank_spans,
-			s.cursor_moves,
 			s.patched_cells,
 			s.cell_bytes_written,
 			s.ownership_visits,
@@ -93,7 +86,7 @@ main :: proc() {
 	defer delete(input)
 	when engine.FRAME_STATS_ENABLED {
 		fmt.eprintln(
-			"effect\tsample\tframes\tupdate_ms\tcompose_ms\temit_ms\twrite_ms\tplayback_ms\tother_ms\tdirty_rows\tmax_dirty_rows\tdescriptors\tmax_descriptors\twritev_calls\twrite_bytes\tcandidate_visits\tcells\tblank_cells\tblank_spans\tcursor_moves\tpatched_cells\tcell_bytes_written\townership_visits",
+			"effect\tsample\tframes\tupdate_ms\tcompose_ms\temit_ms\twrite_ms\tplayback_ms\tother_ms\truns\toutput_bytes\twrite_calls\twrite_bytes\tcandidate_visits\tpatched_cells\tcell_bytes_written\townership_visits",
 		)
 	} else {fmt.eprintln("effect\tsample\tframes\tupdate_ms\tframe_build_ms\tplayback_ms")}
 	for kind in ([]effects.Effect_Kind{.Colorshift, .Decrypt, .Binarypath, .Burn, .Laseretch, .Rain, .Print}) {

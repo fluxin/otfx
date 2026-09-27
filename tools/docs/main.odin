@@ -14,9 +14,8 @@ import "core:strings"
 // Terminal-cell captures, not ANSI parses: the tool steps the real effect and
 // renderer pipeline and rasterizes the resulting cell grid.
 //
-// Geometry, seed and framing match the upstream ttfx gallery so the two sets of
-// previews are comparable side by side -- same 81x10 Omarchy logo on an 84x13
-// canvas, same centred anchors, same 7x13 cells.
+// Keep the upstream ttfx gallery's geometry, seed and framing, with the local
+// FLUXIN banner on an 84x13 canvas, centred anchors, and 7x13 cells.
 Preview_Width :: 84
 Preview_Height :: 13
 Preview_Seed :: u64(3)
@@ -61,7 +60,7 @@ Background :: image.RGB_Pixel{0x12, 0x12, 0x1a}
 Foreground :: image.RGB_Pixel{0xc8, 0xc8, 0xd0}
 
 Logo_Env :: "OTFX_DOCS_TEXT_FILE"
-Logo_Path :: "/.local/share/omarchy/logo.txt"
+Logo_Path :: "docs/banner.txt"
 
 Raster :: struct {
 	width, height: int,
@@ -398,14 +397,11 @@ gif_write_preview :: proc(
 	return true
 }
 
-// Upstream reads the same file through TTFX_DEMO_TEXT_FILE. Reading it rather
-// than committing a copy keeps someone else's logo out of the repository.
+// Keep the gallery input in the repository so regeneration is reproducible.
 load_text :: proc() -> (string, bool) {
 	path := os.get_env(Logo_Env, context.allocator)
 	if path == "" {
-		home := os.get_env("HOME", context.allocator)
-		defer delete(home)
-		path = strings.concatenate({home, Logo_Path}, context.allocator)
+		path = strings.clone(Logo_Path, context.allocator)
 	}
 	defer delete(path)
 	data, err := os.read_entire_file(path, context.allocator)

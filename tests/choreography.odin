@@ -2,7 +2,6 @@ package regression
 
 import "../src/effects"
 import "../src/engine"
-import "core:math/rand"
 import "core:mem"
 import "core:strings"
 import "core:testing"
@@ -14,10 +13,15 @@ smoke_cloud_arrivals :: proc(t: ^testing.T) {
 	for size in ([]engine.Coord{{1, 1}, {1, 40}, {40, 1}, {40, 12}}) {
 		arrivals := make([]int, size.column * size.row)
 		again := make([]int, len(arrivals))
-		rand.reset_u64(42)
-		effects.smoke_arrivals(arrivals, size.column)
-		rand.reset_u64(42)
-		effects.smoke_arrivals(again, size.column)
+		order := make([]int, len(arrivals))
+		engine.random_seed(42)
+		effects.smoke_arrivals(arrivals, order, size.column)
+		engine.random_seed(42)
+		effects.smoke_arrivals(again, order, size.column)
+		// Flood order visits every cell once, with nondecreasing arrivals.
+		for cell, i in order {
+			if i > 0 do testing.expect(t, arrivals[order[i - 1]] <= arrivals[cell])
+		}
 		latest := 0
 		for arrival, i in arrivals {
 			testing.expect_value(t, arrival, again[i])
@@ -106,7 +110,7 @@ laseretch_order_is_spatial :: proc(t: ^testing.T) {
 		s := effects.Laseretch_State {
 			config = effects.laseretch_config_default(),
 		}
-		rand.reset_u64(42)
+		engine.random_seed(42)
 		effects.laseretch_build(&s, &e)
 		free_all(context.temp_allocator)
 		seen := make([]bool, len(e.particles))
@@ -151,7 +155,7 @@ burn_grows_a_connected_front :: proc(t: ^testing.T) {
 	s := effects.Burn_State {
 		config = effects.burn_config_default(),
 	}
-	rand.reset_u64(42)
+	engine.random_seed(42)
 	effects.burn_build(&s, &e)
 	free_all(context.temp_allocator)
 	starts := make([]int, len(s.characters))
@@ -209,7 +213,7 @@ laseretch_sparks_cool_during_flight :: proc(t: ^testing.T) {
 		config = effects.laseretch_config_default(),
 	}
 	s.config.etch_delay, s.config.spark_cooling_frames = 1000, 2
-	rand.reset_u64(42)
+	engine.random_seed(42)
 	effects.laseretch_build(&s, &e)
 	free_all(context.temp_allocator)
 	for _ in 0 ..< 3 do step_frame(effects.laseretch_next, &s, &e)

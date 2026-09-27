@@ -2,7 +2,6 @@ package effects
 
 import "../engine"
 import "core:fmt"
-import "core:math/rand"
 
 Decrypt_Config :: struct {
 	typing_speed:             int,
@@ -65,7 +64,8 @@ Decrypt_Block_Symbols :: [4]rune{'▉', '▓', '▒', '░'}
 Decrypt_State :: struct {
 	config:              Decrypt_Config,
 	characters:          [dynamic]engine.Particle_Id,
-	final_colors:        [dynamic]engine.Color,
+	final_index:         [dynamic]int, // spectrum index by character slot
+	fades:               engine.Gradient_Steps, // fades to each spectrum entry
 	typing_start_ticks:  [dynamic]int,
 	typing_previous:     [dynamic]int,
 	typing_changes:      [dynamic]engine.Sample_Change,
@@ -127,14 +127,20 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.final_index = make([dynamic]int, n)
+	s.fades = engine.gradient_steps_make(e, engine.Color{0xff, 0xff, 0xff}, spectrum[:], 10)
 	s.typing_start_ticks = make([dynamic]int, n)
 	s.typing_previous = make([dynamic]int, n)
 	s.typing_changes = make([dynamic]engine.Sample_Change, n)
-	typing_colors := make([dynamic]engine.Color, n * Decrypt_Typing_Frames)
 	typing_symbols := make([dynamic]u16, n)
-	defer delete(typing_colors)
 	defer delete(typing_symbols)
+	// Typing frames reuse the ciphertext palette's prepared appearances.
+	palette := max(len(s.config.ciphertext_colors), 1)
+	s.cipher_codes = make([dynamic]engine.Appearance_Id, palette)
+	for color, ci in s.config.ciphertext_colors {
+		s.cipher_codes[ci] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+	}
+	s.typing_codes = make([dynamic]engine.Appearance_Id, n * Decrypt_Typing_Frames)
 	s.color_index = make([dynamic]int, n)
 	s.fast_symbols = make([dynamic]u16, n * Decrypt_Fast_Frames)
 	s.slow_symbols = make([dynamic]u16, n * Decrypt_Slow_Max_Frames)
@@ -147,31 +153,33 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 
 	// Preserve source RNG ordering: make all typing rows, then all decrypt rows.
 	for id, i in s.characters {
-		s.final_colors[i] = engine.gradient_sample(
+		s.final_index[i] = engine.gradient_sample_index(
 			sampler,
-			spectrum[:],
+			len(spectrum),
 			e.particles.initial_coord[id],
 		)
 		s.typing_start_ticks[i] = -1
 		s.typing_previous[i] = -1
 		base := i * Decrypt_Typing_Frames
-		for frame in 0 ..< Decrypt_Typing_Frames - 1 do typing_colors[base + frame] = s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
-		typing_symbols[i] = u16(rand.int_max(len(encrypted_symbols)))
-		typing_colors[base + Decrypt_Typing_Frames - 1] =
-			s.config.ciphertext_colors[rand.int_max(len(s.config.ciphertext_colors))]
+		for frame in 0 ..< Decrypt_Typing_Frames - 1 {
+			s.typing_codes[base + frame] = s.cipher_codes[engine.random_below(len(s.config.ciphertext_colors))]
+		}
+		typing_symbols[i] = u16(engine.random_below(len(encrypted_symbols)))
+		s.typing_codes[base + Decrypt_Typing_Frames - 1] =
+			s.cipher_codes[engine.random_below(len(s.config.ciphertext_colors))]
 	}
 	for _, i in s.characters {
-		s.color_index[i] = rand.int_max(len(s.config.ciphertext_colors))
+		s.color_index[i] = engine.random_below(len(s.config.ciphertext_colors))
 		fast_base := i * Decrypt_Fast_Frames
-		for frame in 0 ..< Decrypt_Fast_Frames do s.fast_symbols[fast_base + frame] = u16(rand.int_max(len(encrypted_symbols)))
+		for frame in 0 ..< Decrypt_Fast_Frames do s.fast_symbols[fast_base + frame] = u16(engine.random_below(len(encrypted_symbols)))
 		slow_base := i * Decrypt_Slow_Max_Frames
-		slow_count := rand.int_range(1, Decrypt_Slow_Max_Frames + 1)
+		slow_count := engine.random_range(1, Decrypt_Slow_Max_Frames + 1)
 		s.slow_counts[i] = u8(slow_count)
 		total := 0
 		for frame in 0 ..< slow_count {
-			s.slow_symbols[slow_base + frame] = u16(rand.int_max(len(encrypted_symbols)))
-			duration := rand.int_range(3, 6)
-			if rand.int_range(0, 101) <= 30 do duration = rand.int_range(35, 60)
+			s.slow_symbols[slow_base + frame] = u16(engine.random_below(len(encrypted_symbols)))
+			duration := engine.random_range(3, 6)
+			if engine.random_range(0, 101) <= 30 do duration = engine.random_range(35, 60)
 			total += duration
 			s.slow_end_ticks[slow_base + frame] = total
 		}
@@ -182,35 +190,23 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 		)
 	}
 
-	palette := max(len(s.config.ciphertext_colors), 1)
-	s.cipher_codes = make([dynamic]engine.Appearance_Id, palette)
-	for color, ci in s.config.ciphertext_colors {
-		s.cipher_codes[ci] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
-	}
 	s.typing_glyphs = make([dynamic]rune, n * Decrypt_Typing_Frames)
-	s.typing_codes = make([dynamic]engine.Appearance_Id, n * Decrypt_Typing_Frames)
 	blocks := Decrypt_Block_Symbols
 	for i in 0 ..< n {
 		for frame in 0 ..< Decrypt_Typing_Frames {
 			symbol :=
 				frame < Decrypt_Typing_Frames - 1 ? blocks[frame] : encrypted_symbols[int(typing_symbols[i])]
 			s.typing_glyphs[i * Decrypt_Typing_Frames + frame] = symbol
-			s.typing_codes[i * Decrypt_Typing_Frames + frame] = engine.prepare_appearance(
-				e,
-				engine.Appearance {
-					colors = {fg = typing_colors[i * Decrypt_Typing_Frames + frame]},
-				},
-			)
 		}
 	}
 }
 
-decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
+decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.phase == .Typing {
 		if s.typing_head == len(s.characters) && s.typing_tick >= s.typing_finish_tick {
 			s.phase = .Decrypting
 		} else {
-			if s.typing_head < len(s.characters) && rand.int_range(0, 101) <= 75 {
+			if s.typing_head < len(s.characters) && engine.random_range(0, 101) <= 75 {
 				for _ in 0 ..< s.config.typing_speed {
 					if s.typing_head == len(s.characters) do break
 					i := s.typing_head
@@ -294,10 +290,10 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 				write += 1
 				continue
 			}
-			appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
-			appearance := engine.Appearance{}
+			step := min(discovered_tick / 5, 10)
+			if discovered_tick == 0 do engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			if s.color_handling == .Dynamic {
-				step := min(discovered_tick / 5, 10)
+				appearance := engine.Appearance{}
 				engine.dynamic_gradient_to_input(
 					&appearance,
 					engine.Color{0xff, 0xff, 0xff},
@@ -305,20 +301,11 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool {
 					10,
 					step,
 				)
+				engine.set_appearance(e, id, appearance)
 			} else {
-				if discovered_tick < Decrypt_Discovered_Ticks {
-					appearance.colors.fg = engine.gradient_between_step(
-						engine.Color{0xff, 0xff, 0xff},
-						s.final_colors[i],
-						10,
-						min(discovered_tick / 5, 10),
-					)
-				} else {
-					appearance.colors.fg = s.final_colors[i]
-				}
+				// Step 10 is the exact final color, also held after discovery.
+				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], step))
 			}
-			if discovered_tick == 0 do engine.set_symbol(e, id, appearance_symbol)
-			engine.set_appearance(e, id, appearance)
 			if discovered_tick < Decrypt_Discovered_Ticks {
 				s.slow_active[write] = i
 				write += 1

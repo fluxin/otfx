@@ -3,7 +3,6 @@ package effects
 import "../engine"
 
 import "core:fmt"
-import "core:math/rand"
 
 Binarypath_Config :: struct {
 	final_gradient_stops:     [dynamic]engine.Color,
@@ -72,7 +71,6 @@ Binarypath_State :: struct {
 	bit_ids:            [dynamic]engine.Particle_Id,
 	final_colors:       [dynamic]engine.Color,
 	final_colors_by_id: [dynamic]engine.Color,
-	bit_colors:         [dynamic]engine.Color,
 	origins:            [dynamic]engine.Coord,
 	turns:              [dynamic]engine.Coord,
 	first_lengths:      [dynamic]f64,
@@ -125,7 +123,6 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.final_colors_by_id = make([dynamic]engine.Color, len(e.particles))
 	s.bit_ids = make([dynamic]engine.Particle_Id, n * 8)
-	s.bit_colors = make([dynamic]engine.Color, n * 8)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.turns = make([dynamic]engine.Coord, n)
 	s.first_lengths = make([dynamic]f64, n)
@@ -144,7 +141,7 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		visible_flags[id] -= {.Visible}
 		origin := engine.canvas_random_coord(e.canvas, true, false)
 		turn :=
-			rand.int_max(2) == 0 ? engine.coord(origin.column, target.row) : engine.coord(target.column, origin.row)
+			engine.random_below(2) == 0 ? engine.coord(origin.column, target.row) : engine.coord(target.column, origin.row)
 		first := engine.line_length(origin, turn, true)
 		total := first + engine.line_length(turn, target, true)
 		s.origins[i], s.turns[i] = origin, turn
@@ -169,9 +166,8 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 				plain,
 				s.origins[i],
 			)
-			color := s.config.binary_colors[rand.int_max(len(s.config.binary_colors))]
+			color := s.config.binary_colors[engine.random_below(len(s.config.binary_colors))]
 			s.bit_ids[i * 8 + bit] = bit_id
-			s.bit_colors[i * 8 + bit] = color
 			e.particles.flags[bit_id] -= {.Visible}
 			e.particles.layer[bit_id] = 1
 			engine.set_foreground(e, bit_id, color)
@@ -194,7 +190,7 @@ binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int
 	return engine.coord_on_line(s.turns[i], e.particles.initial_coord[s.characters[i]], t)
 }
 
-binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
+binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.wiping {
 		groups := len(s.final_wipe.spans)
 		if s.wipe_group >= groups do return false
@@ -223,7 +219,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 	}
 
 	for len(s.active) < s.max_active && len(s.pending) > 0 {
-		pending_index := rand.int_max(len(s.pending))
+		pending_index := engine.random_below(len(s.pending))
 		rep := s.pending[pending_index]
 		last := len(s.pending) - 1
 		s.pending[pending_index] = s.pending[last]
@@ -239,17 +235,16 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool {
 	for rep in s.active {
 		age := s.tick - s.starts[rep]
 		if age <= s.travel_steps[rep] + 7 {
-			for bit in 0 ..< 8 {
-				bit_age := age - bit
-				if bit_age < 0 do continue
-				id := s.bit_ids[rep * 8 + bit]
-				engine.set_particle(
-					e,
-					id,
-					coord = binarypath_coord_at(s, e, rep, bit_age),
-					visible = true,
-					layer = e.particles[id].layer,
-				)
+			// Bit k at age a samples the path at a - k, which is where bit k - 1
+			// was published on the previous tick. Snapshot those coordinates
+			// before any write, so only the leading bit evaluates the path.
+			bits := s.bit_ids[rep * 8:rep * 8 + 8]
+			trail: [8]engine.Coord
+			trail[0] = binarypath_coord_at(s, e, rep, age)
+			for bit in 1 ..< 8 do trail[bit] = e.particles.current_coord[bits[bit - 1]]
+			for id, bit in bits {
+				if age < bit do continue
+				engine.set_particle(e, id, coord = trail[bit], visible = true, layer = e.particles[id].layer)
 			}
 			s.active[write] = rep
 			write += 1

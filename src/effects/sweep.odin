@@ -2,7 +2,6 @@ package effects
 
 import "../engine"
 import "core:math/ease"
-import "core:math/rand"
 
 import "core:fmt"
 
@@ -71,15 +70,15 @@ gray_shades: [5]engine.Color = {
 
 Sweep_State :: struct {
 	config:                       Sweep_Config,
-	frames:                       engine.Frame_Timeline,
-	first_frame_spans:            [dynamic]engine.Span,
-	second_frame_spans:           [dynamic]engine.Span,
+	first_grays:                  [dynamic]u8, // gray_shades index per particle and symbol
+	second_colors:                [dynamic]u32, // second_palette index per particle and symbol
+	finals:                       [dynamic]engine.Color_Pair, // per particle
+	second_palette:               [dynamic]engine.Color,
 	start_ticks:                  [dynamic]int,
 	active:                       [dynamic]engine.Particle_Id,
 	active_phase:                 [dynamic]i8, // -1 inactive, 0 first lane, 1 second lane
 	reveal:                       engine.Group_Reveal,
 	second_groups:                engine.Particle_Groups,
-	dynamic_second_sweep_palette: [dynamic]engine.Color,
 	first_phase:                  bool,
 	complete:                     bool,
 	color_handling:               engine.Existing_Color_Handling,
@@ -113,31 +112,29 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	)
 	defer delete(chars[:])
 	reserve(&s.active, len(chars))
-	s.first_frame_spans = make([dynamic]engine.Span, len(e.particles))
-	s.second_frame_spans = make([dynamic]engine.Span, len(e.particles))
+	symbol_count := len(s.config.sweep_symbols)
+	s.first_grays = make([dynamic]u8, len(e.particles) * symbol_count)
+	s.second_colors = make([dynamic]u32, len(e.particles) * symbol_count)
+	s.finals = make([dynamic]engine.Color_Pair, len(e.particles))
 	s.start_ticks = make([dynamic]int, len(e.particles))
 	s.active_phase = make([dynamic]i8, len(e.particles))
 	for i in 0 ..< len(s.active_phase) {
 		s.active_phase[i] = -1
 		s.start_ticks[i] = -1
 	}
-	span_length := len(s.config.sweep_symbols) + 1
-	// Both sweeps fill every column; no per-frame append or preliminary clear.
-	non_zero_resize(&s.frames, len(chars) * span_length * 2)
 	switch s.color_handling {
 	case .Dynamic:
 		for id in e.particle_sets.input {
 			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-			if fg, ok := style.colors.fg.?; ok do append(&s.dynamic_second_sweep_palette, fg)
-			if bg, ok := style.colors.bg.?; ok do append(&s.dynamic_second_sweep_palette, bg)
+			if fg, ok := style.colors.fg.?; ok do append(&s.second_palette, fg)
+			if bg, ok := style.colors.bg.?; ok do append(&s.second_palette, bg)
 		}
-		if len(s.dynamic_second_sweep_palette) == 0 {
-			append(&s.dynamic_second_sweep_palette, ..spectrum[:])
-		}
+		if len(s.second_palette) == 0 do append(&s.second_palette, ..spectrum[:])
 	case .Ignore, .Always:
+		append(&s.second_palette, ..spectrum[:])
 	}
 
-	for id, i in chars {
+	for id in chars {
 		final: engine.Color_Pair
 		switch s.color_handling {
 		case .Dynamic:
@@ -159,43 +156,14 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 				}
 			}
 		}
-		sym := e.particles.initial_symbol[engine.Particle_Id(id)]
-
-		first_start := i * span_length * 2
-		first := s.frames[first_start:first_start + span_length]
-		for symbol, frame in s.config.sweep_symbols {
-			gray := gray_shades[rand.int_max(5)]
-			first.symbol[frame] = symbol
-			first.appearance[frame] = engine.Appearance {
-				colors = {fg = gray},
-			}
-			first.duration[frame] = 5
+		s.finals[id] = final
+		lanes := int(id) * symbol_count
+		for frame in 0 ..< symbol_count {
+			s.first_grays[lanes + frame] = u8(engine.random_below(len(gray_shades)))
 		}
-		first.symbol[span_length - 1] = sym
-		first.appearance[span_length - 1] = engine.Appearance {
-			colors = {fg = gray_shades[1]},
+		for frame in 0 ..< symbol_count {
+			s.second_colors[lanes + frame] = u32(engine.random_below(len(s.second_palette)))
 		}
-		first.duration[span_length - 1] = 1
-		s.first_frame_spans[id] = {first_start, span_length}
-
-		second_start := first_start + span_length
-		second := s.frames[second_start:second_start + span_length]
-		for symbol, frame in s.config.sweep_symbols {
-			colors :=
-				s.color_handling == .Dynamic ? s.dynamic_second_sweep_palette[:] : spectrum[:]
-			col := colors[rand.int_max(len(colors))]
-			second.symbol[frame] = symbol
-			second.appearance[frame] = engine.Appearance {
-				colors = {fg = col},
-			}
-			second.duration[frame] = 5
-		}
-		second.symbol[span_length - 1] = sym
-		second.appearance[span_length - 1] = engine.Appearance {
-			colors = final,
-		}
-		second.duration[span_length - 1] = 1
-		s.second_frame_spans[id] = {second_start, span_length}
 	}
 
 	s.reveal.groups = engine.get_particles_grouped(
@@ -221,7 +189,7 @@ sweep_build :: proc(s: ^Sweep_State, e: ^engine.Engine) {
 	s.first_phase = true
 }
 
-sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
+sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.active) == 0 && s.complete {
 		return false
 	}
@@ -254,14 +222,9 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
 	for id in s.active {
 		phase := s.active_phase[id]
 		if phase < 0 do continue
-		span := phase == 0 ? s.first_frame_spans[id] : s.second_frame_spans[id]
 		age := s.tick - s.start_ticks[id]
-		if age % 5 == 0 {
-			frame := age / 5
-			engine.set_symbol(e, id, s.frames[span.start + frame].symbol)
-			engine.set_appearance(e, id, s.frames[span.start + frame].appearance)
-		}
-		if age + 1 == (span.len - 1) * 5 + 1 {
+		if age % 5 == 0 do sweep_publish(s, e, id, phase, age / 5)
+		if age + 1 == len(s.config.sweep_symbols) * 5 + 1 {
 			s.active_phase[id] = -1
 		} else {
 			s.active[write] = id
@@ -271,4 +234,20 @@ sweep_next :: proc(s: ^Sweep_State, e: ^engine.Engine) -> bool {
 	resize(&s.active, write)
 	s.tick += 1
 	return true
+}
+
+// Each sweep shows its symbols in turn, five ticks apiece, then the particle's
+// own glyph in that sweep's final colors.
+sweep_publish :: proc(s: ^Sweep_State, e: ^engine.Engine, id: engine.Particle_Id, phase: i8, frame: int) {
+	symbols := s.config.sweep_symbols[:]
+	if frame == len(symbols) {
+		final := phase == 0 ? engine.Color_Pair{fg = gray_shades[1]} : s.finals[id]
+		engine.set_symbol(e, id, e.particles.initial_symbol[id])
+		engine.set_appearance(e, id, engine.Appearance{colors = final})
+		return
+	}
+	lane := int(id) * len(symbols) + frame
+	color := phase == 0 ? gray_shades[s.first_grays[lane]] : s.second_palette[s.second_colors[lane]]
+	engine.set_symbol(e, id, symbols[frame])
+	engine.set_appearance(e, id, engine.Appearance{colors = {fg = color}})
 }

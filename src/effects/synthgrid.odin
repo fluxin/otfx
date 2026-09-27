@@ -4,7 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math"
-import "core:math/rand"
 
 Synthgrid_Config :: struct {
 	grid_gradient_stops:     [dynamic]engine.Color,
@@ -326,13 +325,13 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		if (.Fill not_in fill_flags[id]) do s.final_colors[id] = engine.gradient_sample(text_sampler, text_spectrum[:], initial_coords[id])
 		visible_flags[id] -= {.Visible}
 		s.generation_slot_by_id[id] = slot
-		frame_count := rand.int_range(15, SYNTHGRID_MAX_GENERATION_FRAMES + 1)
+		frame_count := engine.random_range(15, SYNTHGRID_MAX_GENERATION_FRAMES + 1)
 		s.generation_frame_counts[slot] = u8(frame_count)
 		base := slot * SYNTHGRID_MAX_GENERATION_FRAMES
 		for frame in 0 ..< frame_count {
 			s.generation_symbols[base + frame] =
-				s.config.text_generation_symbols[rand.int_max(len(s.config.text_generation_symbols))]
-			s.generation_colors[base + frame] = text_spectrum[rand.int_max(len(text_spectrum))]
+				s.config.text_generation_symbols[engine.random_below(len(s.config.text_generation_symbols))]
+			s.generation_colors[base + frame] = text_spectrum[engine.random_below(len(text_spectrum))]
 		}
 	}
 	group_count := len(s.groups.spans)
@@ -342,12 +341,12 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		s.group_order[group] = group
 		for id in engine.group_members(s.groups, group) do s.group_by_id[id] = group
 	}
-	rand.shuffle(s.group_order[:])
+	engine.random_shuffle(s.group_order[:])
 
 	s.active_limit = max(int(math.ceil(f64(group_count) * s.config.max_active_blocks)), 1)
 }
 
-synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool {
+synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	visible_flags := e.particles.flags
 
 	if s.phase == .Grid_Expand {

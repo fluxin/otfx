@@ -1,7 +1,6 @@
 package effects
 
 import "../engine"
-import "core:math/rand"
 
 import "core:fmt"
 
@@ -118,10 +117,10 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 		e.particles.flags[id] -= {.Visible}
 		append(&s.pending, id)
 	}
-	rand.shuffle(s.pending[:])
+	engine.random_shuffle(s.pending[:])
 }
 
-randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool {
+randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if len(s.pending) == 0 && len(s.active_slots) == 0 {
 		return false
 	}

@@ -101,7 +101,7 @@ gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]C
 
 // Sample the same integer-delta interpolation used by gradient_make without
 // materializing the two-stop gradient. Index == steps is the exact end color.
-gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color {
+gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color #no_bounds_check {
 	assert(steps >= 1 && index >= 0 && index <= steps)
 	if index == steps do return end
 	start_r, start_g, start_b := int(start.r), int(start.g), int(start.b)
@@ -116,10 +116,12 @@ gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color {
 }
 
 gradient_color_at_fraction :: proc(spectrum: []Color, fraction: f64) -> Color {
+	return spectrum[gradient_index_at_fraction(len(spectrum), fraction)]
+}
+
+gradient_index_at_fraction :: proc(count: int, fraction: f64) -> int {
 	assert(fraction >= 0 && fraction <= 1)
-	n := len(spectrum)
-	index := clamp(int(math.ceil(fraction * f64(n))) - 1, 0, n - 1)
-	return spectrum[index]
+	return clamp(int(math.ceil(fraction * f64(count))) - 1, 0, count - 1)
 }
 
 gradient_index_at_ratio :: #force_inline proc(numerator, denominator, count: int) -> int {
@@ -166,18 +168,22 @@ gradient_sampler :: proc(
 }
 
 gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Color {
+	return spectrum[gradient_sample_index(s, len(spectrum), c)]
+}
+
+// The spectrum index gradient_sample reads, for effects that key build-time
+// tables by final color.
+gradient_sample_index :: proc(s: Gradient_Sampler, count: int, c: Coord) -> int {
 	switch s.direction {
 	case .Vertical:
-		return(
-			spectrum[gradient_index_at_ratio(c.row - s.min_row + 1, s.max_row - s.min_row + 1, len(spectrum))] \
-		)
+		return gradient_index_at_ratio(c.row - s.min_row + 1, s.max_row - s.min_row + 1, count)
 	case .Horizontal:
-		return(
-			spectrum[gradient_index_at_ratio(c.column - s.min_col + 1, s.max_col - s.min_col + 1, len(spectrum))] \
-		)
+		return gradient_index_at_ratio(c.column - s.min_col + 1, s.max_col - s.min_col + 1, count)
 	case .Diagonal:
-		return(
-			spectrum[gradient_index_at_ratio((c.row - s.min_row + 1) * 2 + c.column - s.min_col + 1, (s.max_row - s.min_row + 1) * 2 + s.max_col - s.min_col + 1, len(spectrum))] \
+		return gradient_index_at_ratio(
+			(c.row - s.min_row + 1) * 2 + c.column - s.min_col + 1,
+			(s.max_row - s.min_row + 1) * 2 + s.max_col - s.min_col + 1,
+			count,
 		)
 	case .Radial:
 		distance, ok := find_normalized_distance_from_center(
@@ -187,8 +193,8 @@ gradient_sample :: proc(s: Gradient_Sampler, spectrum: []Color, c: Coord) -> Col
 			s.max_col,
 			c,
 		)
-		if !ok do return spectrum[0]
-		return gradient_color_at_fraction(spectrum, clamp(distance, 0.0, 1.0))
+		if !ok do return 0
+		return gradient_index_at_fraction(count, clamp(distance, 0.0, 1.0))
 	}
 	unreachable()
 }

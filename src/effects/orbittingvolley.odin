@@ -197,9 +197,10 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		engine.coord(e.canvas.right, e.canvas.bottom),
 		engine.coord(e.canvas.left, e.canvas.bottom),
 	}
+	launchers := engine.particle_batch(e, 4)
 	for i in 0 ..< 4 {
 		appearance := engine.prepare_appearance(e, engine.Appearance{})
-		id := engine.add_particle(e, s.launcher_symbols[i], appearance, starts[i])
+		id := engine.add_particle(&launchers, s.launcher_symbols[i], appearance, starts[i])
 		s.launcher_ids[i] = id
 		s.launcher_positions[i] = starts[i]
 		e.particles.layer[id] = 2
@@ -241,7 +242,7 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	}
 }
 
-orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bool {
+orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	active := !s.launchers_hidden
 	for i in s.active_indexes {
 		if s.tick - s.launch_starts[i] < s.launch_steps[i] {

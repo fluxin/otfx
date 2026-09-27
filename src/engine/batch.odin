@@ -57,7 +57,7 @@ sequence_batch :: proc(
 	factors: []f64,
 	first_tick: int,
 	keypoints: []Sequence_Keypoint,
-) {
+) #no_bounds_check {
 	assert(len(factors) >= len(frames))
 	for keypoint in keypoints {
 		assert(keypoint.stop >= keypoint.start)
@@ -103,68 +103,7 @@ sequence_batch :: proc(
 	}
 }
 
-// Frame timeline construction and batched sample updates.
-
-Frame :: struct {
-	symbol:     rune,
-	appearance: Appearance,
-	duration:   int,
-}
-
-// Effect-owned frame lanes use this contiguous SoA storage. Construction is
-// shared; each effect owns activation, tick arithmetic, and completion.
-Frame_Timeline :: #soa[dynamic]Frame
-
-timeline_append_frame :: #force_inline proc(
-	frames: ^Frame_Timeline,
-	symbol: rune,
-	appearance: Appearance,
-	duration: int,
-) {
-	assert(duration >= 1)
-	append(frames, Frame{symbol, appearance, duration})
-}
-
-create_hold_timeline :: proc(
-	frames: ^Frame_Timeline,
-	symbol: rune,
-	appearance: Appearance,
-	duration, count: int,
-) -> Span {
-	assert(count >= 1 && duration >= 1)
-	start := len(frames^)
-	// Every column of the appended span is assigned before it is published.
-	non_zero_resize(frames, start + count)
-	for &value in frames.symbol[start:len(frames^)] do value = symbol
-	for &value in frames.appearance[start:len(frames^)] do value = appearance
-	for &value in frames.duration[start:len(frames^)] do value = duration
-	return {start, count}
-}
-
-create_gradient_timeline :: proc(
-	frames: ^Frame_Timeline,
-	symbol: rune,
-	duration: int,
-	start, end: Color,
-	steps: int,
-) -> Span {
-	assert(steps >= 1 && duration >= 1)
-	timeline_start := len(frames^)
-	non_zero_resize(frames, timeline_start + steps + 1)
-	for &value in frames.symbol[timeline_start:len(frames^)] do value = symbol
-	for &value in frames.duration[timeline_start:len(frames^)] do value = duration
-	for &appearance, step in frames.appearance[timeline_start:len(frames^)] {
-		appearance = Appearance {
-			colors = {fg = gradient_between_step(start, end, steps, step)},
-		}
-	}
-	return {timeline_start, steps + 1}
-}
-
-create_timeline :: proc {
-	create_hold_timeline,
-	create_gradient_timeline,
-}
+// Batched sample updates.
 
 // Spread a shorter sequence across a longer gradient/symbol lane. Earlier
 // values receive the remainder, matching Python's apply_gradient_to_symbols.
@@ -193,7 +132,7 @@ sample_timeline_changes :: proc(
 	starts, previous: []int,
 	tick: int,
 	samples: []int,
-) -> []Sample_Change {
+) -> []Sample_Change #no_bounds_check {
 	assert(len(out) >= len(starts) && len(previous) == len(starts))
 	assert(len(samples) > 0)
 	count := 0
@@ -210,7 +149,7 @@ sample_timeline_changes :: proc(
 }
 
 // Shared dense-timeline sampler used by effects that keep start ticks.
-eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease) -> int {
+eased_timeline_index :: #force_inline proc(step, total_steps: int, fn: ease.Ease) -> int #no_bounds_check {
 	assert(total_steps >= 1)
 	ratio := f64(step) / f64(total_steps)
 	factor := ease.ease(fn, ratio)

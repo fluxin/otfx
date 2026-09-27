@@ -5,6 +5,7 @@ import "core:math"
 import "core:os"
 import "core:strconv"
 import linux "core:sys/linux"
+import "core:sys/posix"
 import "core:time"
 
 // Benchmark the Odin port against the Rust ttfx reference using their real
@@ -15,6 +16,10 @@ import "core:time"
 //   odin build bench -o:speed -out:bench/bench
 //   BENCH_MIN_SECONDS=1 ./bench/bench [repeats] [effect ...]
 //   BENCH_MATRIX_RAIN_TIME=1 ./bench/bench --paced 3
+//
+// BENCH_SINK=null|pipe|pty selects where children write (default null). With
+// pipe or pty the harness drains the output itself, so give it a second core:
+//   BENCH_SINK=pty taskset -c 1,2 ./bench/bench 3
 
 REPEATS_DEFAULT :: 5
 MIN_SAMPLE_SECONDS_DEFAULT :: 2.0
@@ -66,6 +71,70 @@ Effects :: [?]string {
 	"waves",
 	"wipe",
 	"thunderstorm",
+}
+
+// Where measured children write. Null measures effect work alone. A pipe or a
+// raw pseudo-terminal also measures delivering every byte to a reader that
+// drains it as fast as it can; a terminal emulator's own parsing is excluded.
+Sink :: enum {
+	Null,
+	Pipe,
+	Pty,
+}
+
+Sink_Names := [Sink]string {
+	.Null = "/dev/null",
+	.Pipe = "pipe",
+	.Pty  = "pty",
+}
+
+bench_sink :: proc() -> (Sink, bool) {
+	switch value := os.get_env("BENCH_SINK", context.temp_allocator); value {
+	case "", "null":
+		return .Null, true
+	case "pipe":
+		return .Pipe, true
+	case "pty":
+		return .Pty, true
+	case:
+		fmt.eprintfln("BENCH_SINK must be null, pipe or pty, not %s", value)
+		return .Null, false
+	}
+}
+
+Winsize :: struct {
+	rows, columns, x_pixels, y_pixels: u16,
+}
+
+// Linux's set-window-size request; the bindings only name the getter.
+TIOCSWINSZ :: 0x5414
+
+// A raw pseudo-terminal sized like the benchmark terminal: children see a
+// terminal, and every byte they write reaches the reader unchanged.
+open_raw_pty :: proc() -> (reader, writer: ^os.File, ok: bool) {
+	master := posix.posix_openpt({.RDWR, .NOCTTY})
+	if master < 0 do return
+	if posix.grantpt(master) != .OK || posix.unlockpt(master) != .OK {
+		posix.close(master)
+		return
+	}
+	slave := posix.open(posix.ptsname(master), {.RDWR, .NOCTTY})
+	if slave < 0 {
+		posix.close(master)
+		return
+	}
+	attributes: posix.termios
+	posix.tcgetattr(slave, &attributes)
+	attributes.c_iflag -= {.ICRNL, .IXON}
+	attributes.c_oflag -= {.OPOST}
+	attributes.c_lflag -= {.ECHO, .ICANON, .ISIG, .IEXTEN}
+	posix.tcsetattr(slave, .TCSANOW, &attributes)
+	size := Winsize {
+		rows    = BENCH_LINES,
+		columns = BENCH_COLUMNS,
+	}
+	linux.ioctl(linux.Fd(slave), TIOCSWINSZ, uintptr(&size))
+	return os.new_file(uintptr(master), "pty master"), os.new_file(uintptr(slave), "pty"), true
 }
 
 Bench_Run :: struct {
@@ -141,7 +210,15 @@ frame_count_append :: proc(bytes: []byte, matched: ^int) -> int {
 	return count
 }
 
-run_command :: proc(command: []string, input: []byte, capture_frames: bool) -> (Bench_Run, bool) {
+run_command :: proc(
+	command: []string,
+	input: []byte,
+	sink: Sink,
+	count_frames := false,
+) -> (
+	Bench_Run,
+	bool,
+) {
 	stdin_r, stdin_w, pipe_err := os.pipe()
 	if pipe_err != nil {
 		fmt.eprintfln("failed to create child stdin pipe: %v", pipe_err)
@@ -152,23 +229,30 @@ run_command :: proc(command: []string, input: []byte, capture_frames: bool) -> (
 		stdin   = stdin_r,
 	}
 
+	// With a reader, the parent drains every byte and counts frames from it.
 	stdout_r, stdout_w: ^os.File
-	if capture_frames {
+	switch sink {
+	case .Null:
+	case .Pipe:
 		stdout_r, stdout_w, pipe_err = os.pipe()
-		if pipe_err != nil {
-			os.close(stdin_r)
-			os.close(stdin_w)
-			fmt.eprintfln("failed to create child stdout pipe: %v", pipe_err)
-			return {}, false
-		}
-		desc.stdout = stdout_w
+	case .Pty:
+		pty_ok: bool
+		stdout_r, stdout_w, pty_ok = open_raw_pty()
+		if !pty_ok do pipe_err = .Unsupported
 	}
-	defer if capture_frames do os.close(stdout_r)
+	if pipe_err != nil {
+		os.close(stdin_r)
+		os.close(stdin_w)
+		fmt.eprintfln("failed to create child %s: %v", Sink_Names[sink], pipe_err)
+		return {}, false
+	}
+	desc.stdout = stdout_w
+	defer if stdout_r != nil do os.close(stdout_r)
 
 	start := time.tick_now()
 	process, start_err := os.process_start(desc)
 	os.close(stdin_r)
-	if capture_frames do os.close(stdout_w)
+	if stdout_w != nil do os.close(stdout_w)
 	if start_err != nil {
 		os.close(stdin_w)
 		fmt.eprintfln("failed to start %s: %v", command[0], start_err)
@@ -185,13 +269,18 @@ run_command :: proc(command: []string, input: []byte, capture_frames: bool) -> (
 	os.close(stdin_w)
 
 	frames := 0
-	if capture_frames {
-		buffer: [4096]byte
+	if stdout_r != nil {
+		// One pipe's default capacity per read. Timed runs only drain.
+		buffer: [64 * 1024]byte
 		matched := 0
 		output_done := false
 		for !output_done {
 			count, read_err := os.read(stdout_r, buffer[:])
-			if count > 0 do frames += frame_count_append(buffer[:count], &matched)
+			if count > 0 && count_frames do frames += frame_count_append(buffer[:count], &matched)
+			// A pty master reads EIO once the child closes its terminal.
+			if platform, is_platform := read_err.(os.Platform_Error); is_platform && platform == .EIO {
+				read_err = .EOF
+			}
 			switch read_err {
 			case nil:
 			case .EOF, .Broken_Pipe:
@@ -254,6 +343,7 @@ benchmark_summary :: proc(
 	input: []byte,
 	repeats: int,
 	minimum_seconds: f64,
+	sink: Sink,
 	paced := false,
 ) -> (
 	Bench_Summary,
@@ -261,7 +351,7 @@ benchmark_summary :: proc(
 ) {
 	batch_count := 1
 	if !paced {
-		probe, probe_ok := run_command(command, input, false)
+		probe, probe_ok := run_command(command, input, sink)
 		if !probe_ok do return {}, false
 		batch_count = max(1, int(math.ceil(minimum_seconds / (probe.wall_ms / 1000))))
 	}
@@ -271,7 +361,7 @@ benchmark_summary :: proc(
 	for _ in 0 ..< repeats {
 		start := time.tick_now()
 		for _ in 0 ..< batch_count {
-			run, run_ok := run_command(command, input, false)
+			run, run_ok := run_command(command, input, sink)
 			if !run_ok do return {}, false
 			total_cpu_ms += run.cpu_ms
 			peak_rss_kib = max(peak_rss_kib, run.rss_kib)
@@ -294,14 +384,23 @@ benchmark_summary :: proc(
 frame_count :: proc(binary, effect: string, input: []byte) -> (int, bool) {
 	command := command_make(binary, effect)
 	defer delete(command)
-	run, ok := run_command(command[:], input, true)
+	run, ok := run_command(command[:], input, .Pipe, count_frames = true)
 	return run.frames, ok
 }
 
-startup :: proc(binary: string, input: []byte, repeats: int, minimum_seconds: f64) -> (f64, bool) {
+startup :: proc(
+	binary: string,
+	input: []byte,
+	repeats: int,
+	minimum_seconds: f64,
+	sink: Sink,
+) -> (
+	f64,
+	bool,
+) {
 	command := command_make(binary, "slide")
 	defer delete(command)
-	summary, ok := benchmark_summary(command[:], input, repeats, minimum_seconds)
+	summary, ok := benchmark_summary(command[:], input, repeats, minimum_seconds, sink)
 	return summary.best_wall_ms, ok
 }
 
@@ -351,6 +450,8 @@ minimum_sample_seconds :: proc() -> f64 {
 main :: proc() {
 	repeats, selected, paced, options_ok := parse_options()
 	if !options_ok do os.exit(2)
+	sink, sink_ok := bench_sink()
+	if !sink_ok do os.exit(2)
 	defer delete(selected)
 
 	if os.set_env("COLUMNS", "200") != nil || os.set_env("LINES", "50") != nil {
@@ -362,12 +463,13 @@ main :: proc() {
 	minimum_seconds := minimum_sample_seconds()
 
 	fmt.printf(
-		"terminal %dx%d, input/default canvas %dx%d, repeats=%d, seed=1, stdout=/dev/null\n",
+		"terminal %dx%d, input/default canvas %dx%d, repeats=%d, seed=1, stdout=%s\n",
 		BENCH_COLUMNS,
 		BENCH_LINES,
 		BENCH_INPUT_WIDTH,
 		BENCH_INPUT_ROWS,
 		repeats,
+		Sink_Names[sink],
 	)
 	if paced {
 		fmt.println("paced: one complete run per repeat")
@@ -397,6 +499,7 @@ main :: proc() {
 			input[:],
 			repeats,
 			minimum_seconds,
+			sink,
 			paced,
 		)
 		odin_summary, odin_ok := benchmark_summary(
@@ -404,6 +507,7 @@ main :: proc() {
 			input[:],
 			repeats,
 			minimum_seconds,
+			sink,
 			paced,
 		)
 		if effect_is_wall_clock_gated(effect) {
@@ -502,12 +606,14 @@ main :: proc() {
 		startup_input[:],
 		repeats,
 		minimum_seconds,
+		sink,
 	)
 	odin_startup, odin_startup_ok := startup(
 		ODIN_BINARY,
 		startup_input[:],
 		repeats,
 		minimum_seconds,
+		sink,
 	)
 	if !rust_startup_ok || !odin_startup_ok do os.exit(1)
 	fmt.printf(

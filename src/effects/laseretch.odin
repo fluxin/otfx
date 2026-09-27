@@ -4,7 +4,6 @@ import engine "../engine"
 
 import "core:fmt"
 import "core:math/ease"
-import "core:math/rand"
 import "core:slice"
 
 Laseretch_Config :: struct {
@@ -144,7 +143,7 @@ laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	stack := make([dynamic]int, 0, n, context.temp_allocator)
 	width := e.canvas.text_width
 	offsets := [4]int{-width, 1, width, -1}
-	current := rand.int_max(n)
+	current := engine.random_below(n)
 	for {
 		if !visited[current] {
 			visited[current] = true
@@ -166,7 +165,7 @@ laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 			append(&neighbors, next)
 		}
 		if len(neighbors) > 0 {
-			current = neighbors[rand.int_max(len(neighbors))]
+			current = neighbors[engine.random_below(len(neighbors))]
 		} else {
 			pop(&stack)
 			if len(stack) == 0 do break
@@ -249,7 +248,7 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	for i in 0 ..< n {
 		id := engine.add_particle(
 			&characters,
-			symbols[rand.int_max(len(symbols))],
+			symbols[engine.random_below(len(symbols))],
 			plain,
 			engine.coord(0, 0),
 		)
@@ -268,8 +267,8 @@ laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: en
 	i := s.next_spark
 	s.next_spark += 1
 	if s.next_spark == len(s.spark_ids) do s.next_spark = 0
-	target := engine.coord(rand.int_range(origin.column - 20, origin.column + 21), e.canvas.bottom)
-	control := engine.coord(target.column, origin.row + rand.int_range(-10, 21))
+	target := engine.coord(engine.random_range(origin.column - 20, origin.column + 21), e.canvas.bottom)
+	control := engine.coord(target.column, origin.row + engine.random_range(-10, 21))
 	s.spark_starts[i] = s.tick
 	s.spark_origins[i], s.spark_controls[i], s.spark_targets[i] = origin, control, target
 	s.spark_steps[i] = max(
@@ -280,7 +279,7 @@ laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: en
 	engine.set_particle(e, s.spark_ids[i], engine.Visible(true))
 }
 
-laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool {
+laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.pending_head == len(s.pending) &&
 	   len(s.active_sources) == 0 &&
 	   len(s.active_sparks) == 0 {

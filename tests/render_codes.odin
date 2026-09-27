@@ -253,7 +253,7 @@ render_codes_preserve_logical_appearance_and_transitions :: proc(t: ^testing.T) 
 	testing.expect_value(
 		t,
 		string(frame_without_padding(&e)),
-		"\x1b[01m\x1b[38;2;001;002;003m\x1b[48;2;004;005;006mE\x1b[0m",
+		"\x1b[1m\x1b[38;2;001;002;003m\x1b[48;2;004;005;006mE\x1b[0m",
 	)
 	engine.set_symbol(&e, id, 'E')
 	engine.set_foreground(&e, id, engine.Color{1, 2, 3})
@@ -352,11 +352,11 @@ appearance_packet_survives_placement_changes :: proc(t: ^testing.T) {
 			bytes := frame_without_padding(&e)
 			testing.expect_value(t, string(bytes[:len(expected)]), expected)
 			testing.expect_value(t, string(bytes[len(expected):]), " ")
-			saved_cells: [102]byte
+			saved_slots: [2][engine.SLOT_MAX]byte
 			allocations := track.total_allocation_count
 			entries := len(e.shared_appearances)
 			for tick in 0 ..< 20 {
-				copy(saved_cells[:], e.canvas_bytes)
+				copy(saved_slots[:], e.slots)
 				engine.set_particle(
 					&e,
 					id,
@@ -364,15 +364,15 @@ appearance_packet_survives_placement_changes :: proc(t: ^testing.T) {
 					layer = tick,
 					visible = tick % 3 != 0,
 				)
-				testing.expect_value(t, string(e.canvas_bytes), string(saved_cells[:]))
+				testing.expect(t, e.slots[0] == saved_slots[0] && e.slots[1] == saved_slots[1])
 				engine.frame_build(&e)
 				strings.builder_reset(&builder)
 				engine.write_particle(&e, id, &builder)
 				testing.expect_value(t, strings.to_string(builder), expected)
 			}
-			copy(saved_cells[:], e.canvas_bytes)
+			copy(saved_slots[:], e.slots)
 			engine.set_symbol(&e, id, 'C')
-			testing.expect_value(t, string(e.canvas_bytes), string(saved_cells[:]))
+			testing.expect(t, e.slots[0] == saved_slots[0] && e.slots[1] == saved_slots[1])
 			engine.compose_frame(&e)
 			strings.builder_reset(&builder)
 			engine.write_particle(&e, id, &builder)

@@ -5,7 +5,6 @@ import "../engine"
 import "core:fmt"
 import "core:math"
 import "core:math/ease"
-import "core:math/rand"
 
 Blackhole_Config :: struct {
 	blackhole_color:          engine.Color,
@@ -202,7 +201,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	s.collapse_origins = make([dynamic]engine.Coord, ring_count)
 	s.expand_steps = make([dynamic]int, ring_count)
 	s.collapse_steps = make([dynamic]int, ring_count)
-	for &color in s.pulse_colors do color = s.config.star_colors[rand.int_max(len(s.config.star_colors))]
+	for &color in s.pulse_colors do color = s.config.star_colors[engine.random_below(len(s.config.star_colors))]
 
 	initial_coords := e.particles.initial_coord
 	current_coords := e.particles.current_coord
@@ -228,9 +227,9 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 			engine.Color{0x4A, 0x4A, 0x4D},
 			engine.Color{0xFF, 0xFF, 0xFF},
 			6,
-			rand.int_max(7),
+			engine.random_below(7),
 		)
-		s.star_symbols[i] = star_symbols[rand.int_max(len(star_symbols))]
+		s.star_symbols[i] = star_symbols[engine.random_below(len(star_symbols))]
 		s.star_coords[i] = engine.canvas_random_coord(e.canvas, false, false)
 		current_coords[id] = s.star_coords[i]
 		engine.set_symbol(e, id, s.star_symbols[i])
@@ -240,14 +239,14 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		s.consume_steps[i] = max(
 			engine.round_to_int(
 				engine.line_length(s.star_coords[i], e.canvas.center, true) /
-				rand.float64_range(0.17, 0.30),
+				engine.random_float_range(0.17, 0.30),
 			),
 			1,
 		)
 	}
 	if s.color_handling == .Dynamic && !s.dynamic_has_style do s.color_handling = .Ignore
 	for slot in 0 ..< ring_count {
-		pick := rand.int_max(len(available))
+		pick := engine.random_below(len(available))
 		source := available[pick]
 		unordered_remove(&available, pick)
 		append(&s.ring_sources, source)
@@ -270,7 +269,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		)
 	}
 	for id, i in s.characters {
-		direction := explode_directions[rand.int_max(len(explode_directions))]
+		direction := explode_directions[engine.random_below(len(explode_directions))]
 		target := engine.coord(
 			initial_coords[id].column + direction.column,
 			initial_coords[id].row + direction.row,
@@ -278,18 +277,18 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		s.explode_targets[i] = target
 		s.explode_steps[i] = max(
 			engine.round_to_int(
-				engine.line_length(e.canvas.center, target, true) / rand.float64_range(0.3, 0.4),
+				engine.line_length(e.canvas.center, target, true) / engine.random_float_range(0.3, 0.4),
 			),
 			1,
 		)
 		s.return_steps[i] = max(
 			engine.round_to_int(
 				engine.line_length(target, initial_coords[id], true) /
-				rand.float64_range(0.04, 0.06),
+				engine.random_float_range(0.04, 0.06),
 			),
 			1,
 		)
-		s.explode_colors[i] = s.config.star_colors[rand.int_max(len(s.config.star_colors))]
+		s.explode_colors[i] = s.config.star_colors[engine.random_below(len(s.config.star_colors))]
 		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 		cool_ticks :=
 			s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 1 : 220
@@ -309,7 +308,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 	s.phase = .Forming
 }
 
-blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool {
+blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	pulse_symbols := Blackhole_Pulse_Symbols
 	initial_coords := e.particles.initial_coord
 

@@ -4,7 +4,6 @@ import "../engine"
 
 import "core:fmt"
 import "core:math"
-import "core:math/rand"
 
 Overflow_Config :: struct {
 	overflow_gradient_stops:  [dynamic]engine.Color,
@@ -77,7 +76,7 @@ Overflow_State :: struct {
 	pending_rows:      [dynamic]Overflow_Row,
 	pending_head:      int,
 	active_rows:       [dynamic]Overflow_Row,
-	overflow_gradient: [dynamic]engine.Color,
+	overflow_codes:    []engine.Appearance_Id, // prepared overflow gradient, by row
 	delay:             int,
 	color_handling:    engine.Existing_Color_Handling,
 }
@@ -102,11 +101,11 @@ overflow_row_position :: proc(e: ^engine.Engine, characters: []engine.Particle_I
 overflow_row_color :: proc(
 	e: ^engine.Engine,
 	characters: []engine.Particle_Id,
-	color: engine.Color,
+	code: engine.Appearance_Id,
 ) {
 	for id in characters {
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(e, id, engine.Appearance{colors = {fg = color}})
+		engine.set_appearance(e, id, code)
 	}
 }
 
@@ -154,12 +153,12 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 	defer engine.groups_delete(&input_rows)
 	row_order := make([]int, len(input_rows.spans), context.temp_allocator)
 	for &row_index, i in row_order do row_index = i
-	cycles := rand.int_range(
+	cycles := engine.random_range(
 		s.config.overflow_cycles_range.lo,
 		s.config.overflow_cycles_range.hi + 1,
 	)
 	for _ in 0 ..< cycles {
-		rand.shuffle(row_order)
+		engine.random_shuffle(row_order)
 		for row_index in row_order {
 			source := engine.group_members(input_rows, row_index)
 			start := len(s.row_characters)
@@ -211,17 +210,22 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		math.floor_div(e.canvas.top, max(1, len(s.config.overflow_gradient_stops) - 1)),
 		1,
 	)
-	s.overflow_gradient = engine.gradient_make(
+	overflow_gradient := engine.gradient_make(
 		s.config.overflow_gradient_stops[:],
 		[]int{steps},
 		false,
 	)
+	defer delete(overflow_gradient)
+	s.overflow_codes = make([]engine.Appearance_Id, len(overflow_gradient))
+	for color, i in overflow_gradient {
+		s.overflow_codes[i] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+	}
 }
 
-overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
+overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.pending_head >= len(s.pending_rows) do return false
 	if s.delay == 0 {
-		for _ in 0 ..< rand.int_range(1, s.config.overflow_speed + 1) {
+		for _ in 0 ..< engine.random_range(1, s.config.overflow_speed + 1) {
 			if s.pending_head >= len(s.pending_rows) do break
 			for &row in s.active_rows {
 				characters := engine.span_slice(s.row_characters[:], row.span)
@@ -229,8 +233,8 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 				overflow_row_position(e, characters, row.row)
 				if !row.final {
 					head_row := row.row
-					index := min(head_row, len(s.overflow_gradient) - 1)
-					overflow_row_color(e, characters, s.overflow_gradient[index])
+					index := min(head_row, len(s.overflow_codes) - 1)
+					overflow_row_color(e, characters, s.overflow_codes[index])
 				}
 			}
 			next := s.pending_rows[s.pending_head]
@@ -239,14 +243,14 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool {
 			next.row = 1
 			overflow_row_position(e, characters, next.row)
 			if !next.final {
-				overflow_row_color(e, characters, s.overflow_gradient[0])
+				overflow_row_color(e, characters, s.overflow_codes[0])
 			}
 			for id in characters {
 				engine.set_particle(e, id, engine.Visible(true))
 			}
 			append(&s.active_rows, next)
 		}
-		s.delay = rand.int_range(0, 4)
+		s.delay = engine.random_range(0, 4)
 	} else {
 		s.delay -= 1
 	}

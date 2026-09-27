@@ -8,6 +8,32 @@ import "core:strings"
 import "core:testing"
 
 @(test)
+vertically_centered_text_margins :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+	for anchor in ([]engine.Anchor{.W, .E, .C}) {
+		for height in 1 ..= 14 {
+			for text_height in 1 ..= height {
+				cfg := engine.config_default()
+				cfg.canvas_width, cfg.canvas_height = 3, height
+				cfg.ignore_terminal_dimensions = true
+				cfg.anchor_text = anchor
+				input := strings.repeat("X\n", text_height)
+				e, err := engine.engine_make(input, cfg)
+				testing.expect_value(t, err, engine.Input_Error.None)
+				top := e.canvas.top - e.canvas.text_top
+				bottom := e.canvas.text_bottom - e.canvas.bottom
+				testing.expect(t, top >= 0 && bottom >= 0)
+				testing.expect(t, top - bottom >= 0 && top - bottom <= 1)
+				testing.expect_value(t, e.canvas.text_height, text_height)
+			}
+		}
+	}
+}
+
+@(test)
 cropped_anchors :: proc(t: ^testing.T) {
 	arena: mem.Dynamic_Arena
 	mem.dynamic_arena_init(&arena)
@@ -86,7 +112,7 @@ render_dirty_appearance :: proc(t: ^testing.T) {
 		testing.expect(t, strings.contains(string(frame_without_padding(&e)), "X"))
 		engine.set_particle(&e, id, engine.Visible(false))
 		engine.frame_build(&e)
-		testing.expect_value(t, string(frame_without_padding(&e)), " ello")
+		testing.expect_value(t, string(frame_without_padding(&e)), " ")
 	}
 }
 

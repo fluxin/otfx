@@ -98,7 +98,8 @@ print_row_all_fill :: proc(chars: ^engine.Particle_Storage, ids: []engine.Partic
 
 print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 	typing_appearance := engine.prepare_appearance(e, engine.Appearance{})
-	s.typing_head = engine.add_particle(e, '█', typing_appearance, engine.coord(1, 1))
+	head := engine.particle_batch(e, 1)
+	s.typing_head = engine.add_particle(&head, '█', typing_appearance, engine.coord(1, 1))
 
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
@@ -165,7 +166,7 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 	reserve(&s.active_chars, len(s.row_chars))
 }
 
-print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool {
+print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	white := engine.Color{0xff, 0xff, 0xff}
 	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return false
 	if s.head_return_active {

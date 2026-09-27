@@ -2,7 +2,6 @@ package effects
 
 import "../engine"
 import "core:math/ease"
-import "core:math/rand"
 
 import "core:fmt"
 import "core:slice"
@@ -142,10 +141,10 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 		c := initial_coords[id]
 		rows[i] = {id, c.row, c.column}
 		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		s.drop_colors[i] = s.config.rain_colors[rand.int_max(len(s.config.rain_colors))]
-		s.drop_symbols[i] = s.config.rain_symbols[rand.int_max(len(s.config.rain_symbols))]
+		s.drop_colors[i] = s.config.rain_colors[engine.random_below(len(s.config.rain_colors))]
+		s.drop_symbols[i] = s.config.rain_symbols[engine.random_below(len(s.config.rain_symbols))]
 		e.particles.current_coord[id] = engine.coord(c.column, e.canvas.top)
-		speed := rand.float64_range(s.config.movement_speed.lo, s.config.movement_speed.hi)
+		speed := engine.random_float_range(s.config.movement_speed.lo, s.config.movement_speed.hi)
 		s.max_steps[i] = max(
 			engine.round_to_int(
 				engine.line_length(e.particles.current_coord[id], c, true) / speed,
@@ -164,7 +163,7 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	for row, i in rows do s.by_row[i] = row.id
 }
 
-rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
+rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	by_row := s.by_row[:]
 	pending := &s.pending
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
@@ -184,9 +183,9 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool {
 		s.by_row_head = k
 	}
 	if len(pending^) > 0 {
-		for _ in 0 ..< rand.int_range(1, 3) {
+		for _ in 0 ..< engine.random_range(1, 3) {
 			if len(pending^) == 0 do break
-			idx := rand.int_max(len(pending^))
+			idx := engine.random_below(len(pending^))
 			next := pending[idx]
 			unordered_remove(pending, idx)
 			slot := s.index_by_id[next]
