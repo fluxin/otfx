@@ -317,7 +317,7 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 		engine.set_particle(
 			e,
 			id,
-			engine.coord_on_line(
+			engine.tween(
 				s.launch_origins[i],
 				initial_coords[id],
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),

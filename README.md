@@ -76,22 +76,22 @@ ttfx v0.5.0's fx engine run single-threaded, with output to `/dev/null`, a
 pipe, and a pseudo-terminal.
 
 Into `/dev/null`, where writing costs nothing, ttfx is faster: **OTFX averages
-29.54 ms versus 25.29 ms** and wins 8/35. Once the output has to go somewhere,
+30.65 ms versus 26.61 ms** and wins 9/35. Once the output has to go somewhere,
 OTFX's smaller output decides it: it writes **584 MB where ttfx writes 9,602 MB**
-over the same 35 animations, is **1.79x faster through a pipe and 5.17x faster
+over the same 35 animations, is **1.79x faster through a pipe and 5.11x faster
 on a pseudo-terminal** (geometric), and finishes first on all 35 effects on
 the pty.
 
 | Metric | OTFX | ttfx v0.5.0 |
 |---|---:|---:|
-| Mean wall per effect, /dev/null | 29.54 ms | 25.29 ms |
-| Mean wall per effect, pipe | 31.95 ms | 59.07 ms |
-| Mean wall per effect, pty | 41.81 ms | 287.55 ms |
+| Mean wall per effect, /dev/null | 30.65 ms | 26.61 ms |
+| Mean wall per effect, pipe | 32.99 ms | 60.40 ms |
+| Mean wall per effect, pty | 44.67 ms | 301.39 ms |
 | Bytes written, 35 effects | 584 MB | 9,602 MB |
-| Mean per-effect maximum RSS | 11.90 MiB | 23.07 MiB |
+| Mean per-effect maximum RSS | 11.93 MiB | 22.86 MiB |
 | Startup (slide) | 0.3 ms | 0.6 ms |
-| Binary size, as built | 1.20 MiB | 3.02 MiB |
-| Binary size, stripped copy | 1.18 MiB | 3.02 MiB |
+| Binary size, as built | 1.18 MiB | 3.02 MiB |
+| Binary size, stripped copy | 1.16 MiB | 3.02 MiB |
 
 Measured 2026-10-05 on Ryzen 9 9900X3D. Seed 1, terminal 200×50, dense
 input/default canvas 190×46, frame rate 0. Three samples batch at least 0.3
@@ -108,9 +108,35 @@ parsing is extra on top. ttfx's own published speeds are measured into
 
 | Sink | OTFX mean wall | ttfx mean wall | Geometric OTFX speedup | OTFX mean CPU | ttfx mean CPU | OTFX faster |
 |---|---:|---:|---:|---:|---:|---:|
-| `/dev/null` | 29.54 ms | 25.29 ms | 0.86x | 29.40 ms | 25.13 ms | 8/35 |
-| pipe | 31.95 ms | 59.07 ms | 1.79x | 31.35 ms | 48.39 ms | 32/35 |
-| pty | 41.81 ms | 287.55 ms | 5.17x | 34.47 ms | 96.62 ms | 35/35 |
+| `/dev/null` | 30.65 ms | 26.61 ms | 0.86x | 30.47 ms | 26.46 ms | 9/35 |
+| pipe | 32.99 ms | 60.40 ms | 1.79x | 32.39 ms | 48.81 ms | 32/35 |
+| pty | 44.67 ms | 301.39 ms | 5.11x | 36.64 ms | 101.21 ms | 35/35 |
+
+### Hardware counters
+
+User-space `perf stat` counters for one complete run of each finite effect into
+`/dev/null` on CPU 2, the median of three. L2 misses and fill sources use Zen's
+per-core `l2_cache_req_stat` and `ls_any_fills_from_sys` events, so they count
+only the measured process. Kernel work and the terminal side are excluded.
+
+| Counter, 35 effects | OTFX | ttfx v0.5.0 |
+|---|---:|---:|
+| Instructions | 14.05 G | 11.95 G |
+| Cycles | 5.10 G | 4.45 G |
+| Instructions per cycle | 2.76 | 2.69 |
+| Instructions per frame | 146 k | 127 k |
+| L1 data loads | 6.91 G | 6.78 G |
+| L1 data miss rate | 5.73% | 7.48% |
+| L2 misses | 54.1 M | 61.7 M |
+| L1 fills served by L3 | 58.8 M | 64.0 M |
+| L1 fills served by DRAM | 53 k | 73 k |
+| Branch miss rate | 2.46% | 2.31% |
+| Data-TLB misses | 410 k | 64 k |
+
+OTFX retires instructions at a similar rate and misses its caches less: its
+per-effect L2 misses are a geometric 0.43x of ttfx's. The `/dev/null` gap is
+instruction count, about 1.21x per effect, concentrated in Randomsequence, Beams, Highlight, Binarypath and Smoke.
+[Per-effect counters](docs/release-fx-counters.tsv).
 
 ### Complete finite-effect comparison
 
@@ -123,41 +149,41 @@ rather than equal-frame throughput. Per-effect pipe and pty results are in the
 
 | Effect | OTFX ms | ttfx ms | OTFX time change | OTFX RSS MiB | ttfx RSS MiB | OTFX MB written | ttfx MB written | Frames OTFX / ttfx |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| beams | 14.6 | 10.1 | +44.6% | 11.90 | 16.54 | 10.8 | 97.7 | 878 / 732 |
-| binarypath | 156.1 | 90.8 | +71.9% | 19.89 | 39.69 | 103.0 | 215.8 | 1909 / 1891 |
-| blackhole | 52.6 | 51.1 | +2.9% | 10.20 | 35.55 | 15.4 | 149.0 | 1793 / 1800 |
-| bouncyballs | 36.4 | 26.0 | +40.0% | 10.20 | 18.70 | 15.5 | 826.4 | 10378 / 9093 |
-| bubbles | 52.2 | 39.6 | +31.8% | 11.42 | 27.44 | 26.5 | 1056.0 | 12184 / 11742 |
-| burn | 22.3 | 17.5 | +27.4% | 14.59 | 19.63 | 14.8 | 536.9 | 3218 / 3175 |
-| colorshift | 18.3 | 15.8 | +15.8% | 9.02 | 28.02 | 47.1 | 85.3 | 528 / 528 |
-| crumble | 41.0 | 44.2 | -7.2% | 10.02 | 33.39 | 19.7 | 94.4 | 2200 / 1835 |
-| decrypt | 19.2 | 14.6 | +31.5% | 12.20 | 25.82 | 20.1 | 493.1 | 5442 / 5438 |
-| errorcorrect | 12.9 | 17.2 | -25.0% | 9.77 | 18.20 | 8.1 | 862.1 | 5259 / 5237 |
-| expand | 18.3 | 16.3 | +12.3% | 10.30 | 18.84 | 3.9 | 32.4 | 302 / 302 |
-| fireworks | 53.4 | 53.5 | -0.2% | 10.88 | 29.54 | 10.7 | 136.7 | 1367 / 1553 |
-| highlight | 3.5 | 2.6 | +34.6% | 11.27 | 15.02 | 1.3 | 21.5 | 129 / 129 |
-| laseretch | 45.9 | 44.5 | +3.1% | 15.26 | 21.66 | 22.9 | 1270.0 | 14307 / 14306 |
-| middleout | 7.7 | 7.8 | -1.3% | 9.58 | 18.84 | 1.6 | 9.6 | 235 / 235 |
-| orbittingvolley | 20.9 | 15.8 | +32.3% | 11.64 | 16.82 | 10.3 | 109.3 | 1156 / 1156 |
-| overflow | 12.4 | 12.9 | -3.9% | 17.66 | 21.12 | 16.2 | 48.4 | 231 / 306 |
-| pour | 18.3 | 15.9 | +15.1% | 9.96 | 17.21 | 8.3 | 623.6 | 7160 / 7160 |
-| print | 7.2 | 6.5 | +10.8% | 11.46 | 15.81 | 6.4 | 1084.5 | 10057 / 10057 |
-| rain | 18.5 | 17.0 | +8.8% | 9.93 | 20.55 | 7.8 | 424.5 | 4760 / 4737 |
-| randomsequence | 4.1 | 3.4 | +20.6% | 12.14 | 14.29 | 1.7 | 22.5 | 208 / 208 |
-| rings | 82.4 | 92.1 | -10.5% | 11.04 | 36.70 | 27.9 | 94.9 | 1563 / 1566 |
-| scattered | 30.0 | 23.2 | +29.3% | 9.95 | 19.68 | 14.9 | 58.4 | 418 / 418 |
-| slice | 5.2 | 5.8 | -10.3% | 12.12 | 14.05 | 3.3 | 40.8 | 368 / 368 |
-| slide | 17.1 | 11.8 | +44.9% | 10.33 | 16.01 | 12.4 | 33.3 | 375 / 375 |
-| smoke | 9.5 | 7.3 | +30.1% | 12.36 | 18.34 | 8.1 | 117.0 | 549 / 565 |
-| spotlights | 30.2 | 25.7 | +17.5% | 9.94 | 35.98 | 9.6 | 122.1 | 779 / 800 |
-| spray | 25.8 | 26.1 | -1.1% | 9.69 | 20.48 | 13.1 | 76.6 | 1275 / 661 |
-| swarm | 98.5 | 89.9 | +9.6% | 22.18 | 55.96 | 28.6 | 461.6 | 4051 / 5041 |
-| sweep | 4.2 | 3.3 | +27.3% | 11.27 | 16.04 | 2.5 | 35.6 | 220 / 220 |
-| synthgrid | 7.0 | 4.6 | +52.2% | 13.89 | 19.20 | 5.0 | 67.8 | 617 / 619 |
-| unstable | 35.9 | 34.0 | +5.6% | 11.88 | 22.35 | 20.3 | 57.4 | 594 / 530 |
-| vhstape | 28.5 | 20.1 | +41.8% | 12.21 | 30.25 | 23.9 | 123.0 | 748 / 736 |
-| waves | 20.8 | 15.4 | +35.1% | 10.32 | 15.93 | 39.6 | 98.6 | 633 / 633 |
-| wipe | 2.9 | 2.6 | +11.5% | 9.88 | 13.93 | 2.4 | 14.8 | 138 / 138 |
+| beams | 15.1 | 10.3 | +46.6% | 11.91 | 16.63 | 10.8 | 97.7 | 878 / 732 |
+| binarypath | 167.0 | 95.7 | +74.5% | 19.93 | 39.40 | 103.0 | 215.8 | 1909 / 1891 |
+| blackhole | 54.5 | 53.9 | +1.1% | 10.23 | 35.38 | 15.4 | 149.0 | 1793 / 1800 |
+| bouncyballs | 37.5 | 26.3 | +42.6% | 10.23 | 18.62 | 15.5 | 826.4 | 10378 / 9093 |
+| bubbles | 53.8 | 41.1 | +30.9% | 11.48 | 27.51 | 26.5 | 1056.0 | 12184 / 11742 |
+| burn | 23.3 | 18.3 | +27.3% | 14.45 | 19.59 | 14.8 | 536.9 | 3218 / 3175 |
+| colorshift | 19.1 | 16.5 | +15.8% | 8.91 | 28.24 | 47.1 | 85.3 | 528 / 528 |
+| crumble | 43.7 | 50.0 | -12.6% | 10.01 | 33.49 | 19.7 | 94.4 | 2200 / 1835 |
+| decrypt | 19.7 | 15.4 | +27.9% | 12.18 | 25.61 | 20.1 | 493.1 | 5442 / 5438 |
+| errorcorrect | 13.2 | 17.6 | -25.0% | 9.75 | 18.05 | 8.1 | 862.1 | 5259 / 5237 |
+| expand | 18.7 | 16.5 | +13.3% | 10.20 | 18.78 | 3.9 | 32.4 | 302 / 302 |
+| fireworks | 53.8 | 54.6 | -1.5% | 10.87 | 29.63 | 10.7 | 136.7 | 1367 / 1553 |
+| highlight | 4.0 | 2.6 | +53.8% | 11.16 | 15.04 | 1.3 | 21.5 | 129 / 129 |
+| laseretch | 46.9 | 45.4 | +3.3% | 13.38 | 21.76 | 22.9 | 1270.0 | 14307 / 14306 |
+| middleout | 7.7 | 7.9 | -2.5% | 9.48 | 18.80 | 1.6 | 9.6 | 235 / 235 |
+| orbittingvolley | 21.1 | 15.7 | +34.4% | 11.51 | 16.68 | 10.3 | 109.3 | 1156 / 1156 |
+| overflow | 12.9 | 13.4 | -3.7% | 17.63 | 21.32 | 16.2 | 48.4 | 231 / 306 |
+| pour | 17.9 | 15.9 | +12.6% | 9.91 | 17.24 | 8.3 | 623.6 | 7160 / 7160 |
+| print | 7.8 | 7.0 | +11.4% | 11.44 | 15.79 | 6.4 | 1084.5 | 10057 / 10057 |
+| rain | 19.1 | 17.2 | +11.0% | 9.91 | 20.46 | 7.8 | 424.5 | 4760 / 4737 |
+| randomsequence | 4.6 | 3.5 | +31.4% | 12.09 | 14.32 | 1.7 | 22.5 | 208 / 208 |
+| rings | 85.6 | 95.7 | -10.6% | 11.06 | 36.27 | 27.9 | 94.9 | 1563 / 1566 |
+| scattered | 31.0 | 23.8 | +30.3% | 9.91 | 19.64 | 14.9 | 58.4 | 418 / 418 |
+| slice | 5.3 | 6.0 | -11.7% | 12.06 | 14.17 | 3.3 | 40.8 | 368 / 368 |
+| slide | 17.9 | 12.2 | +46.7% | 12.03 | 15.98 | 12.4 | 33.3 | 375 / 375 |
+| smoke | 9.9 | 7.6 | +30.3% | 12.25 | 18.23 | 8.1 | 117.0 | 549 / 565 |
+| spotlights | 22.4 | 28.4 | -21.1% | 12.01 | 34.46 | 9.1 | 122.1 | 779 / 800 |
+| spray | 28.1 | 26.2 | +7.3% | 9.75 | 20.70 | 13.1 | 76.6 | 1275 / 661 |
+| swarm | 107.1 | 99.9 | +7.2% | 22.30 | 50.66 | 28.6 | 461.6 | 4051 / 5041 |
+| sweep | 4.3 | 3.4 | +26.5% | 11.26 | 16.01 | 2.5 | 35.6 | 220 / 220 |
+| synthgrid | 7.3 | 4.7 | +55.3% | 13.89 | 19.22 | 5.0 | 67.8 | 617 / 619 |
+| unstable | 37.5 | 39.2 | -4.3% | 11.88 | 22.45 | 20.3 | 57.4 | 594 / 530 |
+| vhstape | 29.4 | 20.5 | +43.4% | 12.07 | 30.26 | 23.9 | 123.0 | 748 / 736 |
+| waves | 22.4 | 16.1 | +39.1% | 10.32 | 16.00 | 39.6 | 98.6 | 633 / 633 |
+| wipe | 3.0 | 2.7 | +11.1% | 10.04 | 13.86 | 2.4 | 14.8 | 138 / 138 |
 
 Matrix and Thunderstorm run for a configured time and are excluded; see the
 [timing-gated diagnostics](docs/release-benchmark.md#timing-gated-comparison).

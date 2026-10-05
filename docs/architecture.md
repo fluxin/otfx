@@ -25,6 +25,7 @@ with their existing owner; file boundaries do not add runtime layers.
 | `geometry.odin` | Coordinates, path geometry, rounding, and easing names |
 | `color.odin` | RGB/xterm conversion, gradients, and brightness |
 | `random.odin` | The single random stream: seeding, bounded and float draws, shuffle |
+| `tween.odin` | Tweens between colors, color pairs, coordinates and scalars; shared appearance ramps |
 
 ## Effect API
 

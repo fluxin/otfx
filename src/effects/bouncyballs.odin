@@ -180,7 +180,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool #no_b
 			engine.set_particle(
 				e,
 				id,
-				engine.coord_on_line(
+				engine.tween(
 					s.origins[slot],
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -200,19 +200,13 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool #no_b
 				fade_step := min(fade_tick / 6, 10)
 				if s.color_handling == .Dynamic {
 					appearance := engine.get_appearance(e, id)
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						s.ball_colors[slot],
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-						10,
-						fade_step,
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{s.ball_colors[slot], s.ball_colors[slot]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 10, fade_step)
 					engine.set_appearance(e, id, appearance)
 				} else {
 					engine.set_foreground(
 						e,
 						id,
-						engine.gradient_between_step(
+						engine.tween(
 							s.ball_colors[slot],
 							s.final_colors[slot],
 							10,

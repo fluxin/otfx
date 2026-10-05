@@ -281,19 +281,13 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			if s.color_handling == .Dynamic {
 				appearance := engine.get_appearance(e, id)
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					s.fire_palette[len(s.fire_palette) - 1],
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					8,
-					min((age - fire_ticks) / 4, 8),
-				)
+				appearance.colors = engine.tween(engine.Color_Pair{s.fire_palette[len(s.fire_palette) - 1], s.fire_palette[len(s.fire_palette) - 1]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 8, min((age - fire_ticks) / 4, 8))
 				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(
+					engine.tween(
 						s.fire_palette[len(s.fire_palette) - 1],
 						s.final_colors[i],
 						8,
@@ -322,14 +316,14 @@ burn_next :: proc(s: ^Burn_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			engine.set_particle(
 				e,
 				id,
-				engine.coord_on_line(s.smoke_origins[i], s.smoke_targets[i], progress),
+				engine.tween(s.smoke_origins[i], s.smoke_targets[i], progress),
 			)
 		}
 		if age % 10 != 0 || age > 90 do continue
 		engine.set_foreground(
 			e,
 			id,
-			engine.gradient_between_step(
+			engine.tween(
 				smoke_gradient_start,
 				smoke_gradient_end,
 				9,

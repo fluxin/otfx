@@ -65,7 +65,7 @@ Decrypt_State :: struct {
 	config:              Decrypt_Config,
 	characters:          [dynamic]engine.Particle_Id,
 	final_index:         [dynamic]int, // spectrum index by character slot
-	fades:               engine.Gradient_Steps, // fades to each spectrum entry
+	fades:               engine.Appearance_Ramp, // fades to each spectrum entry
 	typing_start_ticks:  [dynamic]int,
 	typing_previous:     [dynamic]int,
 	typing_changes:      [dynamic]engine.Sample_Change,
@@ -128,7 +128,7 @@ decrypt_build :: proc(s: ^Decrypt_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
 	s.final_index = make([dynamic]int, n)
-	s.fades = engine.gradient_steps_make(e, engine.Color{0xff, 0xff, 0xff}, spectrum[:], 10)
+	s.fades = engine.ramp_make(e, engine.tweens_from(engine.Color{0xff, 0xff, 0xff}, spectrum[:]), 10)
 	s.typing_start_ticks = make([dynamic]int, n)
 	s.typing_previous = make([dynamic]int, n)
 	s.typing_changes = make([dynamic]engine.Sample_Change, n)
@@ -294,17 +294,11 @@ decrypt_next :: proc(s: ^Decrypt_State, e: ^engine.Engine) -> bool #no_bounds_ch
 			if discovered_tick == 0 do engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			if s.color_handling == .Dynamic {
 				appearance := engine.Appearance{}
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					engine.Color{0xff, 0xff, 0xff},
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					10,
-					step,
-				)
+				appearance.colors = engine.tween(engine.Color_Pair{engine.Color{0xff, 0xff, 0xff}, engine.Color{0xff, 0xff, 0xff}}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 10, step)
 				engine.set_appearance(e, id, appearance)
 			} else {
 				// Step 10 is the exact final color, also held after discovery.
-				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], step))
+				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], step))
 			}
 			if discovered_tick < Decrypt_Discovered_Ticks {
 				s.slow_active[write] = i

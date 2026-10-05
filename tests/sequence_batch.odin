@@ -61,7 +61,7 @@ sequence_actions_preserve_scalar_samples :: proc(t: ^testing.T) {
 		engine.sequence_batch(frames[:], factors[:], 2, keypoints[:])
 		for i in 0 ..< len(frames) {
 			factor := ease.ease(fn, f64(i + 3) / 23)
-			testing.expect_value(t, frames.coord[i], engine.coord_on_line(from, to, factor))
+			testing.expect_value(t, frames.coord[i], engine.tween(from, to, factor))
 			entry := clamp(engine.round_to_int(2 * factor), 0, 2)
 			testing.expect_value(
 				t,
@@ -95,7 +95,7 @@ sequence_gradient_chunks_preserve_holds_and_absent_channels :: proc(t: ^testing.
 		testing.expect_value(
 			t,
 			frames.colors[i],
-			engine.Color_Pair{bg = engine.gradient_between_step(from, to, 10, i / 3)},
+			engine.Color_Pair{bg = engine.tween(from, to, 10, i / 3)},
 		)
 	}
 	for i in 33 ..< 36 do testing.expect_value(t, frames.colors[i], engine.Color_Pair{})

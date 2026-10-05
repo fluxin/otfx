@@ -202,7 +202,7 @@ swarm_build :: proc(s: ^Swarm_State, e: ^engine.Engine) {
 		base_color := s.config.base_colors[engine.random_below(len(s.config.base_colors))]
 		for entry in 0 ..< SWARM_FLASH_ENTRIES {
 			step := entry < 8 ? entry : (entry < 18 ? 7 : 25 - entry)
-			s.flash_colors[group * SWARM_FLASH_ENTRIES + entry] = engine.gradient_between_step(
+			s.flash_colors[group * SWARM_FLASH_ENTRIES + entry] = engine.tween(
 				base_color,
 				s.config.flash_color,
 				7,
@@ -305,7 +305,7 @@ swarm_lane_position :: proc(s: ^Swarm_State, character, stage, tick: int) -> eng
 	duration := s.lane_steps[row]
 	progress := f64(clamp(tick - start, 0, duration)) / f64(duration)
 	stage_count := s.group_stage_counts[s.group_by_index[character]]
-	return engine.coord_on_line(
+	return engine.tween(
 		s.lane_origins[row],
 		swarm_waypoint(s, character, stage),
 		ease.ease(swarm_stage_easing(stage, stage_count), progress),

@@ -73,7 +73,7 @@ sequence_batch :: proc(
 				steps := keypoint.stop - keypoint.start
 				for &factor, i in factors do factor = ease.ease(a.fn, f64(first + i + 1) / f64(steps))
 			case Move_Action:
-				for &coord, i in frames.coord[:len(frames)] do coord = coord_on_line(a.from, a.to, factors[i])
+				for &coord, i in frames.coord[:len(frames)] do coord = tween(a.from, a.to, factors[i])
 			case Palette_Action:
 				assert(len(a.colors) > 0)
 				for &colors, i in frames.colors[:len(frames)] {
@@ -85,14 +85,7 @@ sequence_batch :: proc(
 			case Gradient_Action:
 				assert(a.hold > 0 && a.steps > 0)
 				for &colors, i in frames.colors[:len(frames)] {
-					step := min((first + i) / a.hold, a.steps)
-					colors = a.to
-					if from, ok := a.from.fg.?; ok {
-						if to, ok := a.to.fg.?; ok do colors.fg = gradient_between_step(from, to, a.steps, step)
-					}
-					if from, ok := a.from.bg.?; ok {
-						if to, ok := a.to.bg.?; ok do colors.bg = gradient_between_step(from, to, a.steps, step)
-					}
+					colors = tween(a.from, a.to, a.steps, min((first + i) / a.hold, a.steps))
 				}
 			case Position_Action:
 				for &coord in frames.coord[:len(frames)] do coord = a.value

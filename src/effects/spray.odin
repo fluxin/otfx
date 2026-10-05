@@ -223,7 +223,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			engine.set_particle(
 				e,
 				id,
-				engine.coord_on_line(
+				engine.tween(
 					s.origin,
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -238,19 +238,13 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		if s.color_handling == .Dynamic {
 			step := min(age / 20, 7)
 			appearance := engine.get_appearance(e, id)
-			engine.dynamic_gradient_to_input(
-				&appearance,
-				s.start_colors[i],
-				engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				7,
-				step,
-			)
+			appearance.colors = engine.tween(engine.Color_Pair{s.start_colors[i], s.start_colors[i]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 7, step)
 			engine.set_appearance(e, id, appearance)
 		} else {
 			engine.set_foreground(
 				e,
 				id,
-				engine.gradient_between_step(
+				engine.tween(
 					s.start_colors[i],
 					s.final_colors[i],
 					7,

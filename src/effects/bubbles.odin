@@ -297,7 +297,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 			age := s.tick - s.bubble_starts[bi]
 			steps := s.bubble_steps[bi]
 			progress := f64(min(age + 1, steps)) / f64(steps)
-			anchor := engine.coord_on_line(s.bubble_origins[bi], s.bubble_targets[bi], progress)
+			anchor := engine.tween(s.bubble_origins[bi], s.bubble_targets[bi], progress)
 			landed := age + 1 >= steps
 			for id in members {
 				engine.set_particle(
@@ -348,7 +348,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 					engine.set_particle(
 						e,
 						id,
-						engine.coord_on_line(
+						engine.tween(
 							s.pop_origins[id],
 							s.pop_targets[id],
 							ease.ease(.Exponential_Out, f64(age + 1) / f64(expand_steps)),
@@ -359,7 +359,7 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 					engine.set_particle(
 						e,
 						id,
-						engine.coord_on_line(
+						engine.tween(
 							s.pop_targets[id],
 							initial_coords[id],
 							ease.ease(
@@ -380,19 +380,13 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 					if s.color_handling == .Dynamic {
 						appearance := engine.get_appearance(e, id)
-						engine.dynamic_gradient_to_input(
-							&appearance,
-							s.config.pop_color,
-							engine.get_initial_appearance(e, engine.Particle_Id(id)),
-							8,
-							min(color_age / 6, 8),
-						)
+						appearance.colors = engine.tween(engine.Color_Pair{s.config.pop_color, s.config.pop_color}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 8, min(color_age / 6, 8))
 						engine.set_appearance(e, id, appearance)
 					} else {
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								s.config.pop_color,
 								s.final_colors[id],
 								8,

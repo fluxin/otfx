@@ -183,11 +183,11 @@ binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int
 	travelled := min(f64(age + 1) / f64(steps), 1) * s.total_lengths[i]
 	if travelled <= s.first_lengths[i] {
 		t := s.first_lengths[i] == 0 ? 1 : travelled / s.first_lengths[i]
-		return engine.coord_on_line(s.origins[i], s.turns[i], t)
+		return engine.tween(s.origins[i], s.turns[i], t)
 	}
 	second := s.total_lengths[i] - s.first_lengths[i]
 	t := second == 0 ? 1 : (travelled - s.first_lengths[i]) / second
-	return engine.coord_on_line(s.turns[i], e.particles.initial_coord[s.characters[i]], t)
+	return engine.tween(s.turns[i], e.particles.initial_coord[s.characters[i]], t)
 }
 
 binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool #no_bounds_check {
@@ -272,21 +272,18 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool #no_bou
 			if s.color_handling == .Dynamic {
 				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 				appearance := engine.get_appearance(e, id)
-				engine.dynamic_gradient_to_dimmed_input(
-					&appearance,
-					engine.Color{0xFF, 0xFF, 0xFF},
-					style,
-					0.5,
-					6,
-					age / 3,
-				)
+				dimmed := style.colors
+				if fg, ok := dimmed.fg.?; ok do dimmed.fg = engine.adjust_color_brightness(fg, 0.5)
+				if bg, ok := dimmed.bg.?; ok do dimmed.bg = engine.adjust_color_brightness(bg, 0.5)
+				white := engine.Color{0xFF, 0xFF, 0xFF}
+				appearance.colors = engine.tween(engine.Color_Pair{white, white}, dimmed, 6, age / 3)
 				engine.set_appearance(e, id, appearance)
 			} else {
 				dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(engine.Color{0xFF, 0xFF, 0xFF}, dim, 6, age / 3),
+					engine.tween(engine.Color{0xFF, 0xFF, 0xFF}, dim, 6, age / 3),
 				)
 			}
 		}

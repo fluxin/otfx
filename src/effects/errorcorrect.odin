@@ -209,14 +209,14 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool #no
 			engine.set_particle(
 				e,
 				id,
-				engine.coord_on_line(s.origins[id], e.particles.initial_coord[id], progress),
+				engine.tween(s.origins[id], e.particles.initial_coord[id], progress),
 			)
 			engine.set_particle(e, id, engine.Layer(1))
 			engine.set_symbol(e, id, '█')
 			engine.set_foreground(
 				e,
 				id,
-				engine.gradient_between_step(
+				engine.tween(
 					s.config.error_color,
 					s.config.correct_color,
 					10,
@@ -237,19 +237,13 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool #no
 			step := min((age - last_start - 21) / 3, 10)
 			if s.color_handling == .Dynamic {
 				appearance := engine.get_appearance(e, id)
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					s.config.correct_color,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					10,
-					step,
-				)
+				appearance.colors = engine.tween(engine.Color_Pair{s.config.correct_color, s.config.correct_color}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 10, step)
 				engine.set_appearance(e, id, appearance)
 			} else {
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(
+					engine.tween(
 						s.config.correct_color,
 						s.final_colors[id],
 						10,

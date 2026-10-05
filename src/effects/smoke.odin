@@ -290,7 +290,7 @@ smoke_paint_color :: proc(
 	// the dense per-character loop only performs direct indexed loads.
 	start := stops[pair]
 	finish := pair + 1 < len(stops) ? stops[pair + 1] : end
-	return engine.gradient_between_step(start, finish, 5, step)
+	return engine.tween(start, finish, 5, step)
 }
 
 smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool #no_bounds_check {

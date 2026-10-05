@@ -65,7 +65,7 @@ wipe_parse :: proc(cfg: ^Wipe_Config, args: []string) -> bool {
 Wipe_State :: struct {
 	config:         Wipe_Config,
 	final_index:    [dynamic]int, // spectrum index by particle; unused when dynamic
-	fades:          engine.Gradient_Steps, // fades to each spectrum entry
+	fades:          engine.Appearance_Ramp, // fades to each spectrum entry
 	gradient_steps: int,
 	start_ticks:    [dynamic]int,
 	active:         [dynamic]engine.Particle_Id,
@@ -125,7 +125,7 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 	s.gradient_steps = s.config.final_gradient_steps[0]
 	if s.color_handling != .Dynamic {
 		// Every character fades from the first spectrum color to its own entry.
-		s.fades = engine.gradient_steps_make(e, spectrum[0], spectrum[:], s.gradient_steps)
+		s.fades = engine.ramp_make(e, engine.tweens_from(spectrum[0], spectrum[:]), s.gradient_steps)
 		for id in chars {
 			s.final_index[id] = engine.gradient_sample_index(sampler, len(spectrum), e.particles.initial_coord[id])
 		}
@@ -171,7 +171,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			if s.color_handling == .Dynamic {
 				engine.set_appearance(e, id, engine.Appearance{colors = engine.get_initial_appearance(e, id).colors})
 			} else {
-				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[id], step))
+				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[id], step))
 			}
 		}
 		if age + 1 == (s.gradient_steps + 1) * s.config.final_gradient_frames {

@@ -336,7 +336,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 							engine.set_foreground(
 								e,
 								id,
-								engine.gradient_between_step(
+								engine.tween(
 									fg,
 									engine.adjust_color_brightness(fg, 0.3),
 									10,
@@ -350,7 +350,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 							engine.set_background(
 								e,
 								id,
-								engine.gradient_between_step(
+								engine.tween(
 									bg,
 									engine.adjust_color_brightness(bg, 0.3),
 									10,
@@ -364,7 +364,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								s.final_colors[id],
 								s.faded_colors[id],
 								10,
@@ -392,7 +392,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								engine.adjust_color_brightness(fg, 0.3),
 								fg,
 								10,
@@ -406,7 +406,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 						engine.set_background(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								engine.adjust_color_brightness(bg, 0.3),
 								bg,
 								10,
@@ -420,7 +420,7 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 					engine.set_foreground(
 						e,
 						id,
-						engine.gradient_between_step(
+						engine.tween(
 							s.faded_colors[id],
 							s.final_colors[id],
 							10,

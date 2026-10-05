@@ -70,7 +70,7 @@ Scattered_State :: struct {
 	characters:     [dynamic]engine.Particle_Id,
 	active_indexes: [dynamic]int,
 	final_index:    [dynamic]int, // spectrum index by slot
-	fades:          engine.Gradient_Steps, // fades to each spectrum entry
+	fades:          engine.Appearance_Ramp, // fades to each spectrum entry
 	origins:        [dynamic]engine.Coord,
 	motion_slots:   [dynamic]int,
 	motion_steps:   [dynamic]int,
@@ -109,7 +109,7 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
 	s.final_index = make([dynamic]int, n)
-	s.fades = engine.gradient_steps_make(e, s.config.final_gradient_stops[0], spectrum[:], 10)
+	s.fades = engine.ramp_make(e, engine.tweens_from(s.config.final_gradient_stops[0], spectrum[:]), 10)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.active_indexes = make([dynamic]int, n)
 	steps_by_particle := make([]int, n)
@@ -135,7 +135,7 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		if s.color_handling == .Dynamic {
 			engine.set_appearance(e, id, engine.Appearance{colors = engine.get_initial_appearance(e, id).colors})
 		} else {
-			engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], 0))
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], 0))
 		}
 		e.particles.flags[id] += {.Visible}
 	}
@@ -166,20 +166,20 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool #no_bound
 		engine.set_particle(
 			e,
 			id,
-			engine.coord_on_line(s.origins[i], e.particles.initial_coord[id], motion.factor),
+			engine.tween(s.origins[i], e.particles.initial_coord[id], motion.factor),
 		)
 		// Dynamic input colors are installed during build and never change here.
 		if s.color_handling != .Dynamic {
 			step := min(engine.round_to_int(progress * 9), 10)
 			if u8(step) != s.color_steps[i] {
 				s.color_steps[i] = u8(step)
-				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], step))
+				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], step))
 			}
 		}
 		if s.tick + 1 >= steps {
 			engine.set_particle(e, id, e.particles.initial_coord[id])
 			if s.color_handling != .Dynamic {
-				engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], s.fades.steps))
+				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], s.fades.steps))
 			}
 			engine.set_particle(e, id, engine.Layer(0))
 		} else {

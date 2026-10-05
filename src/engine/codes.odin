@@ -55,43 +55,6 @@ prepare_appearance :: proc(e: ^Engine, appearance: Appearance) -> Appearance_Id 
 	return Appearance_Id(len(e.shared_appearances))
 }
 
-// Prepared foreground fades from one start color to each final color.
-// A step that repeats the previous color reuses its ID, so republishing a
-// held step stays a no-op.
-Gradient_Steps :: struct {
-	codes: []Appearance_Id, // final * (steps + 1) + step
-	steps: int,
-}
-
-gradient_steps_make :: proc(
-	e: ^Engine,
-	start: Color,
-	finals: []Color,
-	steps: int,
-	allocator := context.allocator,
-) -> Gradient_Steps {
-	frames := steps + 1
-	codes := make([]Appearance_Id, len(finals) * frames, allocator)
-	for final, i in finals {
-		previous: Color
-		for step in 0 ..< frames {
-			fg := gradient_between_step(start, final, steps, step)
-			if step > 0 && fg == previous {
-				codes[i * frames + step] = codes[i * frames + step - 1]
-			} else {
-				codes[i * frames + step] = prepare_appearance(e, Appearance{colors = {fg = fg}})
-			}
-			previous = fg
-		}
-	}
-	return {codes, steps}
-}
-
-// The prepared appearance for `step` of the fade to final color `final`.
-gradient_step :: #force_inline proc(g: Gradient_Steps, final, step: int) -> Appearance_Id #no_bounds_check {
-	return g.codes[final * (g.steps + 1) + step]
-}
-
 set_appearance_prepared :: #force_inline proc(
 	e: ^Engine,
 	id: Particle_Id,
@@ -163,57 +126,6 @@ set_appearances :: proc(e: ^Engine, ids: []Particle_Id, appearances: []Appearanc
 // same nullable FG/BG writes in every direct next loop.
 dynamic_apply_input_colors :: #force_inline proc(appearance: ^Appearance, input: Appearance) {
 	appearance.colors = input.colors
-}
-
-// Lerp both source colour lanes with the established, stepped gradient rule.
-// The caller owns the tick-to-step conversion and all phase lifetime policy.
-dynamic_gradient_to_input :: #force_inline proc(
-	appearance: ^Appearance,
-	start: Color,
-	input: Appearance,
-	steps, step: int,
-) {
-	if fg, ok := input.colors.fg.?; ok {
-		appearance.colors.fg = gradient_between_step(start, fg, steps, step)
-	} else {
-		appearance.colors.fg = nil
-	}
-	if bg, ok := input.colors.bg.?; ok {
-		appearance.colors.bg = gradient_between_step(start, bg, steps, step)
-	} else {
-		appearance.colors.bg = nil
-	}
-}
-
-// Binarypath's collapse target is the source style darkened in both lanes.
-// Keep that exceptional transform here rather than open-coding nullable lanes.
-dynamic_gradient_to_dimmed_input :: #force_inline proc(
-	appearance: ^Appearance,
-	start: Color,
-	input: Appearance,
-	brightness: f64,
-	steps, step: int,
-) {
-	if fg, ok := input.colors.fg.?; ok {
-		appearance.colors.fg = gradient_between_step(
-			start,
-			adjust_color_brightness(fg, brightness),
-			steps,
-			step,
-		)
-	} else {
-		appearance.colors.fg = nil
-	}
-	if bg, ok := input.colors.bg.?; ok {
-		appearance.colors.bg = gradient_between_step(
-			start,
-			adjust_color_brightness(bg, brightness),
-			steps,
-			step,
-		)
-	} else {
-		appearance.colors.bg = nil
-	}
 }
 
 // Bold, then each set color lane as one fixed-width SGR field. Every styled

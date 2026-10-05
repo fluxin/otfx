@@ -192,7 +192,7 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool #no_bound
 		target := e.canvas.center
 		if column_axis do target.column = value
 		else do target.row = value
-		point := engine.coord_on_line(e.canvas.center, target, ease.ease(easing, progress))
+		point := engine.tween(e.canvas.center, target, ease.ease(easing, progress))
 		position := point.column if column_axis else point.row
 		motion.changed = position != motion.position
 		motion.position = position
@@ -211,15 +211,9 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool #no_bound
 		for id, i in s.characters {
 			appearance := engine.get_appearance(e, id)
 			if s.color_handling == .Dynamic {
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					s.config.starting_color,
-					engine.get_initial_appearance(e, id),
-					10,
-					gradient_step,
-				)
+				appearance.colors = engine.tween(engine.Color_Pair{s.config.starting_color, s.config.starting_color}, engine.get_initial_appearance(e, id).colors, 10, gradient_step)
 			} else {
-				appearance.colors.fg = engine.gradient_between_step(
+				appearance.colors.fg = engine.tween(
 					s.config.starting_color,
 					s.final_colors[i],
 					10,

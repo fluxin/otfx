@@ -69,10 +69,9 @@ mark_cell_dirty :: #force_inline proc(e: ^Engine, cell: int) {
 	bit_array.unsafe_set(&e.dirty_cells, cell)
 }
 
-// Native iterator state and ascending order, with the traversal itself inlined.
-// Inlining bit_array.iterate_by_set alone leaves its private helper as a call.
-@(private)
-next_dirty_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (index: int, ok: bool) #no_bounds_check {
+// Ascending set bits of a bit_array iterator, with the traversal inlined;
+// bit_array.iterate_by_set calls a helper for every bit.
+next_set_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (index: int, ok: bool) #no_bounds_check {
 	for it.word_idx < len(it.array.bits) {
 		word := it.array.bits[it.word_idx] >> it.bit_idx
 		if word == 0 {
@@ -216,7 +215,7 @@ frame_build :: proc(e: ^Engine) #no_bounds_check {
 	compose_frame(e)
 	when FRAME_STATS_ENABLED {stats_composed(e)}
 	it := bit_array.make_iterator(&e.dirty_cells)
-	for cell, ok := next_dirty_bit(&it); ok; cell, ok = next_dirty_bit(&it) {
+	for cell, ok := next_set_bit(&it); ok; cell, ok = next_set_bit(&it) {
 		// dirty_cells has exactly len(cells) bits; only clipped/published cells are marked.
 		patch_cell(e, cell)
 	}

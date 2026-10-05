@@ -363,14 +363,14 @@ rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		ring_color := s.rings[ring_index].color
 		switch s.phase {
 		case .Disperse:
-			appearance.colors.fg = engine.gradient_between_step(
+			appearance.colors.fg = engine.tween(
 				ring_color,
 				s.final_colors[slot],
 				8,
 				min(s.color_tick / 10, 8),
 			)
 		case .Spin:
-			appearance.colors.fg = engine.gradient_between_step(
+			appearance.colors.fg = engine.tween(
 				s.final_colors[slot],
 				ring_color,
 				8,
@@ -401,7 +401,7 @@ rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			factor = ease.ease(.Quadratic_Out, factor)
 		case .Disperse_Loop, .Condense, .Rotate, .Idle, .Complete:
 		}
-		position := engine.coord_on_line(s.origins[slot], s.targets[slot], factor)
+		position := engine.tween(s.origins[slot], s.targets[slot], factor)
 		engine.set_particle(e, id, position)
 		if step < maximum {
 			s.active_slots[write] = slot

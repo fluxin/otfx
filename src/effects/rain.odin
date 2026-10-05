@@ -204,7 +204,7 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			engine.set_particle(
 				e,
 				id,
-				engine.coord_on_line(
+				engine.tween(
 					engine.coord(e.particles.initial_coord[id].column, e.canvas.top),
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -224,19 +224,13 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool #no_bounds_check {
 				fade_step := min(fade_tick / 3, 7)
 				if s.color_handling == .Dynamic {
 					appearance := engine.get_appearance(e, id)
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						s.drop_colors[slot],
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-						7,
-						fade_step,
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{s.drop_colors[slot], s.drop_colors[slot]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 7, fade_step)
 					engine.set_appearance(e, id, appearance)
 				} else {
 					engine.set_foreground(
 						e,
 						id,
-						engine.gradient_between_step(
+						engine.tween(
 							s.drop_colors[slot],
 							s.final_colors[slot],
 							7,

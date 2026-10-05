@@ -217,15 +217,9 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool #no_bou
 				if start_index < 0 do start_index += n
 				start := s.gradient[start_index]
 				if s.color_handling == .Dynamic {
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						start,
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-						transition_steps,
-						transition_step,
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{start, start}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, transition_steps, transition_step)
 				} else {
-					appearance.colors.fg = engine.gradient_between_step(
+					appearance.colors.fg = engine.tween(
 						start,
 						s.final_colors[i],
 						transition_steps,

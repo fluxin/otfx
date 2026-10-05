@@ -45,11 +45,6 @@ coord_vec :: proc(c: Coord) -> linalg.Vector2f64 {
 	return {f64(c.column), f64(c.row)}
 }
 
-coord_on_line :: #force_inline proc(start, end: Coord, t: f64) -> Coord {
-	p := linalg.lerp(coord_vec(start), coord_vec(end), t)
-	return rounded_coord(p)
-}
-
 // Every effect path currently uses at most one control point. Keep the
 // quadratic De Casteljau hot path fixed-size and allocation-free.
 coord_on_quadratic_bezier :: #force_inline proc(start, control, end: Coord, t: f64) -> Coord {
@@ -129,7 +124,7 @@ find_coords_in_circle :: proc(center: Coord, diameter: int) -> [dynamic]Coord {
 extrapolate_along_ray :: proc(origin, target: Coord, offset_from_target: f64) -> Coord {
 	base := line_length(origin, target, false)
 	if base == 0 do return target
-	return coord_on_line(origin, target, (base + offset_from_target) / base)
+	return tween(origin, target, (base + offset_from_target) / base)
 }
 
 find_normalized_distance_from_center :: proc(

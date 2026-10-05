@@ -150,20 +150,14 @@ randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool
 				if style.colors.fg != nil || style.colors.bg != nil {
 					step := min(age / s.config.final_gradient_frames, 7)
 					appearance := engine.get_appearance(e, id)
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						e.cfg.terminal_background_color,
-						style,
-						7,
-						step,
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{e.cfg.terminal_background_color, e.cfg.terminal_background_color}, style.colors, 7, step)
 					engine.set_appearance(e, id, appearance)
 				} else {
 					if age < 8 * s.config.final_gradient_frames {
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								e.cfg.terminal_background_color,
 								engine.Color{0x80, 0x80, 0x80},
 								7,

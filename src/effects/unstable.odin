@@ -238,14 +238,14 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 						start :=
 							style.colors.fg != nil ? style.colors.fg.? : engine.Color{0x80, 0x80, 0x80}
-						appearance.colors.fg = engine.gradient_between_step(
+						appearance.colors.fg = engine.tween(
 							start,
 							s.config.unstable_color,
 							12,
 							color_step,
 						)
 						if bg, ok := style.colors.bg.?; ok {
-							appearance.colors.bg = engine.gradient_between_step(
+							appearance.colors.bg = engine.tween(
 								bg,
 								s.config.unstable_color,
 								12,
@@ -255,7 +255,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 							appearance.colors.bg = nil
 						}
 					} else {
-						appearance.colors.fg = engine.gradient_between_step(
+						appearance.colors.fg = engine.tween(
 							s.final_colors[i],
 							s.config.unstable_color,
 							12,
@@ -290,7 +290,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 				id := s.characters[i]
 				slot := s.explosion_slots[i]
 				steps := s.explosion_steps[slot]
-				position := engine.coord_on_line(
+				position := engine.tween(
 					s.jumbled_coords[i],
 					s.explosion_targets[i],
 					s.explosion_factors[slot],
@@ -341,7 +341,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 					write += 1
 				}
 				if s.phase_tick < steps {
-					position := engine.coord_on_line(
+					position := engine.tween(
 						s.explosion_targets[i],
 						initial_coords[id],
 						s.reassembly_factors[slot],
@@ -355,14 +355,14 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 					if style.colors.fg == nil && s.phase_tick >= 39 {
 						appearance.colors.fg = nil
 					} else if fg, ok := style.colors.fg.?; ok {
-						appearance.colors.fg = engine.gradient_between_step(
+						appearance.colors.fg = engine.tween(
 							s.config.unstable_color,
 							fg,
 							12,
 							color_step,
 						)
 					} else {
-						appearance.colors.fg = engine.gradient_between_step(
+						appearance.colors.fg = engine.tween(
 							s.config.unstable_color,
 							engine.Color{0x80, 0x80, 0x80},
 							12,
@@ -370,7 +370,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 						)
 					}
 					if bg, ok := style.colors.bg.?; ok {
-						appearance.colors.bg = engine.gradient_between_step(
+						appearance.colors.bg = engine.tween(
 							s.config.unstable_color,
 							bg,
 							12,
@@ -380,7 +380,7 @@ unstable_next :: proc(s: ^Unstable_State, e: ^engine.Engine) -> bool #no_bounds_
 						appearance.colors.bg = nil
 					}
 				} else {
-					appearance.colors.fg = engine.gradient_between_step(
+					appearance.colors.fg = engine.tween(
 						s.config.unstable_color,
 						s.final_colors[i],
 						12,

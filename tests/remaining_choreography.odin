@@ -130,11 +130,8 @@ spotlights_render_before_radius_increment :: proc(t: ^testing.T) {
 	for &spot in s.spot_positions do spot = engine.coord(p.column + 3, p.row)
 	alive := step_frame(effects.spotlights_next, &s, &e)
 	testing.expect(t, alive)
-	testing.expect_value(
-		t,
-		engine.get_appearance(&e, engine.Particle_Id(id)).colors.fg,
-		Maybe(engine.Color)(s.dark_colors[0]),
-	)
+	dark := engine.ramp_code(s.light, s.light_base[0], 0)
+	testing.expect_value(t, e.particles.shared_appearance_id[id], dark)
 	alive = step_frame(effects.spotlights_next, &s, &e)
 	testing.expect(t, !alive)
 }

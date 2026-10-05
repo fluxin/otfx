@@ -81,7 +81,7 @@ frame_output :: proc(e: ^Engine) -> []byte #no_bounds_check {
 	used := copy(e.output, Frame_Origin)
 	cursor_row, row_end, previous := 0, 0, -1
 	cells := bit_array.make_iterator(&e.emit_cells)
-	for index, ok := next_dirty_bit(&cells); ok; index, ok = next_dirty_bit(&cells) {
+	for index, ok := next_set_bit(&cells); ok; index, ok = next_set_bit(&cells) {
 		if index != previous + 1 || index == row_end {
 			row, column := index / width, index % width
 			row_end = (row + 1) * width

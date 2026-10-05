@@ -246,7 +246,7 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			engine.set_particle(
 				e,
 				id,
-				engine.coord_on_line(
+				engine.tween(
 					s.origins[slot],
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -260,19 +260,13 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool #no_bounds_check {
 				step := min(age / s.config.final_gradient_frames, color_steps)
 				if s.color_handling == .Dynamic {
 					appearance := engine.get_appearance(e, id)
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						s.config.starting_color,
-						style,
-						10,
-						step,
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{s.config.starting_color, s.config.starting_color}, style.colors, 10, step)
 					engine.set_appearance(e, id, appearance)
 				} else {
 					engine.set_foreground(
 						e,
 						id,
-						engine.gradient_between_step(
+						engine.tween(
 							s.config.starting_color,
 							s.final_colors[slot],
 							s.color_steps,

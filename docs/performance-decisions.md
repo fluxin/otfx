@@ -36,8 +36,10 @@ them; they are not an inventory of today's engine state.
   [release report](release-benchmark.md).
 - One engine random stream (`random.odin`): inlined splitmix64 with
   multiply-shift bounded draws, one seeding entry point.
-- Shared appearances never change once prepared. Effects that fade to a final
-  color precompute a `Gradient_Steps` table of shared IDs at build time.
+- Shared appearances never change once prepared. One `tween` procedure group
+  interpolates colors (TerminalTextEffects' integer steps), color pairs,
+  coordinates and scalars. Effects that fade or light cells precompute an
+  `Appearance_Ramp` of shared IDs at build time and select steps per frame.
 - Per-frame procedures carry `#no_bounds_check`; this matched the program-wide
   flag (geometric 1.07x) while construction code stays checked.
 

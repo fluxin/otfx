@@ -111,7 +111,7 @@ Waves_State :: struct {
 	wave_codes:     [dynamic]engine.Appearance_Id, // age -> shared appearance
 	last_wave:      engine.Color,
 	final_index:    [dynamic]int, // spectrum index by Particle_Id
-	fades:          engine.Gradient_Steps, // fades to each spectrum entry
+	fades:          engine.Appearance_Ramp, // fades to each spectrum entry
 	start_ticks:    [dynamic]int, // -1 pending, -2 complete
 	final_step:     [dynamic]int, // -1 until the final appearance is published
 	active:         [dynamic]engine.Particle_Id, // revealed, not yet complete
@@ -178,12 +178,7 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
 	visible_flags := e.particles.flags
 	s.final_index = make([dynamic]int, len(e.particles))
-	s.fades = engine.gradient_steps_make(
-		e,
-		s.last_wave,
-		final_spectrum[:],
-		s.config.final_gradient_steps[0],
-	)
+	s.fades = engine.ramp_make(e, engine.tweens_from(s.last_wave, final_spectrum[:]), s.config.final_gradient_steps[0])
 	s.color_handling = e.cfg.existing_color_handling
 	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
@@ -240,7 +235,7 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			if s.color_handling != .Dynamic {
 				if step != s.final_step[id] {
 					engine.set_symbol(e, id, e.particles.initial_symbol[id])
-					engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[id], step))
+					engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[id], step))
 					s.final_step[id] = step
 				}
 			} else {
@@ -252,13 +247,7 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool #no_bounds_check 
 				if step != s.final_step[id] {
 					appearance := engine.Appearance{}
 					if style.colors.fg != nil || style.colors.bg != nil {
-						engine.dynamic_gradient_to_input(
-							&appearance,
-							last_wave,
-							style,
-							final_steps,
-							step,
-						)
+						appearance.colors = engine.tween(engine.Color_Pair{last_wave, last_wave}, style.colors, final_steps, step)
 					}
 					engine.set_symbol(e, id, e.particles.initial_symbol[id])
 					engine.set_appearance(e, id, appearance)

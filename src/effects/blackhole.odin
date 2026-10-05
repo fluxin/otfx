@@ -223,7 +223,7 @@ blackhole_build :: proc(s: ^Blackhole_State, e: ^engine.Engine) {
 		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg != nil {
 			s.dynamic_has_style = true
 		}
-		s.star_colors[i] = engine.gradient_between_step(
+		s.star_colors[i] = engine.tween(
 			engine.Color{0x4A, 0x4A, 0x4D},
 			engine.Color{0xFF, 0xFF, 0xFF},
 			6,
@@ -340,7 +340,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 				engine.set_particle(
 					e,
 					id,
-					engine.coord_on_line(
+					engine.tween(
 						s.star_coords[source],
 						s.ring_positions[slot],
 						ease.ease(.Sine_In_Out, f64(min(age + 1, steps)) / f64(steps)),
@@ -384,12 +384,12 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 				engine.set_particle(
 					e,
 					id,
-					engine.coord_on_line(s.star_coords[i], e.canvas.center, distance_fraction),
+					engine.tween(s.star_coords[i], e.canvas.center, distance_fraction),
 				)
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(
+					engine.tween(
 						s.star_colors[i],
 						engine.Color{0x00, 0x00, 0x00},
 						10,
@@ -455,7 +455,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 					engine.set_particle(
 						e,
 						id,
-						engine.coord_on_line(
+						engine.tween(
 							s.collapse_origins[slot],
 							s.expanded_positions[slot],
 							ease.ease(.Exponential_In, f64(s.phase_tick + 1) / f64(expand_steps)),
@@ -465,7 +465,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 					engine.set_particle(
 						e,
 						id,
-						engine.coord_on_line(
+						engine.tween(
 							s.expanded_positions[slot],
 							e.canvas.center,
 							ease.ease(
@@ -512,7 +512,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 					engine.set_particle(
 						e,
 						id,
-						engine.coord_on_line(
+						engine.tween(
 							e.canvas.center,
 							s.explode_targets[i],
 							s.explode_progress[s.explode_steps[i]],
@@ -525,7 +525,7 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 						engine.set_particle(
 							e,
 							id,
-							engine.coord_on_line(
+							engine.tween(
 								s.explode_targets[i],
 								initial_coords[id],
 								ease.ease(.Cubic_In, f64(return_age + 1) / f64(s.return_steps[i])),
@@ -540,20 +540,14 @@ blackhole_next :: proc(s: ^Blackhole_State, e: ^engine.Engine) -> bool #no_bound
 							engine.set_background(e, id, nil)
 						} else {
 							appearance := engine.get_appearance(e, id)
-							engine.dynamic_gradient_to_input(
-								&appearance,
-								s.explode_colors[i],
-								style,
-								10,
-								min(return_age / 20, 10),
-							)
+							appearance.colors = engine.tween(engine.Color_Pair{s.explode_colors[i], s.explode_colors[i]}, style.colors, 10, min(return_age / 20, 10))
 							engine.set_appearance(e, id, appearance)
 						}
 					} else {
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								s.explode_colors[i],
 								s.final_colors[i],
 								10,

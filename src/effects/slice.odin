@@ -309,7 +309,7 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		slot := slots[read]
 		maximum := max_steps[slot]
 		factor := s.motion_factors[slot]
-		engine.set_particle(e, id, engine.coord_on_line(origins[read], initial_coords[id], factor))
+		engine.set_particle(e, id, engine.tween(origins[read], initial_coords[id], factor))
 		if s.tick + 1 == maximum do continue
 		if write != read {
 			ids[write] = id

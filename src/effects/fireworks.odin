@@ -215,14 +215,14 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 			s.config.firework_colors[engine.random_below(len(s.config.firework_colors))]
 		for step in 0 ..< 11 {
 			if step <= 5 {
-				s.shell_bloom_colors[shell][step] = engine.gradient_between_step(
+				s.shell_bloom_colors[shell][step] = engine.tween(
 					s.shell_colors[shell],
 					engine.Color{255, 255, 255},
 					5,
 					step,
 				)
 			} else {
-				s.shell_bloom_colors[shell][step] = engine.gradient_between_step(
+				s.shell_bloom_colors[shell][step] = engine.tween(
 					engine.Color{255, 255, 255},
 					s.shell_colors[shell],
 					5,
@@ -239,15 +239,9 @@ fireworks_build :: proc(s: ^Fireworks_State, e: ^engine.Engine) {
 			for step in 0 ..< 16 {
 				appearance := engine.get_appearance(e, id)
 				if s.color_handling == .Dynamic {
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						s.shell_colors[shell],
-						initial,
-						15,
-						step,
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{s.shell_colors[shell], s.shell_colors[shell]}, initial.colors, 15, step)
 				} else {
-					appearance.colors.fg = engine.gradient_between_step(
+					appearance.colors.fg = engine.tween(
 						s.shell_colors[shell],
 						final_color,
 						15,
@@ -317,7 +311,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool #no_bound
 		age := s.tick - start
 		if start < 0 || age >= s.apex_steps[shell] do continue
 		origin := s.shell_origins[shell]
-		s.shell_positions[shell] = engine.coord_on_line(
+		s.shell_positions[shell] = engine.tween(
 			engine.coord(origin.column, e.canvas.bottom),
 			origin,
 			ease.ease(.Exponential_Out, f64(age + 1) / f64(s.apex_steps[shell])),
@@ -353,7 +347,7 @@ fireworks_next :: proc(s: ^Fireworks_State, e: ^engine.Engine) -> bool #no_bound
 			move_age := age - apex_end
 			if move_age == 0 do engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			if move_age < explode_steps {
-				position = engine.coord_on_line(
+				position = engine.tween(
 					origin,
 					s.explode_targets[i],
 					ease.ease(.Circular_Out, f64(move_age + 1) / f64(explode_steps)),

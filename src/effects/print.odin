@@ -251,14 +251,14 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			if s.color_handling == .Dynamic {
 				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 				if fg, ok := style.colors.fg.?; ok {
-					engine.set_foreground(e, id, engine.gradient_between_step(white, fg, 5, frame))
+					engine.set_foreground(e, id, engine.tween(white, fg, 5, frame))
 				} else if style.colors.bg == nil && frame < 5 {
 					engine.set_foreground(e, id, white)
 				} else {
 					engine.set_foreground(e, id, nil)
 				}
 				if bg, ok := style.colors.bg.?; ok {
-					engine.set_background(e, id, engine.gradient_between_step(white, bg, 5, frame))
+					engine.set_background(e, id, engine.tween(white, bg, 5, frame))
 				} else {
 					engine.set_background(e, id, nil)
 				}
@@ -266,7 +266,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(white, s.final_colors[id], 5, frame),
+					engine.tween(white, s.final_colors[id], 5, frame),
 				)
 			}
 		}
@@ -282,7 +282,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		engine.set_particle(
 			e,
 			s.typing_head,
-			engine.coord_on_line(
+			engine.tween(
 				s.head_origin,
 				s.head_target,
 				ease.ease(s.config.print_head_easing, progress),

@@ -96,7 +96,7 @@ Slide_State :: struct {
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
 	final_index:    [dynamic]int, // spectrum index by slot
-	fades:          engine.Gradient_Steps, // fades to each spectrum entry
+	fades:          engine.Appearance_Ramp, // fades to each spectrum entry
 	groups:         engine.Particle_Groups,
 	heads:          [dynamic]int,
 	origins:        [dynamic]engine.Coord,
@@ -137,7 +137,7 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_index = make([dynamic]int, n)
-	s.fades = engine.gradient_steps_make(e, s.config.final_gradient_stops[0], spectrum[:], 10)
+	s.fades = engine.ramp_make(e, engine.tweens_from(s.config.final_gradient_stops[0], spectrum[:]), 10)
 	s.origins = make([dynamic]engine.Coord, n)
 	s.steps = make([dynamic]int, n)
 	s.max_steps = make([dynamic]int, n)
@@ -146,7 +146,7 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		s.index_by_id[id] = i
 		s.final_index[i] = engine.gradient_sample_index(sampler, len(spectrum), c)
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], 0))
+		engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], 0))
 	}
 
 	grouping: engine.Particle_Group = .Row_T2B
@@ -285,7 +285,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			engine.set_position(
 				e,
 				id,
-				engine.coord_on_line(
+				engine.tween(
 					s.origins[i],
 					e.particles.initial_coord[id],
 					ease.ease(s.config.movement_easing, progress),
@@ -302,9 +302,9 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool #no_bounds_check 
 				engine.set_appearance(e, id, appearance)
 			}
 		} else if finished {
-			engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], s.fades.steps))
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], s.fades.steps))
 		} else if step <= 10 * gradient_hold && step % gradient_hold == 0 {
-			engine.set_appearance(e, id, engine.gradient_step(s.fades, s.final_index[i], min(step / gradient_hold, s.fades.steps)))
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], min(step / gradient_hold, s.fades.steps)))
 		}
 		s.steps[i] += 1
 		if !finished {

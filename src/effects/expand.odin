@@ -108,15 +108,9 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		for step in 0 ..< 11 {
 			appearance := engine.get_appearance(e, id)
 			if s.color_handling == .Dynamic {
-				engine.dynamic_gradient_to_input(
-					&appearance,
-					s.config.final_gradient_stops[0],
-					input,
-					10,
-					step,
-				)
+				appearance.colors = engine.tween(engine.Color_Pair{s.config.final_gradient_stops[0], s.config.final_gradient_stops[0]}, input.colors, 10, step)
 			} else {
-				appearance.colors.fg = engine.gradient_between_step(
+				appearance.colors.fg = engine.tween(
 					s.config.final_gradient_stops[0],
 					final_color,
 					10,
@@ -152,7 +146,7 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool #no_bounds_chec
 		slot := s.motion_slots[i]
 		maximum := s.max_steps[slot]
 		factor := s.motion_factors[slot]
-		position := engine.coord_on_line(e.canvas.center, e.particles.initial_coord[id], factor)
+		position := engine.tween(e.canvas.center, e.particles.initial_coord[id], factor)
 		step := min(engine.round_to_int(factor * 10), 10)
 		if s.tick + 1 == maximum {
 			position = e.particles.initial_coord[id]

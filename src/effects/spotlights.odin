@@ -73,18 +73,19 @@ Spotlights_Phase :: enum {
 	Expand,
 }
 
+// Unlit characters keep a fifth of their brightness; the falloff between that
+// and full light is drawn in evenly spaced brightness levels.
+Spotlights_Dimmest :: 0.2
+Spotlights_Light_Levels :: 64
+
 Spotlights_State :: struct {
 	config:                   Spotlights_Config,
 	characters:               [dynamic]engine.Particle_Id,
 	rows:                     []engine.Span, // spans into the immutable, row-ordered characters
 	lit:                      [dynamic]int,
 	candidates:               bit_array.Bit_Array,
-	bright_colors:            [dynamic]engine.Color,
-	bright_hsl:               []engine.HSL_Color,
-	bright_bg_hsl:            []engine.HSL_Color,
-	dark_colors:              [dynamic]engine.Color,
-	bright_bg:                [dynamic]Maybe(engine.Color),
-	dark_bg:                  [dynamic]Maybe(engine.Color),
+	light:                    engine.Appearance_Ramp, // each base style, dark to fully lit
+	light_base:               [dynamic]int, // ramp base by character slot
 	spot_positions:           [dynamic]engine.Coord,
 	spot_origins:             [dynamic]engine.Coord,
 	spot_targets:             [dynamic]engine.Coord,
@@ -149,35 +150,47 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	s.rows = make([]engine.Span, e.canvas.top + 1)
 	reserve(&s.lit, n)
 	bit_array.init(&s.candidates, n)
-	s.bright_colors = make([dynamic]engine.Color, n)
-	s.dark_colors = make([dynamic]engine.Color, n)
-	s.bright_hsl = make([]engine.HSL_Color, n)
-	if s.color_handling == .Dynamic do s.bright_bg_hsl = make([]engine.HSL_Color, n)
-	s.bright_bg = make([dynamic]Maybe(engine.Color), n)
-	s.dark_bg = make([dynamic]Maybe(engine.Color), n)
 	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
 
+	// Each character's fully lit style; equal styles share one light ramp.
+	lit_styles := make([]engine.Appearance, n, context.temp_allocator)
 	for id, i in s.characters {
 		row := &s.rows[initial_coords[id].row]
 		if row.len == 0 do row.start = i
 		row.len += 1
-		bright := engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
+		style := engine.get_initial_appearance(e, id)
+		lit := &lit_styles[i]
+		lit.bold = style.bold
 		if s.color_handling == .Dynamic {
-			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-			bright = engine.Color{0x80, 0x80, 0x80}
-			if fg, ok := style.colors.fg.?; ok do bright = fg
-			s.bright_bg[i] = style.colors.bg
-			if bg, ok := style.colors.bg.?; ok {
-				s.bright_bg_hsl[i] = engine.color_to_hsl(bg)
-				s.dark_bg[i] = engine.adjust_color_brightness(s.bright_bg_hsl[i], 0.2)
-			}
+			lit.colors = {fg = style.colors.fg.? or_else engine.Color{0x80, 0x80, 0x80}, bg = style.colors.bg}
+		} else {
+			lit.colors.fg = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
 		}
-		s.bright_colors[i] = bright
-		s.bright_hsl[i] = engine.color_to_hsl(bright)
-		s.dark_colors[i] = engine.adjust_color_brightness(s.bright_hsl[i], 0.2)
-		engine.set_foreground(e, id, s.dark_colors[i])
-		engine.set_background(e, id, s.color_handling == .Dynamic ? s.dark_bg[i] : nil)
+	}
+	bases: [dynamic]engine.Appearance
+	bases, s.light_base = engine.group_values(lit_styles)
+	defer delete(bases)
+	// Each base style lit from the dimmest brightness up to itself.
+	steps := Spotlights_Light_Levels - 1
+	light := make([]engine.Appearance, len(bases) * Spotlights_Light_Levels, context.temp_allocator)
+	for lit, row in bases {
+		fg_hsl, bg_hsl: engine.HSL_Color
+		if fg, ok := lit.colors.fg.?; ok do fg_hsl = engine.color_to_hsl(fg)
+		if bg, ok := lit.colors.bg.?; ok do bg_hsl = engine.color_to_hsl(bg)
+		for step in 0 ..= steps {
+			style := lit
+			if step < steps {
+				brightness := engine.tween(Spotlights_Dimmest, 1, f64(step) / f64(steps))
+				if lit.colors.fg != nil do style.colors.fg = engine.adjust_color_brightness(fg_hsl, brightness)
+				if lit.colors.bg != nil do style.colors.bg = engine.adjust_color_brightness(bg_hsl, brightness)
+			}
+			light[row * Spotlights_Light_Levels + step] = style
+		}
+	}
+	s.light = engine.ramp_from_styles(e, light, steps)
+	for id, i in s.characters {
+		engine.set_appearance(e, id, engine.ramp_code(s.light, s.light_base[i], 0))
 		visible_flags[id] += {.Visible}
 	}
 
@@ -298,47 +311,32 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool #no_bou
 	radius := f64(s.illuminate_range)
 	falloff_start := radius * (1 - s.config.beam_falloff)
 	it := bit_array.make_iterator(&s.candidates)
-	for i, ok := bit_array.iterate_by_set(&it); ok; i, ok = bit_array.iterate_by_set(&it) {
+	for i, ok := engine.next_set_bit(&it); ok; i, ok = engine.next_set_bit(&it) {
 		id := s.characters[i]
-		appearance := engine.get_appearance(e, id)
-		if s.color_handling == .Dynamic &&
-		   s.phase == .Expand &&
-		   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil {
-			appearance.colors.fg = nil
-			appearance.colors.bg =
-				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg
-			engine.set_appearance(e, id, appearance)
-			continue
+		if s.color_handling == .Dynamic && s.phase == .Expand {
+			// Input without a foreground gets its own colors back as the light expands.
+			initial := engine.get_initial_appearance(e, id)
+			if initial.colors.fg == nil {
+				engine.set_appearance(e, id, engine.Appearance{colors = initial.colors, bold = initial.bold})
+				continue
+			}
 		}
 		p := initial_coords[id]
 		nearest_squared := engine.line_length_squared(s.spot_positions[0], p, true)
 		for j in 1 ..< spot_count do nearest_squared = min(nearest_squared, engine.line_length_squared(s.spot_positions[j], p, true))
-		if nearest_squared > radius * radius {
-			appearance.colors.fg = s.dark_colors[i]
-			appearance.colors.bg = s.color_handling == .Dynamic ? s.dark_bg[i] : nil
-			engine.set_appearance(e, id, appearance)
-			continue
-		}
-		append(&s.lit, i)
-		bright := s.bright_colors[i]
-		if s.config.beam_falloff > 0 &&
-		   (falloff_start < 0 || nearest_squared > falloff_start * falloff_start) {
-			nearest := math.sqrt(nearest_squared)
-			factor := max(1 - (nearest - falloff_start) / (radius * s.config.beam_falloff), 0.2)
-			appearance.colors.fg = engine.adjust_color_brightness(s.bright_hsl[i], factor)
-			if s.color_handling == .Dynamic {
-				if s.bright_bg[i] != nil {
-					appearance.colors.bg = engine.adjust_color_brightness(
-						s.bright_bg_hsl[i],
-						factor,
-					)
-				}
+		// Full light inside the falloff start, then linear down to the dimmest.
+		brightness := Spotlights_Dimmest
+		if nearest_squared <= radius * radius {
+			append(&s.lit, i)
+			brightness = 1
+			if s.config.beam_falloff > 0 &&
+			   (falloff_start < 0 || nearest_squared > falloff_start * falloff_start) {
+				nearest := math.sqrt(nearest_squared)
+				brightness = max(1 - (nearest - falloff_start) / (radius * s.config.beam_falloff), Spotlights_Dimmest)
 			}
-		} else {
-			appearance.colors.fg = bright
-			appearance.colors.bg = s.color_handling == .Dynamic ? s.bright_bg[i] : nil
 		}
-		engine.set_appearance(e, id, appearance)
+		lit := (brightness - Spotlights_Dimmest) / (1 - Spotlights_Dimmest)
+		engine.set_appearance(e, id, engine.ramp_code_at(s.light, s.light_base[i], lit))
 	}
 	bit_array.clear(&s.candidates)
 	if s.phase == .Expand do s.illuminate_range += 1

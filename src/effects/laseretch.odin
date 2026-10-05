@@ -353,19 +353,13 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bound
 				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 				if style.colors.fg != nil || style.colors.bg != nil {
 					appearance := engine.get_appearance(e, id)
-					engine.dynamic_gradient_to_input(
-						&appearance,
-						s.cool_spectrum[len(s.cool_spectrum) - 1],
-						style,
-						8,
-						min(cool_age / 3, 8),
-					)
+					appearance.colors = engine.tween(engine.Color_Pair{s.cool_spectrum[len(s.cool_spectrum) - 1], s.cool_spectrum[len(s.cool_spectrum) - 1]}, style.colors, 8, min(cool_age / 3, 8))
 					engine.set_appearance(e, id, appearance)
 				} else if cool_age < 27 {
 					engine.set_foreground(
 						e,
 						id,
-						engine.gradient_between_step(
+						engine.tween(
 							s.cool_spectrum[len(s.cool_spectrum) - 1],
 							engine.Color{0xFF, 0xFF, 0xFF},
 							8,
@@ -381,7 +375,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bound
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(
+					engine.tween(
 						s.cool_spectrum[len(s.cool_spectrum) - 1],
 						s.final_colors[i],
 						8,

@@ -269,7 +269,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 							engine.set_foreground(
 								e,
 								id,
-								engine.gradient_between_step(
+								engine.tween(
 									s.weak_colors[i],
 									s.dust_colors[i],
 									9,
@@ -283,7 +283,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 							engine.set_background(
 								e,
 								id,
-								engine.gradient_between_step(weak_bg, s.dust_bg[i].?, 9, age / 4),
+								engine.tween(weak_bg, s.dust_bg[i].?, 9, age / 4),
 							)
 						} else {
 							engine.set_background(e, id, nil)
@@ -299,7 +299,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 				engine.set_particle(
 					e,
 					id,
-					engine.coord_on_line(
+					engine.tween(
 						input,
 						engine.coord(input.column, e.canvas.bottom),
 						ease.ease(.Bounce_Out, progress),
@@ -372,7 +372,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 					engine.set_particle(
 						e,
 						id,
-						engine.coord_on_line(
+						engine.tween(
 							engine.coord(input.column, e.canvas.top),
 							input,
 							f64(s.phase_tick + 1) / f64(steps),
@@ -401,7 +401,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 							engine.set_foreground(
 								e,
 								id,
-								engine.gradient_between_step(
+								engine.tween(
 									start,
 									engine.Color{0xFF, 0xFF, 0xFF},
 									6,
@@ -415,7 +415,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 							engine.set_background(
 								e,
 								id,
-								engine.gradient_between_step(
+								engine.tween(
 									bg,
 									engine.Color{0xFF, 0xFF, 0xFF},
 									6,
@@ -429,7 +429,7 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								s.final_colors[i],
 								engine.Color{0xFF, 0xFF, 0xFF},
 								6,
@@ -445,20 +445,14 @@ crumble_next :: proc(s: ^Crumble_State, e: ^engine.Engine) -> bool #no_bounds_ch
 							engine.set_background(e, id, nil)
 						} else {
 							appearance := engine.get_appearance(e, id)
-							engine.dynamic_gradient_to_input(
-								&appearance,
-								engine.Color{0xFF, 0xFF, 0xFF},
-								style,
-								9,
-								min((flash_age - 28) / 4, 9),
-							)
+							appearance.colors = engine.tween(engine.Color_Pair{engine.Color{0xFF, 0xFF, 0xFF}, engine.Color{0xFF, 0xFF, 0xFF}}, style.colors, 9, min((flash_age - 28) / 4, 9))
 							engine.set_appearance(e, id, appearance)
 						}
 					} else {
 						engine.set_foreground(
 							e,
 							id,
-							engine.gradient_between_step(
+							engine.tween(
 								engine.Color{0xFF, 0xFF, 0xFF},
 								s.final_colors[i],
 								9,

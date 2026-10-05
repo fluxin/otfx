@@ -521,7 +521,7 @@ vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Par
 	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
 	if frame < frame_count {
 		t := f64(frame + 1) / f64(frame_count)
-		engine.set_particle(e, id, engine.coord_on_line(s.motion_origins[id], s.motion_targets[id], t))
+		engine.set_particle(e, id, engine.tween(s.motion_origins[id], s.motion_targets[id], t))
 		frame += 1
 		s.motion_frame[id] = frame
 	}

@@ -79,40 +79,11 @@ gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]C
 		assert(step_count >= 1)
 		start := stops[pair]
 		end := stops[(pair + 1) % len(stops)]
-		start_r, start_g, start_b := int(start.r), int(start.g), int(start.b)
-		delta_r := math.floor_div(int(end.r) - start_r, step_count)
-		delta_g := math.floor_div(int(end.g) - start_g, step_count)
-		delta_b := math.floor_div(int(end.b) - start_b, step_count)
 		range_start := len(spectrum) != 0 ? 1 : 0
-		for i in range_start ..< step_count {
-			append(
-				&spectrum,
-				Color {
-					u8(clamp(start_r + delta_r * i, 0, 255)),
-					u8(clamp(start_g + delta_g * i, 0, 255)),
-					u8(clamp(start_b + delta_b * i, 0, 255)),
-				},
-			)
-		}
+		for i in range_start ..< step_count do append(&spectrum, tween(start, end, step_count, i))
 		append(&spectrum, end)
 	}
 	return spectrum
-}
-
-// Sample the same integer-delta interpolation used by gradient_make without
-// materializing the two-stop gradient. Index == steps is the exact end color.
-gradient_between_step :: proc(start, end: Color, steps, index: int) -> Color #no_bounds_check {
-	assert(steps >= 1 && index >= 0 && index <= steps)
-	if index == steps do return end
-	start_r, start_g, start_b := int(start.r), int(start.g), int(start.b)
-	delta_r := math.floor_div(int(end.r) - start_r, steps)
-	delta_g := math.floor_div(int(end.g) - start_g, steps)
-	delta_b := math.floor_div(int(end.b) - start_b, steps)
-	return {
-		u8(clamp(start_r + delta_r * index, 0, 255)),
-		u8(clamp(start_g + delta_g * index, 0, 255)),
-		u8(clamp(start_b + delta_b * index, 0, 255)),
-	}
 }
 
 gradient_color_at_fraction :: proc(spectrum: []Color, fraction: f64) -> Color {

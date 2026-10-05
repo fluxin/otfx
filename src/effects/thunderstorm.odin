@@ -564,11 +564,11 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			engine.set_foreground(
 				e,
 				id,
-				engine.gradient_between_step(s.storm_colors[i], s.flash_colors[i], 3, flash_step),
+				engine.tween(s.storm_colors[i], s.flash_colors[i], 3, flash_step),
 			)
 		}
 		step := min(age / 6, 7)
-		color := engine.gradient_between_step(
+		color := engine.tween(
 			s.config.lightning_color,
 			engine.adjust_color_brightness(s.config.lightning_color, 1.7),
 			7,
@@ -579,7 +579,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		}
 	} else if age < 54 {
 		step := min((age - 42) / 2, 6)
-		color := engine.gradient_between_step(
+		color := engine.tween(
 			s.config.lightning_color,
 			e.cfg.terminal_background_color,
 			6,
@@ -625,7 +625,7 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		engine.set_particle(
 			e,
 			id,
-			engine.coord_on_line(
+			engine.tween(
 				s.rain_origins[slot],
 				s.rain_targets[slot],
 				f64(age + 1) / f64(s.rain_steps[slot]),
@@ -671,7 +671,7 @@ thunderstorm_update_sparks :: proc(
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(
+					engine.tween(
 						s.config.spark_glow_color,
 						background,
 						7,
@@ -702,7 +702,7 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 			engine.set_foreground(
 				e,
 				id,
-				engine.gradient_between_step(
+				engine.tween(
 					s.config.glowing_text_color,
 					s.storm_colors[i],
 					7,
@@ -726,14 +726,14 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool #no
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(s.final_colors[i], s.storm_colors[i], 7, step),
+					engine.tween(s.final_colors[i], s.storm_colors[i], 7, step),
 				)
 				if s.color_handling == .Dynamic {
 					if bg, ok := s.visible_bg[i].?; ok {
 						engine.set_background(
 							e,
 							id,
-							engine.gradient_between_step(bg, s.storm_bg[i].?, 7, step),
+							engine.tween(bg, s.storm_bg[i].?, 7, step),
 						)
 					} else {
 						engine.set_background(e, id, nil)
@@ -774,14 +774,14 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool #no
 				engine.set_foreground(
 					e,
 					id,
-					engine.gradient_between_step(s.storm_colors[i], s.final_colors[i], 7, step),
+					engine.tween(s.storm_colors[i], s.final_colors[i], 7, step),
 				)
 				if s.color_handling == .Dynamic {
 					if bg, ok := s.storm_bg[i].?; ok {
 						engine.set_background(
 							e,
 							id,
-							engine.gradient_between_step(bg, s.visible_bg[i].?, 7, step),
+							engine.tween(bg, s.visible_bg[i].?, 7, step),
 						)
 					} else {
 						engine.set_background(e, id, nil)
