@@ -24,6 +24,11 @@ input_style_has_color :: #force_inline proc(style: Appearance) -> bool {
 	return style.colors.fg != nil || style.colors.bg != nil
 }
 
+lines_delete :: proc(lines: []Line) {
+	for &l in lines do delete(l.cells)
+	delete(lines)
+}
+
 preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error) {
 	if tab_width <= 0 do return nil, .Invalid_Tab_Width
 	lines: [dynamic]Line
@@ -45,10 +50,14 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 		r := runes[i]
 		if r == '\x1b' {
 			if i + 1 >= len(runes) || runes[i + 1] != '[' {
+				lines_delete(lines[:])
 				return nil, .Unsupported_Escape
 			}
 			end := input_csi_end(runes, i)
-			if end == 0 do return nil, .Unsupported_Cursor
+			if end == 0 {
+				lines_delete(lines[:])
+				return nil, .Unsupported_Cursor
+			}
 			final := runes[end - 1]
 			params_end := i + 2
 			for params_end < end - 1 &&
@@ -60,10 +69,12 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 			intermediates := runes[params_end:end - 1]
 			if final == 'm' {
 				if len(intermediates) != 0 || !input_apply_sgr(params, &active, &standard_fg) {
+					lines_delete(lines[:])
 					return nil, .Unsupported_SGR
 				}
 			} else if !input_private_mode(params, intermediates, final) {
 				if !input_apply_cursor(params, intermediates, final, &row, &col) {
+					lines_delete(lines[:])
 					return nil, .Unsupported_Cursor
 				}
 			}
@@ -87,6 +98,8 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 		if r == '\t' {
 			symbol = ' '
 			count = tab_width - col % tab_width
+		} else if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			symbol = ' '
 		}
 		for _ in 0 ..< count {
 			ensure(&lines, row, col)
@@ -104,7 +117,10 @@ preprocess_input :: proc(input: string, tab_width: int) -> ([]Line, Input_Error)
 			l.width -= 1
 		}
 	}
-	for len(lines) > 0 && lines[len(lines) - 1].width == 0 do pop(&lines)
+	for len(lines) > 0 && lines[len(lines) - 1].width == 0 {
+		delete(lines[len(lines) - 1].cells)
+		pop(&lines)
+	}
 	if len(lines) == 0 do append(&lines, Line{width = 0})
 	return lines[:], .None
 }
@@ -277,6 +293,9 @@ setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 	resize(&e.particles, first + count)
 	reserve(&e.updates, cap(e.particles))
 	resize(&e.particle_sets.input, set_first + count)
+	blank := prepare_appearance(e, Appearance{})
+	last_style := Appearance{}
+	last_style_id := blank
 	written := 0
 	// Wrap by walking the original cells. No copied lines or retained suffixes.
 	wrap_width := max(e.canvas.right, 1)
@@ -297,17 +316,25 @@ setup_input_particles :: proc(e: ^Engine, lines: []Line) {
 			}
 			id := first + written
 			initial := cell.style
+			if initial.colors != last_style.colors || initial.bold != last_style.bold {
+				if initial.colors == ({}) && !initial.bold {
+					last_style_id = blank
+				} else {
+					last_style_id = prepare_appearance(e, initial)
+				}
+				last_style = initial
+			}
 			if e.cfg.existing_color_handling == .Always do e.particles.flags[id] += {.Preserve_Initial_Colors}
 			init_particle(
 				e,
 				Particle_Id(id),
 				cell.symbol,
-				prepare_appearance(e, initial),
+				last_style_id,
 				coord(column, input_height - row_index),
 			)
-			// Input starts with the glyph alone; its original style remains available
-			// to the configured color policy and effect transitions.
-			set_appearance(e, Particle_Id(id), Appearance{})
+			// Input starts with the glyph alone; sharing `blank` avoids detaching
+			// every input particle into private_appearance before build_effect runs.
+			e.particles.shared_appearance_id[id] = blank
 			e.particle_sets.input[set_first + written] = Particle_Id(id)
 			written += 1
 		}

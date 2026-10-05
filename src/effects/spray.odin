@@ -107,8 +107,9 @@ Spray_State :: struct {
 	index_by_id:    [dynamic]int,
 	pending:        [dynamic]engine.Particle_Id,
 	active_indexes: [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
-	start_colors:   [dynamic]engine.Color,
+	targets:        [dynamic]engine.Coord,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
 	origin:         engine.Coord,
@@ -147,8 +148,9 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -167,18 +169,36 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	reserve(&s.active_indexes, n)
+	reserve(&s.pending, n)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.final_colors = make([dynamic]engine.Color, n)
-	s.start_colors = make([dynamic]engine.Color, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
 	s.origin = spray_origin(s.config.spray_position, e.canvas)
+	if n == 0 do return
+
+	fade_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
+
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		initial_coord := e.particles.initial_coord[id]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coord)
-		s.start_colors[i] = spectrum[engine.random_below(len(spectrum))]
+		s.targets[i] = initial_coord
+		final_color := engine.gradient_sample(sampler, spectrum[:], initial_coord)
+		start_color := spectrum[engine.random_below(len(spectrum))]
+		if s.color_handling == .Dynamic {
+			init_style := engine.get_initial_appearance(e, id)
+			fade_tweens[i] = {
+				from = {colors = {start_color, start_color}},
+				to   = {colors = init_style.colors},
+			}
+		} else {
+			fade_tweens[i] = {
+				from = {colors = {fg = start_color}},
+				to   = {colors = {fg = final_color}},
+			}
+		}
 		speed := engine.random_float_range(
 			s.config.movement_speed_range.lo,
 			s.config.movement_speed_range.hi,
@@ -191,6 +211,11 @@ spray_build :: proc(s: ^Spray_State, e: ^engine.Engine) {
 		s.start_ticks[i] = -1
 		append(&s.pending, id)
 	}
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	s.fades = engine.ramp_make(e, unique_tweens[:], 7)
+
 	engine.random_shuffle(s.pending[:])
 	s.volume = max(int(f64(len(s.pending)) * s.config.spray_volume), 1)
 }
@@ -205,7 +230,7 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			s.start_ticks[i] = s.tick
 			s.last_tick = max(s.last_tick, s.tick + max(s.max_steps[i], 160))
 			append(&s.active_indexes, i)
-			engine.set_particle(e, id, engine.Visible(true))
+			engine.set_visible(e, id, true)
 		}
 	}
 	write := 0
@@ -213,45 +238,25 @@ spray_next :: proc(s: ^Spray_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		id := s.characters[i]
 		start := s.start_ticks[i]
 		age := s.tick - start
+		max_step := s.max_steps[i]
 		// Keep the arrival boundary for the layer reset, even after motion stops.
-		if age < max(s.max_steps[i], 140) {
+		if age < max(max_step, 140) {
 			s.active_indexes[write] = i
 			write += 1
 		}
-		if age < s.max_steps[i] {
-			progress := f64(age + 1) / f64(s.max_steps[i])
-			engine.set_particle(
-				e,
-				id,
-				engine.tween(
-					s.origin,
-					e.particles.initial_coord[id],
-					ease.ease(s.config.movement_easing, progress),
-				),
+		if age < max_step {
+			progress := f64(age + 1) / f64(max_step)
+			pos := engine.tween(
+				s.origin,
+				s.targets[i],
+				ease.ease(s.config.movement_easing, progress),
 			)
-			engine.set_particle(e, id, engine.Layer(1))
-		} else if age == s.max_steps[i] {
-			engine.set_particle(e, id, e.particles.initial_coord[id])
-			engine.set_particle(e, id, engine.Layer(0))
+			engine.set_placement(e, id, pos, true, 1)
+		} else if age == max_step {
+			engine.set_placement(e, id, s.targets[i], true, 0)
 		}
 		if age > 140 || age % 20 != 0 do continue
-		if s.color_handling == .Dynamic {
-			step := min(age / 20, 7)
-			appearance := engine.get_appearance(e, id)
-			appearance.colors = engine.tween(engine.Color_Pair{s.start_colors[i], s.start_colors[i]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 7, step)
-			engine.set_appearance(e, id, appearance)
-		} else {
-			engine.set_foreground(
-				e,
-				id,
-				engine.tween(
-					s.start_colors[i],
-					s.final_colors[i],
-					7,
-					min(age / 20, 7),
-				),
-			)
-		}
+		engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[i], min(age / 20, 7)))
 	}
 	resize(&s.active_indexes, write)
 	s.tick += 1

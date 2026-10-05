@@ -73,14 +73,24 @@ otfx_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 		free_all(context.temp_allocator)
 	}
 	if frames == Max_Frames do return frames, false
-	// Inspect the last rendered grid, including painter collisions.
+	// Inspect the last rendered grid, including painter collisions and stray debris.
 	e := &run.engine_state
+	input_cells := make([]bool, len(e.cells), context.temp_allocator)
+	defer delete(input_cells, context.temp_allocator)
 	for id in e.particle_sets.input {
 		p := e.particles.initial_coord[id]
-		wanted := (e.layout.visible_top - p.row) * e.layout.visible_right + p.column - 1
+		wanted := engine.cell_index(e, p)
 		if wanted < 0 || wanted >= len(e.cells) do return frames, false
+		input_cells[wanted] = true
 		visible := e.cells[wanted].top
 		if visible == engine.NO_PARTICLE || e.particles.symbol[visible] != e.particles.initial_symbol[id] do return frames, false
+	}
+	for entry, idx in e.cells {
+		if input_cells[idx] do continue
+		visible := entry.top
+		if visible == engine.NO_PARTICLE do continue
+		sym := e.particles.symbol[visible]
+		if sym != 0 && sym != ' ' do return frames, false
 	}
 	return frames, true
 }
@@ -103,7 +113,7 @@ reference_frames :: proc(kind: effects.Effect_Kind) -> (int, bool) {
 		"--canvas-height",
 		fmt.tprintf("%d", Canvas_Height),
 		"--ignore-terminal-dimensions",
-		common.effect_name(kind, context.temp_allocator),
+		common.effect_name(kind),
 	)
 	append(&command, ..case_args(kind))
 
@@ -169,10 +179,7 @@ main :: proc() {
 
 	matches, differences, failures := 0, 0, 0
 	for kind in effects.Effect_Kind {
-		// Held on the heap: stepping an effect resets the temp allocator every
-		// frame, which would free a temp-allocated name before it is printed.
 		name := common.effect_name(kind)
-		defer delete(name)
 		if filter != "" && filter != name do continue
 
 		ours, ours_ok := otfx_frames(kind)

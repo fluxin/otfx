@@ -104,6 +104,7 @@ ramp_make :: proc(
 	allocator := context.allocator,
 ) -> Appearance_Ramp {
 	styles := make([]Appearance, len(tweens) * (steps + 1), context.temp_allocator)
+	defer delete(styles, context.temp_allocator)
 	for tw, row in tweens {
 		for step in 0 ..= steps {
 			styles[row * (steps + 1) + step] = {

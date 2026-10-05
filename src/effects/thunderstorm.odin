@@ -133,6 +133,12 @@ Thunderstorm_State :: struct {
 	flash_colors:        [dynamic]engine.Color,
 	visible_bg:          [dynamic]Maybe(engine.Color),
 	storm_bg:            [dynamic]Maybe(engine.Color),
+	style_slots:         [dynamic]int,
+	prestorm_ramp:       engine.Appearance_Ramp,
+	poststorm_ramp:      engine.Appearance_Ramp,
+	text_flash_ramp:     engine.Appearance_Ramp,
+	text_glow_ramp:      engine.Appearance_Ramp,
+	dynamic_final_codes: [dynamic]engine.Appearance_Id,
 	input_slot_by_id:    [dynamic]int,
 	input_at_cell:       [dynamic]i32,
 	glow_starts:         [dynamic]int,
@@ -150,10 +156,15 @@ Thunderstorm_State :: struct {
 	rain_active:         [dynamic]int,
 	rain_free:           [dynamic]int,
 	rain_delay:          int,
+	rain_code:           engine.Appearance_Id,
 
 	// Strike storage grows at generation boundaries and is reused thereafter.
 	// Recursive branches have no quadratic height-only capacity bound.
 	plain_appearance:    engine.Appearance_Id,
+	lightning_code:      engine.Appearance_Id,
+	bolt_flash_codes:    [8]engine.Appearance_Id,
+	bolt_fade_codes:     [7]engine.Appearance_Id,
+	spark_codes:         [8]engine.Appearance_Id,
 	strike_ids:          [dynamic]engine.Particle_Id,
 	strike_pending:      [dynamic]engine.Particle_Id,
 	strike_pending_head: int,
@@ -179,7 +190,7 @@ thunderstorm_cell_index :: #force_inline proc(c: engine.Canvas, p: engine.Coord)
 	return (p.row - c.bottom) * c.width + (p.column - c.left)
 }
 
-thunderstorm_take_rain :: proc(s: ^Thunderstorm_State) -> int {
+thunderstorm_take_rain :: proc(s: ^Thunderstorm_State) -> int #no_bounds_check {
 	last := len(s.rain_free) - 1
 	assert(last >= 0)
 	slot := s.rain_free[last]
@@ -187,7 +198,7 @@ thunderstorm_take_rain :: proc(s: ^Thunderstorm_State) -> int {
 	return slot
 }
 
-thunderstorm_take_spark :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> int {
+thunderstorm_take_spark :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> int #no_bounds_check {
 	if len(s.spark_free) > 0 {
 		last := len(s.spark_free) - 1
 		slot := s.spark_free[last]
@@ -211,6 +222,29 @@ thunderstorm_take_spark :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> in
 thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	s.plain_appearance = engine.prepare_appearance(e, engine.Appearance{})
 	s.color_handling = e.cfg.existing_color_handling
+	s.rain_code = engine.prepare_appearance(e, engine.Appearance{colors = {fg = engine.Color{0xAA, 0xAA, 0xFF}}})
+	s.lightning_code = engine.prepare_appearance(e, engine.Appearance{colors = {fg = s.config.lightning_color}})
+	bright_lightning := engine.adjust_color_brightness(s.config.lightning_color, 1.7)
+	for step in 0 ..= 7 {
+		s.bolt_flash_codes[step] = engine.prepare_appearance(
+			e,
+			engine.Appearance{colors = {fg = engine.tween(s.config.lightning_color, bright_lightning, 7, step)}},
+		)
+		s.spark_codes[step] = engine.prepare_appearance(
+			e,
+			engine.Appearance {
+				colors = {fg = engine.tween(s.config.spark_glow_color, e.cfg.terminal_background_color, 7, step)},
+			},
+		)
+	}
+	for step in 0 ..= 6 {
+		s.bolt_fade_codes[step] = engine.prepare_appearance(
+			e,
+			engine.Appearance {
+				colors = {fg = engine.tween(s.config.lightning_color, e.cfg.terminal_background_color, 6, step)},
+			},
+		)
+	}
 	spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -246,14 +280,23 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	s.input_at_cell = make([dynamic]i32, e.canvas.width * e.canvas.height)
 	for i in 0 ..< len(s.input_at_cell) do s.input_at_cell[i] = -1
 
-	initial_coords := e.particles.initial_coord
+	Style_Key :: struct {
+		final_fg:   engine.Color,
+		visible_bg: Maybe(engine.Color),
+		init_pair:  engine.Color_Pair,
+	}
+	keys := make([]Style_Key, n, context.temp_allocator)
+	defer delete(keys, context.temp_allocator)
 
+	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
 	for id, i in s.characters {
 		p := initial_coords[id]
 		final := engine.gradient_sample(sampler, spectrum[:], p)
+		init_pair: engine.Color_Pair
 		if s.color_handling == .Dynamic {
 			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			init_pair = style.colors
 			final = engine.Color{0x80, 0x80, 0x80}
 			if fg, ok := style.colors.fg.?; ok do final = fg
 			s.visible_bg[i] = style.colors.bg
@@ -264,15 +307,63 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		s.flash_colors[i] = engine.adjust_color_brightness(final, 1.7)
 		s.glow_starts[i] = -1
 		s.input_slot_by_id[id] = i
-		s.input_at_cell[thunderstorm_cell_index(e.canvas, p)] = i32(id)
-		engine.set_foreground(e, id, final)
-		engine.set_background(e, id, s.visible_bg[i])
+		if engine.canvas_in(e.canvas, p) {
+			s.input_at_cell[thunderstorm_cell_index(e.canvas, p)] = i32(id)
+		}
+		keys[i] = {final, s.visible_bg[i], init_pair}
+	}
+
+	unique_keys: [dynamic]Style_Key
+	unique_keys, s.style_slots = engine.group_values(keys)
+	defer delete(unique_keys)
+	gcount := len(unique_keys)
+	pre_tweens := make([]engine.Tween(engine.Appearance), gcount, context.temp_allocator)
+	post_tweens := make([]engine.Tween(engine.Appearance), gcount, context.temp_allocator)
+	flash_tweens := make([]engine.Tween(engine.Appearance), gcount, context.temp_allocator)
+	glow_tweens := make([]engine.Tween(engine.Appearance), gcount, context.temp_allocator)
+	defer delete(pre_tweens, context.temp_allocator)
+	defer delete(post_tweens, context.temp_allocator)
+	defer delete(flash_tweens, context.temp_allocator)
+	defer delete(glow_tweens, context.temp_allocator)
+	if s.color_handling == .Dynamic {
+		s.dynamic_final_codes = make([dynamic]engine.Appearance_Id, gcount)
+	}
+	for key, g in unique_keys {
+		storm_fg := engine.adjust_color_brightness(key.final_fg, 0.5)
+		flash_fg := engine.adjust_color_brightness(key.final_fg, 1.7)
+		var_storm_bg: Maybe(engine.Color)
+		if bg, ok := key.visible_bg.?; ok do var_storm_bg = engine.adjust_color_brightness(bg, 0.5)
+		final_pair := engine.Color_Pair{fg = key.final_fg, bg = key.visible_bg}
+		storm_pair := engine.Color_Pair{fg = storm_fg, bg = var_storm_bg}
+		pre_tweens[g] = {from = {colors = final_pair}, to = {colors = storm_pair}}
+		post_tweens[g] = {from = {colors = storm_pair}, to = {colors = final_pair}}
+		flash_tweens[g] = {
+			from = {colors = storm_pair},
+			to   = {colors = {fg = flash_fg, bg = var_storm_bg}},
+		}
+		glow_tweens[g] = {
+			from = {colors = {fg = s.config.glowing_text_color, bg = var_storm_bg}},
+			to   = {colors = storm_pair},
+		}
+		if s.color_handling == .Dynamic {
+			s.dynamic_final_codes[g] = engine.prepare_appearance(e, engine.Appearance{colors = key.init_pair})
+		}
+	}
+	s.prestorm_ramp = engine.ramp_make(e, pre_tweens, 7)
+	s.poststorm_ramp = engine.ramp_make(e, post_tweens, 7)
+	s.text_flash_ramp = engine.ramp_make(e, flash_tweens, 3)
+	s.text_glow_ramp = engine.ramp_make(e, glow_tweens, 7)
+
+	for id, i in s.characters {
+		engine.set_appearance(e, id, engine.ramp_code(s.prestorm_ramp, s.style_slots[i], 0))
 		visible_flags[id] += {.Visible}
 	}
 
 	// See the strict bound documented on the state fields. Allocate every rain
 	// row before frame processing; its free list is the compact reusable pool.
 	rain_capacity := 9 * (e.canvas.height + 1) + 6
+	strike_capacity := e.canvas.height
+	batch := engine.particle_batch(e, rain_capacity + strike_capacity)
 	reserve(&s.rain_ids, rain_capacity)
 	reserve(&s.rain_starts, rain_capacity)
 	reserve(&s.rain_origins, rain_capacity)
@@ -282,7 +373,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.rain_active, rain_capacity)
 	reserve(&s.glow_active, n)
 	for slot in 0 ..< rain_capacity {
-		id := engine.add_particle(e, '.', s.plain_appearance, engine.coord(0, 0))
+		id := engine.add_particle(&batch, '.', s.rain_code, engine.coord(0, 0))
 		e.particles.layer[id] = 1
 		e.particles.flags[id] -= {.Visible}
 		append(&s.rain_ids, id)
@@ -293,10 +384,9 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		append(&s.rain_free, slot)
 	}
 
-	strike_capacity := e.canvas.height
 	reserve(&s.strike_ids, strike_capacity)
 	for _ in 0 ..< strike_capacity {
-		id := engine.add_particle(e, '|', s.plain_appearance, engine.coord(0, 0))
+		id := engine.add_particle(&batch, '|', s.lightning_code, engine.coord(0, 0))
 		e.particles.layer[id] = 2
 		e.particles.flags[id] -= {.Visible}
 		append(&s.strike_ids, id)
@@ -312,7 +402,7 @@ thunderstorm_build :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	reserve(&s.spark_active, 18)
 }
 
-thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canvas: engine.Canvas) {
+thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canvas: engine.Canvas) #no_bounds_check {
 	if s.rain_delay > 0 {
 		s.rain_delay -= 1
 		return
@@ -340,7 +430,7 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canva
 			id,
 			s.config.raindrop_symbols[engine.random_below(len(s.config.raindrop_symbols))],
 		)
-		engine.set_foreground(e, id, engine.Color{0xAA, 0xAA, 0xFF})
+		engine.set_appearance(e, id, s.rain_code)
 		engine.set_particle(e, id, engine.Visible(true))
 		append(&s.rain_active, slot)
 	}
@@ -349,7 +439,7 @@ thunderstorm_spawn_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine, canva
 
 // Random words are filled in bulk before this independent branch-tip pass.
 // Native RNG ordering differs from Python; branch rules and replay order do not.
-thunderstorm_branch_step :: proc(tips: #soa[]Thunderstorm_Branch_Tip, draws: []u32) {
+thunderstorm_branch_step :: proc(tips: #soa[]Thunderstorm_Branch_Tip, draws: []u32) #no_bounds_check {
 	n := len(tips)
 	for i in 0 ..< n {
 		choice := draws[i]
@@ -426,7 +516,7 @@ thunderstorm_strike_generate :: proc(
 	thunderstorm_strike_order(work, canvas)
 }
 
-thunderstorm_strike_order :: proc(work: ^Thunderstorm_Strike_Work, canvas: engine.Canvas) {
+thunderstorm_strike_order :: proc(work: ^Thunderstorm_Strike_Work, canvas: engine.Canvas) #no_bounds_check {
 	// Flatten child-before-parent-continuation ordering once. Each segment is
 	// visited exactly once; the animation consumes only this flat order.
 	resize(&work.order, len(work.segments))
@@ -451,10 +541,18 @@ thunderstorm_strike_order :: proc(work: ^Thunderstorm_Strike_Work, canvas: engin
 	}
 }
 
-thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) #no_bounds_check {
 	// The frame arena owns generation scratch only. Playback is copied into
 	// the engine's persistent character pool before the arena is reclaimed.
 	work: Thunderstorm_Strike_Work
+	defer {
+		delete_soa(work.tips)
+		delete_soa(work.next_tips)
+		delete(work.draws)
+		delete(work.segments)
+		delete(work.walk)
+		delete(work.order)
+	}
 	thunderstorm_strike_generate(
 		&work,
 		e.canvas,
@@ -469,7 +567,7 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	new_count := max(0, count - len(s.strike_ids))
 	characters := engine.particle_batch(e, new_count)
 	for len(s.strike_ids) < count {
-		id := engine.add_particle(&characters, '|', s.plain_appearance, engine.coord(0, 0))
+		id := engine.add_particle(&characters, '|', s.lightning_code, engine.coord(0, 0))
 		engine.set_particle(e, id, engine.Layer(2))
 		engine.set_particle(e, id, engine.Visible(false))
 		append(&s.strike_ids, id)
@@ -480,7 +578,7 @@ thunderstorm_begin_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		id := s.strike_ids[i]
 		engine.set_particle(e, id, engine.coord(segment.column, segment.row))
 		engine.set_symbol(e, id, segment.symbol == 0 ? '\\' : segment.symbol == 1 ? '/' : '|')
-		engine.set_foreground(e, id, s.config.lightning_color)
+		engine.set_appearance(e, id, s.lightning_code)
 		engine.set_particle(e, id, engine.Visible(false))
 		s.strike_pending[i] = id
 	}
@@ -492,7 +590,7 @@ thunderstorm_spawn_sparks :: proc(
 	s: ^Thunderstorm_State,
 	e: ^engine.Engine,
 	impact: engine.Coord,
-) {
+) #no_bounds_check {
 	count := engine.random_range(12, 19)
 	for _ in 0 ..< count {
 		slot := thunderstorm_take_spark(s, e)
@@ -516,13 +614,13 @@ thunderstorm_spawn_sparks :: proc(
 		id := s.spark_ids[slot]
 		engine.set_particle(e, id, impact)
 		engine.set_symbol(e, id, s.config.spark_symbols[engine.random_below(len(s.config.spark_symbols))])
-		engine.set_foreground(e, id, s.config.spark_glow_color)
+		engine.set_appearance(e, id, s.spark_codes[0])
 		engine.set_particle(e, id, engine.Visible(true))
 		append(&s.spark_active, slot)
 	}
 }
 
-thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) #no_bounds_check {
 	if !s.strike_live do return
 	if s.strike_pending_head < len(s.strike_pending) {
 		if s.strike_delay > 0 {
@@ -561,32 +659,16 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		flash_step := age / 6
 		flash_step = min(flash_step, 6 - flash_step)
 		for id, i in s.characters {
-			engine.set_foreground(
-				e,
-				id,
-				engine.tween(s.storm_colors[i], s.flash_colors[i], 3, flash_step),
-			)
+			engine.set_appearance(e, id, engine.ramp_code(s.text_flash_ramp, s.style_slots[i], flash_step))
 		}
-		step := min(age / 6, 7)
-		color := engine.tween(
-			s.config.lightning_color,
-			engine.adjust_color_brightness(s.config.lightning_color, 1.7),
-			7,
-			step,
-		)
+		bolt_code := s.bolt_flash_codes[min(age / 6, 7)]
 		for id in s.strike_pending {
-			engine.set_foreground(e, id, color)
+			engine.set_appearance(e, id, bolt_code)
 		}
 	} else if age < 54 {
-		step := min((age - 42) / 2, 6)
-		color := engine.tween(
-			s.config.lightning_color,
-			e.cfg.terminal_background_color,
-			6,
-			step,
-		)
+		bolt_code := s.bolt_fade_codes[min((age - 42) / 2, 6)]
 		for id in s.strike_pending {
-			engine.set_foreground(e, id, color)
+			engine.set_appearance(e, id, bolt_code)
 		}
 	} else {
 		for id in s.strike_pending {
@@ -610,7 +692,7 @@ thunderstorm_reveal_strike :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 	s.strike_flash_age += 1
 }
 
-thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) #no_bounds_check {
 	active := &s.rain_active
 	write := 0
 	for read in 0 ..< len(active^) {
@@ -640,8 +722,7 @@ thunderstorm_update_rain :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 thunderstorm_update_sparks :: proc(
 	s: ^Thunderstorm_State,
 	e: ^engine.Engine,
-	background: engine.Color,
-) {
+) #no_bounds_check {
 	active := &s.spark_active
 	write := 0
 	for read in 0 ..< len(active^) {
@@ -668,16 +749,7 @@ thunderstorm_update_sparks :: proc(
 				continue
 			}
 			if (age - s.spark_steps[slot]) % s.config.spark_glow_time == 0 {
-				engine.set_foreground(
-					e,
-					id,
-					engine.tween(
-						s.config.spark_glow_color,
-						background,
-						7,
-						cool_step,
-					),
-				)
+				engine.set_appearance(e, id, s.spark_codes[cool_step])
 			}
 		}
 		active^[write] = slot
@@ -686,7 +758,7 @@ thunderstorm_update_sparks :: proc(
 	resize(active, write)
 }
 
-thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
+thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) #no_bounds_check {
 	write := 0
 	for i in s.glow_active {
 		id := s.characters[i]
@@ -694,22 +766,11 @@ thunderstorm_update_text :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) {
 		step := (s.tick - start) / s.config.text_glow_time
 		if step > 7 {
 			s.glow_starts[i] = -1
-			engine.set_foreground(e, id, s.storm_colors[i])
-			engine.set_background(e, id, s.color_handling == .Dynamic ? s.storm_bg[i] : nil)
+			engine.set_appearance(e, id, engine.ramp_code(s.text_glow_ramp, s.style_slots[i], 7))
 			continue
 		}
 		if (s.tick - start) % s.config.text_glow_time == 0 {
-			engine.set_foreground(
-				e,
-				id,
-				engine.tween(
-					s.config.glowing_text_color,
-					s.storm_colors[i],
-					7,
-					step,
-				),
-			)
-			engine.set_background(e, id, s.color_handling == .Dynamic ? s.storm_bg[i] : nil)
+			engine.set_appearance(e, id, engine.ramp_code(s.text_glow_ramp, s.style_slots[i], step))
 		}
 		s.glow_active[write] = i
 		write += 1
@@ -723,22 +784,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool #no
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
 		if s.phase_tick % Thunderstorm_Fade_Hold == 0 {
 			for id, i in s.characters {
-				engine.set_foreground(
-					e,
-					id,
-					engine.tween(s.final_colors[i], s.storm_colors[i], 7, step),
-				)
-				if s.color_handling == .Dynamic {
-					if bg, ok := s.visible_bg[i].?; ok {
-						engine.set_background(
-							e,
-							id,
-							engine.tween(bg, s.storm_bg[i].?, 7, step),
-						)
-					} else {
-						engine.set_background(e, id, nil)
-					}
-				}
+				engine.set_appearance(e, id, engine.ramp_code(s.prestorm_ramp, s.style_slots[i], step))
 			}
 		}
 		s.phase_tick += 1
@@ -752,7 +798,7 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool #no
 		if !s.strike_live && engine.random_float() < 0.008 do thunderstorm_begin_strike(s, e)
 		thunderstorm_reveal_strike(s, e)
 		thunderstorm_update_rain(s, e)
-		thunderstorm_update_sparks(s, e, e.cfg.terminal_background_color)
+		thunderstorm_update_sparks(s, e)
 		thunderstorm_update_text(s, e)
 		if engine.elapsed_seconds(e) - s.storm_started >= f64(s.config.storm_time) &&
 		   !s.strike_live {
@@ -771,34 +817,14 @@ thunderstorm_next :: proc(s: ^Thunderstorm_State, e: ^engine.Engine) -> bool #no
 		step := min(s.phase_tick / Thunderstorm_Fade_Hold, Thunderstorm_Fade_Steps)
 		if s.phase_tick % Thunderstorm_Fade_Hold == 0 {
 			for id, i in s.characters {
-				engine.set_foreground(
-					e,
-					id,
-					engine.tween(s.storm_colors[i], s.final_colors[i], 7, step),
-				)
-				if s.color_handling == .Dynamic {
-					if bg, ok := s.storm_bg[i].?; ok {
-						engine.set_background(
-							e,
-							id,
-							engine.tween(bg, s.visible_bg[i].?, 7, step),
-						)
-					} else {
-						engine.set_background(e, id, nil)
-					}
-				}
+				engine.set_appearance(e, id, engine.ramp_code(s.poststorm_ramp, s.style_slots[i], step))
 			}
 		}
 		s.phase_tick += 1
 		if s.phase_tick >= Thunderstorm_Fade_Frames {
 			if s.color_handling == .Dynamic {
-				for id in s.characters {
-					appearance := engine.get_appearance(e, id)
-					engine.dynamic_apply_input_colors(
-						&appearance,
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					)
-					engine.set_appearance(e, id, appearance)
+				for id, i in s.characters {
+					engine.set_appearance(e, id, s.dynamic_final_codes[s.style_slots[i]])
 				}
 			}
 			return false

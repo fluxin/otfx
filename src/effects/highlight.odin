@@ -64,7 +64,9 @@ Highlight_State :: struct {
 	reveal:         engine.Group_Reveal,
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	palette:        [dynamic]engine.Color,
+	ramp:           engine.Appearance_Ramp,
+	style_index:    [dynamic]int,
+	no_fg_limit:    [dynamic]bool,
 	start_ticks:    [dynamic]int,
 	active_slots:   [dynamic]int,
 	palette_len:    int,
@@ -73,12 +75,13 @@ Highlight_State :: struct {
 }
 
 highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
+	query := engine.Particle_Query {
+		e.particle_sets,
+		e.particles.initial_coord[:len(e.particles)],
+		e.canvas,
+	}
 	groups := engine.get_particles_grouped(
-		engine.Particle_Query {
-			e.particle_sets,
-			e.particles.initial_coord[:len(e.particles)],
-			e.canvas,
-		},
+		query,
 		engine.PARTICLE_FILTER_INPUT,
 		s.config.highlight_direction,
 	)
@@ -92,8 +95,9 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -103,47 +107,77 @@ highlight_build :: proc(s: ^Highlight_State, e: ^engine.Engine) {
 	)
 
 	s.characters = engine.get_particles(
-		engine.Particle_Query {
-			e.particle_sets,
-			e.particles.initial_coord[:len(e.particles)],
-			e.canvas,
-		},
+		query,
 		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
+	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
-	reserve(&s.active_slots, len(s.characters))
+	reserve(&s.active_slots, n)
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.start_ticks = make([dynamic]int, len(e.particles))
-	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
+	s.start_ticks = make([dynamic]int, n)
+	for &t in s.start_ticks do t = -1
+	if n == 0 do return
+
+	if s.color_handling == .Dynamic {
+		s.no_fg_limit = make([dynamic]bool, n)
+	}
+	base_styles := make([]engine.Appearance, n, context.temp_allocator)
+	defer delete(base_styles, context.temp_allocator)
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		c := e.particles.initial_coord[id]
-		base := engine.gradient_sample(sampler, spectrum[:], c)
 		if s.color_handling == .Dynamic {
-			if fg, ok := engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg.?; ok do base = fg
+			init_style := engine.get_initial_appearance(e, id)
+			s.no_fg_limit[i] = init_style.colors.fg == nil
+			base_styles[i] = {colors = init_style.colors}
+		} else {
+			base_styles[i] = {colors = {fg = engine.gradient_sample(sampler, spectrum[:], c)}}
 		}
-		// base -> bright -> bright -> base with widths 3/width/3
-		bright := engine.adjust_color_brightness(base, s.config.highlight_brightness)
-		hl := engine.gradient_make(
-			[]engine.Color{base, bright, bright, base},
-			[]int{3, s.config.highlight_width, 3},
-			false,
-		)
-		if i == 0 do s.palette_len = len(hl)
-		append(&s.palette, ..hl[:])
-		delete(hl[:])
-		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance {
-				colors = {
-					fg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg : base,
-					bg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg : nil,
-				},
-			},
-		)
+	}
+
+	unique_styles: [dynamic]engine.Appearance
+	unique_styles, s.style_index = engine.group_values(base_styles)
+	defer delete(unique_styles)
+
+	// Measure highlight ramp length once (3 + highlight_width + 3 - 2 = highlight_width + 4, >= 2).
+	probe := engine.gradient_make(
+		[]engine.Color{{}, {}, {}, {}},
+		[]int{3, s.config.highlight_width, 3},
+		false,
+		context.temp_allocator,
+	)
+	s.palette_len = len(probe)
+	delete(probe)
+
+	styles := make([]engine.Appearance, len(unique_styles) * s.palette_len, context.temp_allocator)
+	defer delete(styles, context.temp_allocator)
+	for row_style, row in unique_styles {
+		if base_fg, ok := row_style.colors.fg.?; ok {
+			bright := engine.adjust_color_brightness(base_fg, s.config.highlight_brightness)
+			hl := engine.gradient_make(
+				[]engine.Color{base_fg, bright, bright, base_fg},
+				[]int{3, s.config.highlight_width, 3},
+				false,
+				context.temp_allocator,
+			)
+			for step in 0 ..< s.palette_len {
+				styles[row * s.palette_len + step] = {
+					colors = {fg = hl[step], bg = row_style.colors.bg},
+				}
+			}
+			delete(hl)
+		} else {
+			for step in 0 ..< s.palette_len {
+				styles[row * s.palette_len + step] = row_style
+			}
+		}
+	}
+	s.ramp = engine.ramp_from_styles(e, styles, s.palette_len - 1)
+
+	for id, i in s.characters {
+		engine.set_symbol(e, id, e.particles.initial_symbol[id])
+		engine.set_appearance(e, id, engine.ramp_code(s.ramp, s.style_index[i], 0))
 		e.particles.flags[id] += {.Visible}
 	}
 }
@@ -161,24 +195,23 @@ highlight_next :: proc(s: ^Highlight_State, e: ^engine.Engine) -> bool #no_bound
 		}
 	}
 	write := 0
+	full_limit := s.palette_len * 2
 	for slot in s.active_slots {
 		age := s.tick - s.start_ticks[slot]
-		id := s.characters[slot]
-		limit := s.palette_len * 2
-		if s.color_handling == .Dynamic && engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg == nil do limit = 2
+		limit := full_limit
+		if s.color_handling == .Dynamic && s.no_fg_limit[slot] do limit = 2
 		if age >= limit do continue
 		if age % 2 == 0 {
-			if s.color_handling == .Dynamic {
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				if style.colors.fg != nil {
-					engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
-				}
-				engine.set_background(e, id, style.colors.bg)
-			} else {
-				engine.set_foreground(e, id, s.palette[slot * s.palette_len + age / 2])
-			}
+			engine.set_appearance(
+				e,
+				s.characters[slot],
+				engine.ramp_code(s.ramp, s.style_index[slot], age / 2),
+			)
 		}
-		if age + 1 < limit {s.active_slots[write] = slot; write += 1}
+		if age + 1 < limit {
+			s.active_slots[write] = slot
+			write += 1
+		}
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1

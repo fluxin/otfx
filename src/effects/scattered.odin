@@ -72,6 +72,7 @@ Scattered_State :: struct {
 	final_index:    [dynamic]int, // spectrum index by slot
 	fades:          engine.Appearance_Ramp, // fades to each spectrum entry
 	origins:        [dynamic]engine.Coord,
+	targets:        [dynamic]engine.Coord,
 	motion_slots:   [dynamic]int,
 	motion_steps:   [dynamic]int,
 	motions:        [dynamic]Scattered_Motion,
@@ -111,13 +112,34 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 	s.final_index = make([dynamic]int, n)
 	s.fades = engine.ramp_make(e, engine.tweens_from(s.config.final_gradient_stops[0], spectrum[:]), 10)
 	s.origins = make([dynamic]engine.Coord, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.active_indexes = make([dynamic]int, n)
 	steps_by_particle := make([]int, n)
 	defer delete(steps_by_particle)
-	if s.color_handling != .Dynamic do s.color_steps = make([dynamic]u8, n)
+
+	var_dyn_codes: []engine.Appearance_Id
+	var_dyn_slots: [dynamic]int
+	defer delete(var_dyn_codes, context.temp_allocator)
+	defer delete(var_dyn_slots)
+	if s.color_handling == .Dynamic {
+		dyn_pairs := make([]engine.Color_Pair, n, context.temp_allocator)
+		defer delete(dyn_pairs, context.temp_allocator)
+		for id, i in s.characters do dyn_pairs[i] = engine.get_initial_appearance(e, id).colors
+		unique_pairs: [dynamic]engine.Color_Pair
+		unique_pairs, var_dyn_slots = engine.group_values(dyn_pairs)
+		defer delete(unique_pairs)
+		var_dyn_codes = make([]engine.Appearance_Id, len(unique_pairs), context.temp_allocator)
+		for pair, g in unique_pairs {
+			var_dyn_codes[g] = engine.prepare_appearance(e, engine.Appearance{colors = pair})
+		}
+	} else {
+		s.color_steps = make([dynamic]u8, n)
+	}
+
 	for id, i in s.characters {
 		s.active_indexes[i] = i
 		c := e.particles.initial_coord[id]
+		s.targets[i] = c
 		s.final_index[i] = engine.gradient_sample_index(sampler, len(spectrum), c)
 
 		start :=
@@ -133,7 +155,7 @@ scattered_build :: proc(s: ^Scattered_State, e: ^engine.Engine) {
 		e.particles.layer[id] = 1
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 		if s.color_handling == .Dynamic {
-			engine.set_appearance(e, id, engine.Appearance{colors = engine.get_initial_appearance(e, id).colors})
+			engine.set_appearance(e, id, var_dyn_codes[var_dyn_slots[i]])
 		} else {
 			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], 0))
 		}
@@ -163,10 +185,11 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool #no_bound
 		slot := s.motion_slots[i]
 		motion := s.motions[slot]
 		steps, progress := s.motion_steps[slot], motion.progress
+		target := s.targets[i]
 		engine.set_particle(
 			e,
 			id,
-			engine.tween(s.origins[i], e.particles.initial_coord[id], motion.factor),
+			engine.tween(s.origins[i], target, motion.factor),
 		)
 		// Dynamic input colors are installed during build and never change here.
 		if s.color_handling != .Dynamic {
@@ -177,11 +200,10 @@ scattered_next :: proc(s: ^Scattered_State, e: ^engine.Engine) -> bool #no_bound
 			}
 		}
 		if s.tick + 1 >= steps {
-			engine.set_particle(e, id, e.particles.initial_coord[id])
+			engine.set_placement(e, id, target, true, 0)
 			if s.color_handling != .Dynamic {
 				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], s.fades.steps))
 			}
-			engine.set_particle(e, id, engine.Layer(0))
 		} else {
 			s.active_indexes[write] = i
 			write += 1

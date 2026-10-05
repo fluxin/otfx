@@ -101,35 +101,39 @@ laseretch_parse :: proc(cfg: ^Laseretch_Config, args: []string) -> bool {
 // glyph emits at most one spark, so this is the exact reachable upper bound,
 // including an arbitrary --etch-speed that emits every glyph in one frame.
 Laseretch_State :: struct {
-	config:         Laseretch_Config,
-	characters:     [dynamic]engine.Particle_Id,
-	index_by_id:    [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
-	source_starts:  [dynamic]int,
-	active_sources: [dynamic]int,
-	pending:        [dynamic]engine.Particle_Id,
-	pending_head:   int,
-	cool_spectrum:  [dynamic]engine.Color,
-	laser_spectrum: [dynamic]engine.Color,
-	spark_spectrum: [dynamic]engine.Color,
-	beam_ids:       [dynamic]engine.Particle_Id,
-	laser_position: engine.Coord,
-	spark_ids:      [dynamic]engine.Particle_Id,
-	spark_starts:   [dynamic]int,
-	spark_origins:  [dynamic]engine.Coord,
-	spark_controls: [dynamic]engine.Coord,
-	spark_targets:  [dynamic]engine.Coord,
-	spark_steps:    [dynamic]int,
-	active_sparks:  [dynamic]int,
-	next_spark:     int,
-	delay:          int,
-	tick:           int,
-	color_handling: engine.Existing_Color_Handling,
+	config:           Laseretch_Config,
+	characters:       [dynamic]engine.Particle_Id,
+	index_by_id:      [dynamic]int,
+	style_slots:      [dynamic]int,
+	source_lifetimes: [dynamic]int,
+	source_fades:     engine.Appearance_Ramp,
+	source_starts:    [dynamic]int,
+	active_sources:   [dynamic]int,
+	pending:          [dynamic]engine.Particle_Id,
+	pending_head:     int,
+	hot_code:         engine.Appearance_Id,
+	cool_codes:       [dynamic]engine.Appearance_Id,
+	laser_codes:      [dynamic]engine.Appearance_Id,
+	spark_spectrum:   [dynamic]engine.Color,
+	spark_codes:      [dynamic]engine.Appearance_Id,
+	beam_ids:         [dynamic]engine.Particle_Id,
+	laser_position:   engine.Coord,
+	spark_ids:        [dynamic]engine.Particle_Id,
+	spark_starts:     [dynamic]int,
+	spark_origins:    [dynamic]engine.Coord,
+	spark_controls:   [dynamic]engine.Coord,
+	spark_targets:    [dynamic]engine.Coord,
+	spark_steps:      [dynamic]int,
+	active_sparks:    [dynamic]int,
+	next_spark:       int,
+	delay:            int,
+	tick:             int,
+	color_handling:   engine.Existing_Color_Handling,
 }
 
 // First visits of a randomized depth-first walk. Fill cells bridge gaps in the
 // text but are not etched. Only the resulting target order survives build.
-laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
+laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) #no_bounds_check {
 	query := engine.Particle_Query {
 		e.particle_sets,
 		e.particles.initial_coord[:len(e.particles)],
@@ -141,6 +145,8 @@ laseretch_order :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	if n == 0 do return
 	visited := make([]bool, n, context.temp_allocator)
 	stack := make([dynamic]int, 0, n, context.temp_allocator)
+	defer delete(visited, context.temp_allocator)
+	defer delete(stack)
 	width := e.canvas.text_width
 	offsets := [4]int{-width, 1, width, -1}
 	current := engine.random_below(n)
@@ -214,24 +220,88 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	reserve(&s.active_sources, n)
 	reserve(&s.active_sparks, n)
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.final_colors = make([dynamic]engine.Color, n)
 	s.source_starts = make([dynamic]int, n)
-	s.cool_spectrum = engine.gradient_make(s.config.cool_gradient_stops[:], []int{8}, false)
-	s.laser_spectrum = engine.gradient_make(s.config.laser_gradient_stops[:], []int{6}, true)
+	s.source_lifetimes = make([dynamic]int, n)
+
+	cool_spectrum := engine.gradient_make(s.config.cool_gradient_stops[:], []int{8}, false)
+	defer delete(cool_spectrum)
+	laser_spectrum := engine.gradient_make(s.config.laser_gradient_stops[:], []int{6}, true)
+	defer delete(laser_spectrum)
 	s.spark_spectrum = engine.gradient_make(s.config.spark_gradient_stops[:], []int{3, 8}, false)
+
+	s.hot_code = engine.prepare_appearance(e, engine.Appearance{colors = {fg = engine.Color{0xFF, 0xE6, 0x80}}})
+	s.cool_codes = make([dynamic]engine.Appearance_Id, len(cool_spectrum))
+	for c, k in cool_spectrum {
+		s.cool_codes[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = c}})
+	}
+	s.laser_codes = make([dynamic]engine.Appearance_Id, len(laser_spectrum))
+	for c, k in laser_spectrum {
+		s.laser_codes[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = c}})
+	}
+	s.spark_codes = make([dynamic]engine.Appearance_Id, len(s.spark_spectrum))
+	for c, k in s.spark_spectrum {
+		s.spark_codes[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = c}})
+	}
+
+	Source_Key :: struct {
+		target:    engine.Color_Pair,
+		unstyled:  bool,
+	}
+	keys := make([]Source_Key, n, context.temp_allocator)
+	defer delete(keys, context.temp_allocator)
 
 	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
+	cool_ticks := len(cool_spectrum) * 3
 	for id, i in s.characters {
 		s.index_by_id[id] = i
-		s.final_colors[i] = engine.gradient_sample(
-			final_sampler,
-			final_spectrum[:],
-			initial_coords[id],
-		)
 		s.source_starts[i] = -1
 		visible_flags[id] -= {.Visible}
+		if s.color_handling == .Dynamic {
+			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+			has_style := style.colors.fg != nil || style.colors.bg != nil
+			s.source_lifetimes[i] = 3 + cool_ticks + (has_style ? 9 : 10) * 3
+			keys[i] = {target = style.colors, unstyled = !has_style}
+		} else {
+			final := engine.gradient_sample(final_sampler, final_spectrum[:], initial_coords[id])
+			s.source_lifetimes[i] = 3 + cool_ticks + 8 * 3
+			keys[i] = {target = {fg = final}, unstyled = false}
+		}
 	}
+
+	unique_keys: [dynamic]Source_Key
+	unique_keys, s.style_slots = engine.group_values(keys)
+	defer delete(unique_keys)
+	last_cool := cool_spectrum[len(cool_spectrum) - 1]
+	fade_styles := make([]engine.Appearance, len(unique_keys) * 10, context.temp_allocator)
+	defer delete(fade_styles, context.temp_allocator)
+	for key, g in unique_keys {
+		base := g * 10
+		if s.color_handling == .Dynamic {
+			if key.unstyled {
+				for k in 0 ..= 8 {
+					fade_styles[base + k] = {
+						colors = {fg = engine.tween(last_cool, engine.Color{0xFF, 0xFF, 0xFF}, 8, k)},
+					}
+				}
+				fade_styles[base + 9] = {}
+			} else {
+				for k in 0 ..= 9 {
+					fade_styles[base + k] = {
+						colors = engine.tween(engine.Color_Pair{last_cool, last_cool}, key.target, 8, min(k, 8)),
+					}
+				}
+			}
+		} else {
+			final := key.target.fg.?
+			for k in 0 ..= 9 {
+				fade_styles[base + k] = {
+					colors = {fg = engine.tween(last_cool, final, 8, min(1 + k, 8))},
+				}
+			}
+		}
+	}
+	s.source_fades = engine.ramp_from_styles(e, fade_styles, 9)
 
 	// Create all generated rows after no storage column is borrowed. There is one
 	// spark row per source glyph, the exact upper bound for this one-strike-per-
@@ -245,7 +315,7 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 		e.particles.layer[id] = 2
 		append(&s.beam_ids, id)
 	}
-	for i in 0 ..< n {
+	for _ in 0 ..< n {
 		id := engine.add_particle(
 			&characters,
 			symbols[engine.random_below(len(symbols))],
@@ -263,7 +333,7 @@ laseretch_build :: proc(s: ^Laseretch_State, e: ^engine.Engine) {
 	}
 }
 
-laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: engine.Coord) {
+laseretch_spawn_spark :: proc(s: ^Laseretch_State, e: ^engine.Engine, origin: engine.Coord) #no_bounds_check {
 	i := s.next_spark
 	s.next_spark += 1
 	if s.next_spark == len(s.spark_ids) do s.next_spark = 0
@@ -307,35 +377,19 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bound
 
 	// Only the short cooling tail needs updates. Completed source glyphs retain
 	// their final appearance, so scanning the full input every frame is wasted work.
+	cool_ticks := len(s.cool_codes) * 3
 	source_write := 0
 	for i in s.active_sources {
 		id := s.characters[i]
-		start := s.source_starts[i]
-		age := s.tick - start
+		age := s.tick - s.source_starts[i]
 		if age % 3 != 0 {
 			s.active_sources[source_write] = i
 			source_write += 1
 			continue
 		}
-		source_lifetime := 3 + (len(s.cool_spectrum) + 8) * 3
-		if s.color_handling == .Dynamic {
-			has_style :=
-				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg != nil ||
-				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg != nil
-			source_lifetime = 3 + len(s.cool_spectrum) * 3 + (has_style ? 9 : 10) * 3
-		}
-		if age >= source_lifetime {
+		if age >= s.source_lifetimes[i] {
 			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_apply_input_colors(
-					&appearance,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				)
-				engine.set_appearance(e, id, appearance)
-			} else {
-				engine.set_foreground(e, id, s.final_colors[i])
-			}
+			engine.set_appearance(e, id, engine.ramp_code(s.source_fades, s.style_slots[i], 9))
 			continue
 		}
 		engine.set_symbol(
@@ -344,64 +398,30 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bound
 			age < 3 ? '^' : e.particles.initial_symbol[engine.Particle_Id(id)],
 		)
 		if age < 3 {
-			engine.set_foreground(e, id, engine.Color{0xFF, 0xE6, 0x80})
-		} else if age < 3 + len(s.cool_spectrum) * 3 {
-			engine.set_foreground(e, id, s.cool_spectrum[(age - 3) / 3])
+			engine.set_appearance(e, id, s.hot_code)
+		} else if age < 3 + cool_ticks {
+			engine.set_appearance(e, id, s.cool_codes[(age - 3) / 3])
 		} else {
-			cool_age := age - 3 - len(s.cool_spectrum) * 3
-			if s.color_handling == .Dynamic {
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				if style.colors.fg != nil || style.colors.bg != nil {
-					appearance := engine.get_appearance(e, id)
-					appearance.colors = engine.tween(engine.Color_Pair{s.cool_spectrum[len(s.cool_spectrum) - 1], s.cool_spectrum[len(s.cool_spectrum) - 1]}, style.colors, 8, min(cool_age / 3, 8))
-					engine.set_appearance(e, id, appearance)
-				} else if cool_age < 27 {
-					engine.set_foreground(
-						e,
-						id,
-						engine.tween(
-							s.cool_spectrum[len(s.cool_spectrum) - 1],
-							engine.Color{0xFF, 0xFF, 0xFF},
-							8,
-							cool_age / 3,
-						),
-					)
-					engine.set_background(e, id, nil)
-				} else {
-					engine.set_foreground(e, id, nil)
-					engine.set_background(e, id, nil)
-				}
-			} else {
-				engine.set_foreground(
-					e,
-					id,
-					engine.tween(
-						s.cool_spectrum[len(s.cool_spectrum) - 1],
-						s.final_colors[i],
-						8,
-						min(1 + cool_age / 3, 8),
-					),
-				)
-			}
+			cool_step := min((age - 3 - cool_ticks) / 3, 9)
+			engine.set_appearance(e, id, engine.ramp_code(s.source_fades, s.style_slots[i], cool_step))
 		}
 		s.active_sources[source_write] = i
 		source_write += 1
 	}
 	resize(&s.active_sources, source_write)
 
-	visible_flags := e.particles.flags
 	if s.pending_head < len(s.pending) {
-		color_index := (s.tick / 3) % len(s.laser_spectrum)
+		color_index := (s.tick / 3) % len(s.laser_codes)
 		for id, beam in s.beam_ids {
 			engine.set_particle(
 				e,
 				id,
 				engine.coord(s.laser_position.column + beam, s.laser_position.row + beam),
 			)
-			engine.set_foreground(e, id, s.laser_spectrum[color_index])
+			engine.set_appearance(e, id, s.laser_codes[color_index])
 			engine.set_particle(e, id, engine.Visible(true))
 			color_index += 1
-			if color_index == len(s.laser_spectrum) do color_index = 0
+			if color_index == len(s.laser_codes) do color_index = 0
 		}
 	} else {
 		for id in s.beam_ids {
@@ -415,10 +435,9 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bound
 	spark_write := 0
 	for i in s.active_sparks {
 		id := s.spark_ids[i]
-		start := s.spark_starts[i]
-		age := s.tick - start
+		age := s.tick - s.spark_starts[i]
 		color_step := age / s.config.spark_cooling_frames
-		if color_step >= len(s.spark_spectrum) {
+		if color_step >= len(s.spark_codes) {
 			engine.set_particle(e, id, engine.Visible(false))
 			s.spark_starts[i] = -1
 			continue
@@ -435,7 +454,7 @@ laseretch_next :: proc(s: ^Laseretch_State, e: ^engine.Engine) -> bool #no_bound
 				),
 			)
 		}
-		if age % s.config.spark_cooling_frames == 0 do engine.set_foreground(e, id, s.spark_spectrum[color_step])
+		if age % s.config.spark_cooling_frames == 0 do engine.set_appearance(e, id, s.spark_codes[color_step])
 		s.active_sparks[spark_write] = i
 		spark_write += 1
 	}

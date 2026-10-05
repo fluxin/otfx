@@ -101,10 +101,12 @@ Pour_State :: struct {
 	config:         Pour_Config,
 	pool:           [dynamic]engine.Particle_Id, // all groups, concatenated
 	group_spans:    [dynamic]engine.Span, // one span per group
-	revealed:       [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
+	color_ticks:    [dynamic]int,
 	origins:        [dynamic]engine.Coord,
+	targets:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
 	active_slots:   [dynamic]int,
@@ -121,8 +123,9 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -148,17 +151,27 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 		e.canvas,
 	}
 	groups := engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, grouping)
+	defer engine.groups_delete(&groups)
 	n := len(e.particle_sets.input)
-	reserve(&s.revealed, n)
+	reserve(&s.pool, n)
+	reserve(&s.group_spans, len(groups.spans))
 	reserve(&s.active_slots, n)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.color_ticks = make([dynamic]int, n)
 	s.origins = make([dynamic]engine.Coord, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
-	s.color_steps = s.config.final_gradient_steps[0]
+	s.color_steps = s.color_handling == .Dynamic ? 10 : s.config.final_gradient_steps[0]
 	for i in 0 ..< n do s.start_ticks[i] = -1
+	if n == 0 do return
+
+	fade_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
+	starting := s.config.starting_color
+	full_color_ticks := (s.color_steps + 1) * s.config.final_gradient_frames
+
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
 	current_coords := e.particles.current_coord[:]
 	visible_flags := e.particles.flags[:]
@@ -185,7 +198,23 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 			}
 			current_coords[id] = start
 			s.origins[slot] = start
-			s.final_colors[slot] = engine.gradient_sample(sampler, spectrum[:], c)
+			s.targets[slot] = c
+			if s.color_handling == .Dynamic {
+				style := engine.get_initial_appearance(e, id)
+				s.color_ticks[slot] =
+					style.colors.fg == nil && style.colors.bg == nil ? s.config.final_gradient_frames : full_color_ticks
+				fade_tweens[slot] = {
+					from = {colors = {starting, starting}},
+					to   = {colors = style.colors},
+				}
+			} else {
+				s.color_ticks[slot] = full_color_ticks
+				final_color := engine.gradient_sample(sampler, spectrum[:], c)
+				fade_tweens[slot] = {
+					from = {colors = {fg = starting}},
+					to   = {colors = {fg = final_color}},
+				}
+			}
 			speed := engine.random_float_range(
 				s.config.movement_speed_range.lo,
 				s.config.movement_speed_range.hi,
@@ -197,13 +226,15 @@ pour_build :: proc(s: ^Pour_State, e: ^engine.Engine) {
 			visible_flags[id] -= {.Visible}
 		}
 	}
-	engine.groups_delete(&groups)
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	s.fades = engine.ramp_make(e, unique_tweens[:], s.color_steps)
 }
 
 pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	spans := s.group_spans[:]
 	pool := s.pool[:]
-	visible_flags := e.particles.flags[:]
 	if s.group_idx >= len(spans) && len(s.active_slots) == 0 {
 		return false
 	}
@@ -214,8 +245,7 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool #no_bounds_check {
 				if s.head >= cur.len do break
 				next := pool[cur.start + s.head]
 				s.head += 1
-				engine.set_particle(e, next, engine.Visible(true))
-				append(&s.revealed, next)
+				engine.set_visible(e, next, true)
 				slot := s.index_by_id[next]
 				s.start_ticks[slot] = s.tick
 				append(&s.active_slots, slot)
@@ -229,61 +259,42 @@ pour_next :: proc(s: ^Pour_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			s.gap -= 1
 		}
 	}
+	frames := s.config.final_gradient_frames
+	color_steps := s.color_steps
 	write := 0
 	for slot in s.active_slots {
-		id := s.pool[slot]
+		id := pool[slot]
 		age := s.tick - s.start_ticks[slot]
-		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-		color_steps := s.color_handling == .Dynamic ? 10 : s.color_steps
-		color_ticks := (color_steps + 1) * s.config.final_gradient_frames
-		if s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil {
-			color_ticks = s.config.final_gradient_frames
-		}
-		life := max(s.max_steps[slot], color_ticks)
+		max_step := s.max_steps[slot]
+		c_ticks := s.color_ticks[slot]
+		life := max(max_step, c_ticks)
 		if age >= life do continue
-		if age < s.max_steps[slot] {
-			progress := f64(age + 1) / f64(s.max_steps[slot])
-			engine.set_particle(
+		if age < max_step {
+			progress := f64(age + 1) / f64(max_step)
+			engine.set_position(
 				e,
 				id,
 				engine.tween(
 					s.origins[slot],
-					e.particles.initial_coord[id],
+					s.targets[slot],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
-		} else if age == s.max_steps[slot] {
-			engine.set_particle(e, id, e.particles.initial_coord[id])
+		} else if age == max_step {
+			engine.set_position(e, id, s.targets[slot])
 		}
-		if age < color_ticks {
-			if age % s.config.final_gradient_frames == 0 {
-				step := min(age / s.config.final_gradient_frames, color_steps)
-				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					appearance.colors = engine.tween(engine.Color_Pair{s.config.starting_color, s.config.starting_color}, style.colors, 10, step)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					engine.set_foreground(
-						e,
-						id,
-						engine.tween(
-							s.config.starting_color,
-							s.final_colors[slot],
-							s.color_steps,
-							step,
-						),
-					)
-				}
+		if age < c_ticks {
+			if age % frames == 0 {
+				step := min(age / frames, color_steps)
+				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[slot], step))
 			}
-		} else if age == color_ticks {
-			if s.color_handling == .Dynamic {
-				engine.set_foreground(e, id, style.colors.fg)
-				engine.set_background(e, id, style.colors.bg)
-			} else {
-				engine.set_foreground(e, id, s.final_colors[slot])
-			}
+		} else if age == c_ticks {
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[slot], color_steps))
 		}
-		if age + 1 < life {s.active_slots[write] = slot; write += 1}
+		if age + 1 < life {
+			s.active_slots[write] = slot
+			write += 1
+		}
 	}
 	resize(&s.active_slots, write)
 	s.tick += 1

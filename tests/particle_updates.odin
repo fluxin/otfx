@@ -30,9 +30,9 @@ queued_layer_changes_keep_published_stack_order :: proc(t: ^testing.T) {
 	engine.set_visible(&e, d, false)
 	engine.frame_build(&e)
 	testing.expect_value(t, string(frame_without_padding(&e)), "AB")
-	testing.expect_value(t, len(cell_keys(e.cells[0])), 2)
-	testing.expect_value(t, cell_keys(e.cells[0])[0].id, u32(c))
-	testing.expect_value(t, cell_keys(e.cells[0])[1].id, u32(a))
+	testing.expect_value(t, len(cell_keys(&e, e.cells[0])), 2)
+	testing.expect_value(t, cell_keys(&e, e.cells[0])[0].id, u32(c))
+	testing.expect_value(t, cell_keys(&e, e.cells[0])[1].id, u32(a))
 	expect_published_cells(t, &e)
 
 	// Arrival precedes departure in each destination cell.
@@ -70,12 +70,9 @@ queued_departures_resolve_final_cell_membership :: proc(t: ^testing.T) {
 	engine.compose_frame(&e)
 	testing.expect_value(t, e.cells[0].top, ids[0])
 	testing.expect_value(t, e.cells[1].top, ids[len(ids) - 1])
-	testing.expect_value(t, cell_layer_count(e.cells[0], 1), 0)
-	testing.expect_value(t, cell_layer_count(e.cells[1], 1), len(ids) - 1)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[0], 1), 0)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[1], 1), len(ids) - 1)
 	expect_published_cells(t, &e)
-	when engine.FRAME_STATS_ENABLED {
-		testing.expect_value(t, e.stats.ownership_visits, 0)
-	}
 	engine.set_visible(&e, ids[0], false)
 	engine.frame_build(&e)
 	testing.expect_value(t, e.cells[0].top, base)
@@ -114,7 +111,7 @@ new_particles_publish_through_update_queue :: proc(t: ^testing.T) {
 	testing.expect_value(t, e.cells[0].top, base)
 	engine.frame_build(&e)
 	testing.expect_value(t, e.cells[0].top, added)
-	testing.expect_value(t, cell_layer_count(e.cells[0], 2), 1)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[0], 2), 1)
 	testing.expect_value(t, string(frame_without_padding(&e)), "C")
 
 	// A new particle hidden again before rendering never joins the grid.
@@ -124,8 +121,8 @@ new_particles_publish_through_update_queue :: proc(t: ^testing.T) {
 	engine.set_visible(&e, added, false)
 	engine.frame_build(&e)
 	testing.expect_value(t, e.cells[0].top, base)
-	testing.expect_value(t, cell_layer_count(e.cells[0], 0), 1)
-	testing.expect_value(t, cell_layer_count(e.cells[0], 2), 0)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[0], 0), 1)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[0], 2), 0)
 	testing.expect_value(t, len(e.updates), 0)
 	testing.expect(t, .Update_Queued not_in e.particles[hidden].flags)
 }
@@ -213,7 +210,7 @@ particle_requested_state_publishes_once :: proc(t: ^testing.T) {
 	expect_visible_draws(t, &e)
 
 	// A round trip before publication leaves exactly one membership.
-	occupants := len(cell_keys(e.cells[1]))
+	occupants := len(cell_keys(&e, e.cells[1]))
 	engine.set_visible(&e, a, false)
 	engine.set_position(&e, a, {-1, 1})
 	engine.set_position(&e, a, {2, 1})
@@ -224,9 +221,9 @@ particle_requested_state_publishes_once :: proc(t: ^testing.T) {
 	engine.frame_build(&e)
 	// A placement round trip neither changes membership nor repatches the winner.
 	testing.expect_value(t, len(frame_without_padding(&e)), 0)
-	testing.expect_value(t, len(cell_keys(e.cells[1])), occupants)
+	testing.expect_value(t, len(cell_keys(&e, e.cells[1])), occupants)
 	testing.expect(t, (.Update_Queued not_in e.particles[a].flags))
-	testing.expect_value(t, cell_layer_count(e.cells[1], 2), 1)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[1], 2), 1)
 	expect_published_cells(t, &e)
 	engine.frame_build(&e)
 	testing.expect_value(t, len(frame_without_padding(&e)), 0)
@@ -300,7 +297,7 @@ content_changes_follow_final_cell_winner :: proc(t: ^testing.T) {
 	engine.set_symbol(&e, b, 'Y')
 	engine.frame_build(&e)
 	testing.expect_value(t, string(frame_without_padding(&e)), "Y")
-	testing.expect_value(t, cell_layer_count(e.cells[0], 1), 1)
+	testing.expect_value(t, cell_layer_count(&e, e.cells[0], 1), 1)
 
 	// A content edit queued before the covering particle departs is exposed.
 	engine.set_symbol(&e, a, 'Z')

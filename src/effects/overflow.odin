@@ -94,7 +94,7 @@ overflow_append_row :: proc(
 	append(&state.pending_rows, Overflow_Row{span = span, final = final})
 }
 
-overflow_row_position :: proc(e: ^engine.Engine, characters: []engine.Particle_Id, row: int) {
+overflow_row_position :: proc(e: ^engine.Engine, characters: []engine.Particle_Id, row: int) #no_bounds_check {
 	for id in characters do engine.set_position(e, id, engine.coord(e.particles.initial_coord[id].column, row))
 }
 
@@ -102,7 +102,7 @@ overflow_row_color :: proc(
 	e: ^engine.Engine,
 	characters: []engine.Particle_Id,
 	code: engine.Appearance_Id,
-) {
+) #no_bounds_check {
 	for id in characters {
 		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 		engine.set_appearance(e, id, code)
@@ -135,28 +135,46 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	defer delete(characters[:])
-	final_colors := make([]engine.Color, len(e.particles), context.temp_allocator)
+	original_count := len(e.particles)
+	final_pairs := make([]engine.Color_Pair, original_count, context.temp_allocator)
+	defer delete(final_pairs, context.temp_allocator)
 	black := engine.Color{0x00, 0x00, 0x00}
 	for id in characters {
-		coord := e.particles.initial_coord[id]
-		if coord.row >= e.canvas.text_bottom &&
-		   coord.row <= e.canvas.text_top &&
-		   coord.column >= e.canvas.text_left &&
-		   coord.column <= e.canvas.text_right {
-			final_colors[id] = engine.gradient_sample(final_sampler, final_spectrum[:], coord)
+		if s.color_handling == .Dynamic {
+			final_pairs[id] = engine.get_initial_appearance(e, engine.Particle_Id(id)).colors
 		} else {
-			final_colors[id] = black
+			coord := e.particles.initial_coord[id]
+			color := black
+			if coord.row >= e.canvas.text_bottom &&
+			   coord.row <= e.canvas.text_top &&
+			   coord.column >= e.canvas.text_left &&
+			   coord.column <= e.canvas.text_right {
+				color = engine.gradient_sample(final_sampler, final_spectrum[:], coord)
+			}
+			final_pairs[id] = {fg = color}
 		}
 	}
+	unique_pairs, pair_slots := engine.group_values(final_pairs)
+	defer delete(unique_pairs)
+	defer delete(pair_slots)
+	final_codes := make([]engine.Appearance_Id, len(unique_pairs), context.temp_allocator)
+	defer delete(final_codes, context.temp_allocator)
+	for pair, g in unique_pairs {
+		final_codes[g] = engine.prepare_appearance(e, engine.Appearance{colors = pair})
+	}
+	plain := engine.prepare_appearance(e, engine.Appearance{})
 
 	input_rows := engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_T2B)
 	defer engine.groups_delete(&input_rows)
 	row_order := make([]int, len(input_rows.spans), context.temp_allocator)
+	defer delete(row_order, context.temp_allocator)
 	for &row_index, i in row_order do row_index = i
 	cycles := engine.random_range(
 		s.config.overflow_cycles_range.lo,
 		s.config.overflow_cycles_range.hi + 1,
 	)
+	copy_batch := engine.particle_batch(e, cycles * len(input_rows.members))
+	reserve(&s.row_characters, cycles * len(input_rows.members) + original_count)
 	for _ in 0 ..< cycles {
 		engine.random_shuffle(row_order)
 		for row_index in row_order {
@@ -164,14 +182,13 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 			start := len(s.row_characters)
 			for id in source {
 				copy_id := engine.add_particle(
-					e,
+					&copy_batch,
 					e.particles.initial_symbol[id],
 					e.particles.initial_appearance_id[id],
 					e.particles.initial_coord[id],
 				)
 				if .Preserve_Initial_Colors in e.particles.flags[id] do e.particles.flags[copy_id] += {.Preserve_Initial_Colors}
-				engine.set_symbol(e, copy_id, e.particles.initial_symbol[id])
-				engine.set_appearance(e, copy_id, engine.Appearance{})
+				e.particles.shared_appearance_id[copy_id] = plain
 				append(&s.row_characters, copy_id)
 			}
 			append(&s.pending_rows, Overflow_Row{span = {start, len(source)}, final = false})
@@ -184,22 +201,8 @@ overflow_build :: proc(s: ^Overflow_State, e: ^engine.Engine) {
 	for row_index in 0 ..< len(final_rows.spans) {
 		row := engine.group_members(final_rows, row_index)
 		for id in row {
-			if id < engine.Particle_Id(len(final_colors)) {
-				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					engine.dynamic_apply_input_colors(
-						&appearance,
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					engine.set_symbol(e, id, e.particles.symbol[id])
-					engine.set_appearance(
-						e,
-						id,
-						engine.Appearance{colors = {fg = final_colors[id]}},
-					)
-				}
+			if int(id) < original_count {
+				engine.set_appearance(e, id, final_codes[pair_slots[id]])
 			}
 		}
 		overflow_append_row(s, row, true)
@@ -257,7 +260,6 @@ overflow_next :: proc(s: ^Overflow_State, e: ^engine.Engine) -> bool #no_bounds_
 
 	write := 0
 	for row in s.active_rows {
-		characters := engine.span_slice(s.row_characters[:], row.span)
 		if row.row <= e.canvas.top {
 			s.active_rows[write] = row
 			write += 1

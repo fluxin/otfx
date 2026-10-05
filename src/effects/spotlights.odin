@@ -81,6 +81,7 @@ Spotlights_Light_Levels :: 64
 Spotlights_State :: struct {
 	config:                   Spotlights_Config,
 	characters:               [dynamic]engine.Particle_Id,
+	coords:                   [dynamic]engine.Coord, // dense by character slot
 	rows:                     []engine.Span, // spans into the immutable, row-ordered characters
 	lit:                      [dynamic]int,
 	candidates:               bit_array.Bit_Array,
@@ -101,7 +102,7 @@ Spotlights_State :: struct {
 	illumination_initialized: bool,
 }
 
-spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) {
+spotlights_new_target :: proc(s: ^Spotlights_State, e: ^engine.Engine, i: int) #no_bounds_check {
 	origin := s.spot_positions[i]
 	target := engine.canvas_random_coord(e.canvas, false, false)
 	control := engine.canvas_random_coord(e.canvas, true, false)
@@ -147,6 +148,7 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	n := len(s.characters)
+	s.coords = make([dynamic]engine.Coord, n)
 	s.rows = make([]engine.Span, e.canvas.top + 1)
 	reserve(&s.lit, n)
 	bit_array.init(&s.candidates, n)
@@ -155,17 +157,22 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 
 	// Each character's fully lit style; equal styles share one light ramp.
 	lit_styles := make([]engine.Appearance, n, context.temp_allocator)
+	defer delete(lit_styles, context.temp_allocator)
 	for id, i in s.characters {
-		row := &s.rows[initial_coords[id].row]
-		if row.len == 0 do row.start = i
-		row.len += 1
+		c := initial_coords[id]
+		s.coords[i] = c
+		if engine.canvas_in(e.canvas, c) {
+			row := &s.rows[c.row]
+			if row.len == 0 do row.start = i
+			row.len += 1
+		}
 		style := engine.get_initial_appearance(e, id)
 		lit := &lit_styles[i]
 		lit.bold = style.bold
 		if s.color_handling == .Dynamic {
 			lit.colors = {fg = style.colors.fg.? or_else engine.Color{0x80, 0x80, 0x80}, bg = style.colors.bg}
 		} else {
-			lit.colors.fg = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
+			lit.colors.fg = engine.gradient_sample(sampler, spectrum[:], c)
 		}
 	}
 	bases: [dynamic]engine.Appearance
@@ -174,6 +181,7 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	// Each base style lit from the dimmest brightness up to itself.
 	steps := Spotlights_Light_Levels - 1
 	light := make([]engine.Appearance, len(bases) * Spotlights_Light_Levels, context.temp_allocator)
+	defer delete(light, context.temp_allocator)
 	for lit, row in bases {
 		// Light scales HSL lightness, so each lane tweens from its dimmed
 		// lightness up to the lit color.
@@ -225,7 +233,7 @@ spotlights_update_positions :: proc(
 	e: ^engine.Engine,
 ) -> (
 	all_arrived, moved: bool,
-) {
+) #no_bounds_check {
 	all_arrived = true
 	for i in 0 ..< len(s.spot_positions) {
 		steps := s.spot_steps[i]
@@ -288,15 +296,14 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool #no_bou
 	if !repaint do return true
 	s.illumination_initialized = true
 
-	initial_coords := e.particles.initial_coord
 	// Every spotlight is at the center during expansion; one distance suffices.
 	spot_count := 1 if s.phase == .Expand else len(s.spot_positions)
 	// Visit the new light bounds plus the old lit set, so departures darken.
-	for i in s.lit do bit_array.set(&s.candidates, i)
+	for i in s.lit do bit_array.unsafe_set(&s.candidates, i)
 	clear(&s.lit)
 	if restore_input {
 		// Dynamic nil foregrounds restore on Expand even outside the light.
-		for i in 0 ..< len(s.characters) do bit_array.set(&s.candidates, i)
+		for i in 0 ..< len(s.characters) do bit_array.unsafe_set(&s.candidates, i)
 	} else {
 		for spot in s.spot_positions[:spot_count] {
 			bottom := max(spot.row - s.illuminate_range / 2, 1)
@@ -304,11 +311,10 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool #no_bou
 			left, right := spot.column - s.illuminate_range, spot.column + s.illuminate_range
 			for row_index := bottom; row_index <= top; row_index += 1 {
 				row := s.rows[row_index]
-				for id, offset in s.characters[row.start:row.start + row.len] {
-					column := initial_coords[id].column
-					if column < left do continue
-					if column > right do break
-					bit_array.set(&s.candidates, row.start + offset)
+				for p, offset in s.coords[row.start:row.start + row.len] {
+					if p.column < left do continue
+					if p.column > right do break
+					bit_array.unsafe_set(&s.candidates, row.start + offset)
 				}
 			}
 		}
@@ -326,7 +332,7 @@ spotlights_next :: proc(s: ^Spotlights_State, e: ^engine.Engine) -> bool #no_bou
 				continue
 			}
 		}
-		p := initial_coords[id]
+		p := s.coords[i]
 		nearest_squared := engine.line_length_squared(s.spot_positions[0], p, true)
 		for j in 1 ..< spot_count do nearest_squared = min(nearest_squared, engine.line_length_squared(s.spot_positions[j], p, true))
 		// Full light inside the falloff start, then linear down to the dimmest.

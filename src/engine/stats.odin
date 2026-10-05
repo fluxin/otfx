@@ -9,7 +9,7 @@ FRAME_STATS_ENABLED :: #config(OTFX_FRAME_STATS, false)
 Frame_Stats :: struct {
 	clock:                                        time.Tick,
 	compose, emit, write:                         time.Duration,
-	frames, candidate_visits, ownership_visits:   int,
+	frames, candidate_visits:                     int,
 	runs, output_bytes, write_calls, write_bytes: int,
 	patched_cells, cell_bytes_written:            int,
 }

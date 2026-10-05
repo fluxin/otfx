@@ -54,20 +54,30 @@ init_particle :: proc(
 	symbol: rune,
 	shared_id: Appearance_Id,
 	position: Coord,
-) {
+) #no_bounds_check {
 	assert(id != NO_PARTICLE, "particle ID is reserved for an empty cell")
 	assert(shared_id != NO_APPEARANCE && int(shared_id) <= len(e.shared_appearances))
 	assert(utf8.valid_rune(symbol), "symbol must be a valid Unicode scalar value")
-	e.particles[id].initial_coord = position
-	e.particles[id].current_coord = position
-	e.particles[id].initial_symbol = symbol
-	e.particles[id].symbol = symbol
-	e.particles[id].initial_appearance_id = shared_id
-	e.particles[id].shared_appearance_id = shared_id
-	e.particles[id].cell = -1
+	e.particles.initial_coord[id] = position
+	e.particles.current_coord[id] = position
+	e.particles.initial_symbol[id] = symbol
+	e.particles.symbol[id] = symbol
+	e.particles.initial_appearance_id[id] = shared_id
+	e.particles.shared_appearance_id[id] = shared_id
+	e.particles.cell[id] = -1
 	// New particles have no published membership; later edits use this entry.
 	append(&e.updates, id)
-	e.particles[id].flags += {.Update_Queued, .Placement_Changed, .Content_Changed}
+	e.particles.flags[id] += {.Update_Queued, .Placement_Changed, .Content_Changed}
+}
+
+reserve_particles :: proc(e: ^Engine, count: int) {
+	assert(count >= 0)
+	assert(
+		u64(len(e.particles)) + u64(count) <= u64(NO_PARTICLE),
+		"particle count exceeds 32-bit IDs",
+	)
+	reserve(&e.particles, len(e.particles) + count)
+	reserve(&e.updates, cap(e.particles))
 }
 
 make_fill_particles :: proc(e: ^Engine, occupied: []bool) {
@@ -149,10 +159,10 @@ add_particle_single :: proc(
 }
 
 set_symbol :: #force_inline proc(e: ^Engine, id: Particle_Id, value: rune) #no_bounds_check {
-	if e.particles[id].symbol == value do return
+	if e.particles.symbol[id] == value do return
 	assert(utf8.valid_rune(value), "symbol must be a valid Unicode scalar value")
 	queue_particle(e, id, .Content_Changed)
-	e.particles[id].symbol = value
+	e.particles.symbol[id] = value
 }
 
 set_particle :: proc {
@@ -165,27 +175,27 @@ set_particle :: proc {
 }
 
 set_position :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Coord) #no_bounds_check {
-	old := e.particles[id].current_coord
+	old := e.particles.current_coord[id]
 	if old == value do return
 	queue_particle(e, id, .Placement_Changed)
-	e.particles[id].current_coord = value
+	e.particles.current_coord[id] = value
 }
 
 set_visible :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Visible) #no_bounds_check {
 	visible := bool(value)
-	if (.Visible in e.particles[id].flags) == visible do return
+	if (.Visible in e.particles.flags[id]) == visible do return
 	queue_particle(e, id, .Placement_Changed)
-	if visible {e.particles[id].flags += {.Visible}} else {e.particles[id].flags -= {.Visible}}
+	if visible {e.particles.flags[id] += {.Visible}} else {e.particles.flags[id] -= {.Visible}}
 }
 
 set_layer :: #force_inline proc(e: ^Engine, id: Particle_Id, value: Layer) #no_bounds_check {
 	layer := int(value)
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
 	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
-	old_layer := e.particles[id].layer
+	old_layer := e.particles.layer[id]
 	if old_layer == layer do return
 	queue_particle(e, id, .Placement_Changed)
-	e.particles[id].layer = layer
+	e.particles.layer[id] = layer
 }
 
 // Apply combined placement changes with one membership removal/insertion.
@@ -198,15 +208,15 @@ set_placement :: #force_inline proc(
 ) #no_bounds_check {
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
 	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
-	old_coord := e.particles[id].current_coord
-	old_visible := (.Visible in e.particles[id].flags)
-	old_layer := e.particles[id].layer
+	old_coord := e.particles.current_coord[id]
+	old_visible := (.Visible in e.particles.flags[id])
+	old_layer := e.particles.layer[id]
 	placement_changed := coord != old_coord || visible != old_visible || layer != old_layer
 	if !placement_changed do return
 	queue_particle(e, id, .Placement_Changed)
-	e.particles[id].current_coord = coord
-	if visible {e.particles[id].flags += {.Visible}} else {e.particles[id].flags -= {.Visible}}
-	e.particles[id].layer = layer
+	e.particles.current_coord[id] = coord
+	if visible {e.particles.flags[id] += {.Visible}} else {e.particles.flags[id] -= {.Visible}}
+	e.particles.layer[id] = layer
 }
 
 // Load one rendered frame's particle columns. Generation never changes Engine;
@@ -223,11 +233,11 @@ set_particle_frame :: #force_inline proc(e: ^Engine, id: Particle_Id, frame: Seq
 	position_changed := e.particles.current_coord[id] != frame.coord
 	colors_changed := get_appearance(e, id).colors != frame.colors
 	if !position_changed && !colors_changed do return
-	flags := e.particles[id].flags
+	flags := e.particles.flags[id]
 	if .Update_Queued not_in flags do append(&e.updates, id)
 	if position_changed do flags += {.Placement_Changed}
 	if colors_changed do flags += {.Content_Changed}
-	e.particles[id].flags = flags + {.Update_Queued}
+	e.particles.flags[id] = flags + {.Update_Queued}
 	e.particles.current_coord[id] = frame.coord
 	if colors_changed {
 		appearance := edit_appearance(e, id)

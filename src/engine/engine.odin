@@ -1,7 +1,6 @@
 package engine
 
 import "core:container/bit_array"
-import "core:container/xar"
 import "core:time"
 
 // Engine state, construction, and playback time.
@@ -20,7 +19,7 @@ Engine :: struct {
 	updates:               [dynamic]Particle_Id,
 	cells:                 []Render_Cell,
 	resolve_cells:         [dynamic]int,
-	render_nodes:          xar.Array(Render_Node, 2),
+	render_nodes:          [dynamic]Render_Node,
 	render_keys:           [dynamic]Render_Key,
 	rows:                  []Render_Row,
 	dirty_cells:           bit_array.Bit_Array, // cells to patch in the next frame build
@@ -31,6 +30,26 @@ Engine :: struct {
 	last_print:            time.Tick,
 	logical_frame:         int,
 	stats:                 Frame_Stats_State,
+}
+
+engine_destroy :: proc(e: ^Engine) {
+	delete(e.input_line_widths)
+	delete(e.particles)
+	delete(e.particle_sets.input)
+	delete(e.particle_sets.inner_fill)
+	delete(e.particle_sets.outer_fill)
+	delete(e.updates)
+	delete(e.cells)
+	delete(e.resolve_cells)
+	delete(e.render_nodes)
+	delete(e.render_keys)
+	delete(e.rows)
+	bit_array.destroy(&e.dirty_cells)
+	bit_array.destroy(&e.emit_cells)
+	delete(e.slots)
+	delete(e.output)
+	delete(e.shared_appearances)
+	e^ = {}
 }
 
 engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error) {
@@ -53,7 +72,11 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	e.canvas, e.layout = layout_make(cfg, e.input_line_widths[:], term_w, term_h)
 	width, height := max(e.layout.visible_right, 0), max(e.layout.visible_top, 0)
 	e.cells = make([]Render_Cell, width * height)
-	for &cell in e.cells do cell.top = NO_PARTICLE
+	for &cell in e.cells {
+		cell.head = NO_PARTICLE
+		cell.tail = NO_PARTICLE
+		cell.top = NO_PARTICLE
+	}
 	reserve(&e.resolve_cells, len(e.cells))
 	e.rows = make([]Render_Row, height)
 	for &row, i in e.rows do row.cells = e.cells[i * width:(i + 1) * width]
@@ -64,8 +87,9 @@ engine_make :: proc(input: string, cfg: Terminal_Config) -> (Engine, Input_Error
 	for i in 0 ..< len(e.cells) do mark_cell_dirty(&e, i)
 	// Worst case: every cell starts its own run, with both cursor moves.
 	e.output = make([]byte, len(Frame_Origin) + len(e.cells) * (SLOT_MAX + 2 * MOVE_MAX))
-	reserve(&e.shared_appearances, max(e.canvas.top * e.canvas.right, 64))
+	reserve(&e.shared_appearances, 256)
 	setup_input_particles(&e, lines)
+	lines_delete(lines)
 	// drop characters that landed outside the canvas (same as upstream)
 	write := 0
 	for id in e.particle_sets.input {

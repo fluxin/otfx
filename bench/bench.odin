@@ -118,22 +118,39 @@ open_raw_pty :: proc() -> (reader, writer: ^os.File, ok: bool) {
 		posix.close(master)
 		return
 	}
-	slave := posix.open(posix.ptsname(master), {.RDWR, .NOCTTY})
+	pts := posix.ptsname(master)
+	if pts == nil {
+		posix.close(master)
+		return
+	}
+	slave := posix.open(pts, {.RDWR, .NOCTTY})
 	if slave < 0 {
 		posix.close(master)
 		return
 	}
 	attributes: posix.termios
-	posix.tcgetattr(slave, &attributes)
+	if posix.tcgetattr(slave, &attributes) != .OK {
+		posix.close(slave)
+		posix.close(master)
+		return
+	}
 	attributes.c_iflag -= {.ICRNL, .IXON}
 	attributes.c_oflag -= {.OPOST}
 	attributes.c_lflag -= {.ECHO, .ICANON, .ISIG, .IEXTEN}
-	posix.tcsetattr(slave, .TCSANOW, &attributes)
+	if posix.tcsetattr(slave, .TCSANOW, &attributes) != .OK {
+		posix.close(slave)
+		posix.close(master)
+		return
+	}
 	size := Winsize {
 		rows    = BENCH_LINES,
 		columns = BENCH_COLUMNS,
 	}
-	linux.ioctl(linux.Fd(slave), TIOCSWINSZ, uintptr(&size))
+	if int(linux.ioctl(linux.Fd(slave), TIOCSWINSZ, uintptr(&size))) < 0 {
+		posix.close(slave)
+		posix.close(master)
+		return
+	}
 	return os.new_file(uintptr(master), "pty master"), os.new_file(uintptr(slave), "pty"), true
 }
 
@@ -359,17 +376,18 @@ benchmark_summary :: proc(
 	total_wall_ms, total_cpu_ms: f64
 	run_count, peak_rss_kib := 0, 0
 	for _ in 0 ..< repeats {
-		start := time.tick_now()
+		batch_wall_ms: f64
 		for _ in 0 ..< batch_count {
 			run, run_ok := run_command(command, input, sink)
 			if !run_ok do return {}, false
+			batch_wall_ms += run.wall_ms
 			total_cpu_ms += run.cpu_ms
 			peak_rss_kib = max(peak_rss_kib, run.rss_kib)
 			run_count += 1
 		}
-		elapsed_ms := time.duration_seconds(time.tick_since(start)) * 1000 / f64(batch_count)
+		elapsed_ms := batch_wall_ms / f64(batch_count)
 		best_wall_ms = min(best_wall_ms, elapsed_ms)
-		total_wall_ms += elapsed_ms * f64(batch_count)
+		total_wall_ms += batch_wall_ms
 	}
 	return {
 			best_wall_ms = best_wall_ms,
@@ -462,14 +480,17 @@ main :: proc() {
 	defer delete(input)
 	minimum_seconds := minimum_sample_seconds()
 
+	ttfx_threads := os.get_env("TTFX_THREADS", context.temp_allocator)
+	if ttfx_threads == "" do ttfx_threads = "default"
 	fmt.printf(
-		"terminal %dx%d, input/default canvas %dx%d, repeats=%d, seed=1, stdout=%s\n",
+		"terminal %dx%d, input/default canvas %dx%d, repeats=%d, seed=1, stdout=%s, TTFX_THREADS=%s\n",
 		BENCH_COLUMNS,
 		BENCH_LINES,
 		BENCH_INPUT_WIDTH,
 		BENCH_INPUT_ROWS,
 		repeats,
 		Sink_Names[sink],
+		ttfx_threads,
 	)
 	if paced {
 		fmt.println("paced: one complete run per repeat")
@@ -492,6 +513,7 @@ main :: proc() {
 	log_speedup_total: f64
 
 	for effect in selected {
+		defer free_all(context.temp_allocator)
 		rust_command := command_make(RUST_BINARY, effect, frame_rate)
 		odin_command := command_make(ODIN_BINARY, effect, frame_rate)
 		rust_summary, rust_ok := benchmark_summary(

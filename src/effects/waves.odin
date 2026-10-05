@@ -110,8 +110,9 @@ Waves_State :: struct {
 	wave_symbols:   [dynamic]rune,
 	wave_codes:     [dynamic]engine.Appearance_Id, // age -> shared appearance
 	last_wave:      engine.Color,
-	final_index:    [dynamic]int, // spectrum index by Particle_Id
-	fades:          engine.Appearance_Ramp, // fades to each spectrum entry
+	plain_code:     engine.Appearance_Id,
+	final_index:    [dynamic]int, // ramp row by Particle_Id (-1 = plain unstyled dynamic)
+	fades:          engine.Appearance_Ramp, // fades to each spectrum/dynamic entry
 	start_ticks:    [dynamic]int, // -1 pending, -2 complete
 	final_step:     [dynamic]int, // -1 until the final appearance is published
 	active:         [dynamic]engine.Particle_Id, // revealed, not yet complete
@@ -122,6 +123,7 @@ Waves_State :: struct {
 }
 
 waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
+	s.plain_code = engine.prepare_appearance(e, engine.Appearance{})
 	final_spectrum := engine.gradient_make(
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
@@ -178,17 +180,45 @@ waves_build :: proc(s: ^Waves_State, e: ^engine.Engine) {
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
 	visible_flags := e.particles.flags
 	s.final_index = make([dynamic]int, len(e.particles))
-	s.fades = engine.ramp_make(e, engine.tweens_from(s.last_wave, final_spectrum[:]), s.config.final_gradient_steps[0])
 	s.color_handling = e.cfg.existing_color_handling
 	s.start_ticks = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
 	s.final_step = make([dynamic]int, len(e.particles))
 	for i in 0 ..< len(s.final_step) do s.final_step[i] = -1
 	reserve(&s.active, len(e.particles))
-	for id in chars {
-		c := initial_coords[id]
-		s.final_index[id] = engine.gradient_sample_index(final_sampler, len(final_spectrum), c)
-		visible_flags[id] -= {.Visible}
+
+	if s.color_handling != .Dynamic {
+		s.fades = engine.ramp_make(e, engine.tweens_from(s.last_wave, final_spectrum[:]), s.config.final_gradient_steps[0])
+		for id in chars {
+			c := initial_coords[id]
+			s.final_index[id] = engine.gradient_sample_index(final_sampler, len(final_spectrum), c)
+			visible_flags[id] -= {.Visible}
+		}
+	} else {
+		dyn_pairs := make([]engine.Color_Pair, len(chars), context.temp_allocator)
+		defer delete(dyn_pairs, context.temp_allocator)
+		for id, i in chars {
+			dyn_pairs[i] = engine.get_initial_appearance(e, engine.Particle_Id(id)).colors
+			visible_flags[id] -= {.Visible}
+		}
+		unique_pairs, pair_slots := engine.group_values(dyn_pairs)
+		defer delete(unique_pairs)
+		defer delete(pair_slots)
+		dyn_tweens := make([]engine.Tween(engine.Appearance), len(unique_pairs), context.temp_allocator)
+		defer delete(dyn_tweens, context.temp_allocator)
+		for pair, g in unique_pairs {
+			dyn_tweens[g] = {
+				from = {colors = {s.last_wave, s.last_wave}},
+				to   = {colors = pair},
+			}
+		}
+		if len(dyn_tweens) > 0 {
+			s.fades = engine.ramp_make(e, dyn_tweens, s.config.final_gradient_steps[0])
+		}
+		for id, i in chars {
+			pair := dyn_pairs[i]
+			s.final_index[id] = (pair.fg == nil && pair.bg == nil) ? -1 : pair_slots[i]
+		}
 	}
 
 	s.pending_cols = engine.get_particles_grouped(
@@ -219,7 +249,6 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool #no_bounds_check 
 	wave_ticks := s.wave_ticks
 	assert(wave_ticks >= 1 && len(s.config.final_gradient_steps) > 0)
 	final_steps := s.config.final_gradient_steps[0]
-	last_wave := s.last_wave
 	// Completed characters leave the active list, so a frame's work is bounded
 	// by what is actually animating rather than the whole population.
 	write := 0
@@ -230,29 +259,13 @@ waves_next :: proc(s: ^Waves_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			if age == 0 || s.wave_codes[age] != s.wave_codes[age - 1] do engine.set_appearance(e, id, s.wave_codes[age])
 		} else {
 			final_age := age - (wave_ticks - 1)
-			final_ticks := (final_steps + 1) * 10
-			step := final_age == 0 ? 0 : min((final_age - 1) / 10, final_steps)
-			if s.color_handling != .Dynamic {
-				if step != s.final_step[id] {
-					engine.set_symbol(e, id, e.particles.initial_symbol[id])
-					engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[id], step))
-					s.final_step[id] = step
-				}
-			} else {
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				if style.colors.fg == nil && style.colors.bg == nil {
-					final_ticks = 10
-					step = 0
-				}
-				if step != s.final_step[id] {
-					appearance := engine.Appearance{}
-					if style.colors.fg != nil || style.colors.bg != nil {
-						appearance.colors = engine.tween(engine.Color_Pair{last_wave, last_wave}, style.colors, final_steps, step)
-					}
-					engine.set_symbol(e, id, e.particles.initial_symbol[id])
-					engine.set_appearance(e, id, appearance)
-					s.final_step[id] = step
-				}
+			row := s.final_index[id]
+			final_ticks := row < 0 ? 10 : (final_steps + 1) * 10
+			step := (row < 0 || final_age == 0) ? 0 : min((final_age - 1) / 10, final_steps)
+			if step != s.final_step[id] {
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
+				engine.set_appearance(e, id, row < 0 ? s.plain_code : engine.ramp_code(s.fades, row, step))
+				s.final_step[id] = step
 			}
 			if final_age == final_ticks {
 				s.start_ticks[id] = -2

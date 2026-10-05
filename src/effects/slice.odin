@@ -78,6 +78,7 @@ Slice_State :: struct {
 	config:           Slice_Config,
 	motion_ids:       [dynamic]engine.Particle_Id,
 	motion_origins:   [dynamic]engine.Coord,
+	motion_targets:   [dynamic]engine.Coord,
 	motion_slots:     [dynamic]int,
 	motion_factors:   [dynamic]f64,
 	tick:             int,
@@ -92,12 +93,13 @@ slice_schedule :: proc(
 	id: engine.Particle_Id,
 	origin: engine.Coord,
 	speed: f64,
-) {
+) #no_bounds_check {
 	slot := slots[id]
 	assert(slot >= 0)
 	destination := e.particles.initial_coord[id]
 	engine.set_particle(e, id, origin)
 	s.motion_origins[slot] = origin
+	s.motion_targets[slot] = destination
 	s.motion_max_steps[slot] = max(
 		engine.round_to_int(engine.line_length(origin, destination, true) / speed),
 		1,
@@ -126,19 +128,33 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	characters := engine.get_particles(query, engine.PARTICLE_FILTER_INPUT, .Top_Bottom_Left_Right)
 	defer delete(characters[:])
 	s.color_handling = e.cfg.existing_color_handling
-	for id in characters {
-		color := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
-		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance {
-				colors = {
-					fg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg : color,
-					bg = s.color_handling == .Dynamic ? engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg : nil,
-				},
-			},
-		)
+	if s.color_handling == .Dynamic {
+		dyn_pairs := make([]engine.Color_Pair, len(characters), context.temp_allocator)
+		defer delete(dyn_pairs, context.temp_allocator)
+		for id, i in characters do dyn_pairs[i] = engine.get_initial_appearance(e, engine.Particle_Id(id)).colors
+		unique_pairs, pair_slots := engine.group_values(dyn_pairs)
+		defer delete(unique_pairs)
+		defer delete(pair_slots)
+		dyn_codes := make([]engine.Appearance_Id, len(unique_pairs), context.temp_allocator)
+		defer delete(dyn_codes, context.temp_allocator)
+		for pair, g in unique_pairs {
+			dyn_codes[g] = engine.prepare_appearance(e, engine.Appearance{colors = pair})
+		}
+		for id, i in characters {
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			engine.set_appearance(e, id, dyn_codes[pair_slots[i]])
+		}
+	} else {
+		spectrum_codes := make([]engine.Appearance_Id, len(spectrum), context.temp_allocator)
+		defer delete(spectrum_codes, context.temp_allocator)
+		for col, k in spectrum {
+			spectrum_codes[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = col}})
+		}
+		for id in characters {
+			idx := engine.gradient_sample_index(sampler, len(spectrum), e.particles.initial_coord[id])
+			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			engine.set_appearance(e, id, spectrum_codes[idx])
+		}
 	}
 
 	// Horizontal Slice includes inner fill cells inside the text rectangle;
@@ -165,8 +181,10 @@ slice_build :: proc(s: ^Slice_State, e: ^engine.Engine) {
 	}
 	n := len(s.motion_ids)
 	s.motion_origins = make([dynamic]engine.Coord, n)
+	s.motion_targets = make([dynamic]engine.Coord, n)
 	s.motion_max_steps = make([dynamic]int, n)
 	slots := make([dynamic]int, len(e.particles), context.temp_allocator)
+	defer delete(slots)
 	for i in 0 ..< len(slots) do slots[i] = -1
 	for id, i in s.motion_ids do slots[id] = i
 
@@ -297,9 +315,9 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool #no_bounds_check 
 	if len(s.motion_ids) == 0 do return false
 	ids := s.motion_ids[:]
 	origins := s.motion_origins[:]
+	targets := s.motion_targets[:]
 	slots := s.motion_slots[:]
 	max_steps := s.motion_max_steps[:]
-	initial_coords := e.particles.initial_coord
 	for steps, slot in max_steps {
 		if s.tick < steps do s.motion_factors[slot] = ease.ease(s.config.movement_easing, f64(s.tick + 1) / f64(steps))
 	}
@@ -309,17 +327,19 @@ slice_next :: proc(s: ^Slice_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		slot := slots[read]
 		maximum := max_steps[slot]
 		factor := s.motion_factors[slot]
-		engine.set_particle(e, id, engine.tween(origins[read], initial_coords[id], factor))
+		engine.set_particle(e, id, engine.tween(origins[read], targets[read], factor))
 		if s.tick + 1 == maximum do continue
 		if write != read {
 			ids[write] = id
 			origins[write] = origins[read]
+			targets[write] = targets[read]
 		}
 		slots[write] = slot
 		write += 1
 	}
 	resize(&s.motion_ids, write)
 	resize(&s.motion_origins, write)
+	resize(&s.motion_targets, write)
 	resize(&s.motion_slots, write)
 	s.tick += 1
 	return true

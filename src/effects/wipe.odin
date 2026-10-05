@@ -129,6 +129,19 @@ wipe_build :: proc(s: ^Wipe_State, e: ^engine.Engine) {
 		for id in chars {
 			s.final_index[id] = engine.gradient_sample_index(sampler, len(spectrum), e.particles.initial_coord[id])
 		}
+	} else {
+		dyn_pairs := make([]engine.Color_Pair, len(chars), context.temp_allocator)
+		defer delete(dyn_pairs, context.temp_allocator)
+		for id, i in chars do dyn_pairs[i] = engine.get_initial_appearance(e, id).colors
+		unique_pairs, pair_slots := engine.group_values(dyn_pairs)
+		defer delete(unique_pairs)
+		defer delete(pair_slots)
+		dyn_codes := make([]engine.Appearance_Id, len(unique_pairs), context.temp_allocator)
+		defer delete(dyn_codes, context.temp_allocator)
+		for pair, g in unique_pairs {
+			dyn_codes[g] = engine.prepare_appearance(e, engine.Appearance{colors = pair})
+		}
+		for id, i in chars do s.final_index[id] = int(dyn_codes[pair_slots[i]])
 	}
 	s.wipe_delay = s.config.wipe_delay
 }
@@ -169,7 +182,7 @@ wipe_next :: proc(s: ^Wipe_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			step := age / s.config.final_gradient_frames
 			engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			if s.color_handling == .Dynamic {
-				engine.set_appearance(e, id, engine.Appearance{colors = engine.get_initial_appearance(e, id).colors})
+				engine.set_appearance(e, id, engine.Appearance_Id(s.final_index[id]))
 			} else {
 				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[id], step))
 			}

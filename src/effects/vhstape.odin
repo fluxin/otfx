@@ -4,7 +4,8 @@ import engine "../engine"
 
 import "core:fmt"
 
-Vhs_Noise_Symbols :: [4]rune{'#', '*', '.', ':'}
+@(private = "file", rodata)
+Vhs_Noise_Symbols := [4]rune{'#', '*', '.', ':'}
 
 Vhstape_Config :: struct {
 	glitch_line_colors:       [dynamic]engine.Color,
@@ -124,7 +125,10 @@ Vhstape_State :: struct {
 	config:                Vhstape_Config,
 	characters:            [dynamic]engine.Particle_Id,
 	index_by_id:           []int,
-	final_colors:          []engine.Color,
+	stable_codes:          []engine.Appearance_Id,
+	final_codes:           []engine.Appearance_Id,
+	glitch_line_codes:     []engine.Appearance_Id,
+	white_code:            engine.Appearance_Id,
 	rows:                  engine.Particle_Groups,
 	row_offsets:           []int,
 	row_is_wave:           []u8,
@@ -133,8 +137,8 @@ Vhstape_State :: struct {
 	active_glitch_rows:    [dynamic]int,
 	active_wave_top:       int,
 	noise_codes:           []engine.Appearance_Id, // one prepared appearance per noise color
-	snow_frames:           []Vhstape_Noise_Frame,
-	final_snow_frames:     []Vhstape_Noise_Frame,
+	snow_frames:           []Vhstape_Noise_Frame, // frame-major: [frame * n + i]
+	final_snow_frames:     []Vhstape_Noise_Frame, // frame-major: [frame * n + i]
 	motions:               []Vhstape_Motion,
 	motion_origins:        []engine.Coord,
 	motion_targets:        []engine.Coord,
@@ -159,8 +163,9 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -182,26 +187,69 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	storage_len := len(e.particles)
 	s.index_by_id = make([]int, storage_len)
 	for i in 0 ..< storage_len do s.index_by_id[i] = -1
-	s.final_colors = make([]engine.Color, storage_len)
-	initial_coords := e.particles.initial_coord
-
-	visible_flags := e.particles.flags
-	for id, i in s.characters {
-		s.index_by_id[id] = i
-		s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
-		if s.color_handling == .Dynamic {
-			style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-			engine.set_foreground(
-				e,
-				id,
-				style.colors.fg != nil ? style.colors.fg : engine.Color{0x80, 0x80, 0x80},
-			)
-			engine.set_background(e, id, style.colors.bg)
-		} else {
-			engine.set_foreground(e, id, s.final_colors[id])
-		}
-		visible_flags[id] += {.Visible}
+	s.stable_codes = make([]engine.Appearance_Id, storage_len)
+	s.final_codes = make([]engine.Appearance_Id, storage_len)
+	s.white_code = engine.prepare_appearance(e, {colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}})
+	s.glitch_line_codes = make([]engine.Appearance_Id, len(s.config.glitch_line_colors))
+	for gc, gi in s.config.glitch_line_colors {
+		s.glitch_line_codes[gi] = engine.prepare_appearance(e, {colors = {fg = gc}})
 	}
+
+	if n > 0 {
+		stable_styles := make([]engine.Appearance, n, context.temp_allocator)
+		final_styles := make([]engine.Appearance, n, context.temp_allocator)
+		defer delete(stable_styles, context.temp_allocator)
+		defer delete(final_styles, context.temp_allocator)
+		initial_coords := e.particles.initial_coord
+		for id, i in s.characters {
+			s.index_by_id[id] = i
+			if s.color_handling == .Dynamic {
+				style := engine.get_initial_appearance(e, id)
+				stable_styles[i] = {
+					colors = {
+						fg = style.colors.fg != nil ? style.colors.fg : engine.Color{0x80, 0x80, 0x80},
+						bg = style.colors.bg,
+					},
+				}
+				final_styles[i] = {colors = style.colors}
+			} else {
+				fc := engine.gradient_sample(sampler, spectrum[:], initial_coords[id])
+				stable_styles[i] = {colors = {fg = fc}}
+				final_styles[i] = {colors = {fg = fc}}
+			}
+		}
+		unique_stable, stable_idx := engine.group_values(stable_styles)
+		defer delete(unique_stable)
+		defer delete(stable_idx)
+		u_stable_codes := make([]engine.Appearance_Id, len(unique_stable), context.temp_allocator)
+		defer delete(u_stable_codes, context.temp_allocator)
+		for st, idx in unique_stable do u_stable_codes[idx] = engine.prepare_appearance(e, st)
+
+		if s.color_handling == .Dynamic {
+			unique_final, final_idx := engine.group_values(final_styles)
+			defer delete(unique_final)
+			defer delete(final_idx)
+			u_final_codes := make([]engine.Appearance_Id, len(unique_final), context.temp_allocator)
+			defer delete(u_final_codes, context.temp_allocator)
+			for st, idx in unique_final do u_final_codes[idx] = engine.prepare_appearance(e, st)
+			for id, i in s.characters {
+				sc := u_stable_codes[stable_idx[i]]
+				s.stable_codes[id] = sc
+				s.final_codes[id] = u_final_codes[final_idx[i]]
+				engine.set_appearance(e, id, sc)
+				e.particles.flags[id] += {.Visible}
+			}
+		} else {
+			for id, i in s.characters {
+				sc := u_stable_codes[stable_idx[i]]
+				s.stable_codes[id] = sc
+				s.final_codes[id] = sc
+				engine.set_appearance(e, id, sc)
+				e.particles.flags[id] += {.Visible}
+			}
+		}
+	}
+
 	s.rows = engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_B2T)
 	row_count := len(s.rows.spans)
 	s.row_offsets = make([]int, row_count)
@@ -212,7 +260,7 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.active_wave_top = -1
 
 	// Python/Rust draw all snow choices while constructing each line. Keep the
-	// fixed sequences compact and indexed by dense character slot.
+	// fixed sequences compact and frame-major so full-screen snow scans contiguously.
 	s.noise_codes = make([]engine.Appearance_Id, len(s.config.noise_colors))
 	for color, i in s.config.noise_colors {
 		s.noise_codes[i] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
@@ -227,13 +275,13 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 		for id in engine.group_members(s.rows, row) {
 			i := s.index_by_id[id]
 			for frame in 0 ..< VHSTAPE_SNOW_FRAMES {
-				s.snow_frames[i * VHSTAPE_SNOW_FRAMES + frame] = {
+				s.snow_frames[frame * n + i] = {
 					u8(engine.random_below(len(Vhs_Noise_Symbols))),
 					u16(engine.random_below(len(s.config.noise_colors))),
 				}
 			}
 			for frame in 0 ..< VHSTAPE_FINAL_SNOW_FRAMES {
-				s.final_snow_frames[i * VHSTAPE_FINAL_SNOW_FRAMES + frame] = {
+				s.final_snow_frames[frame * n + i] = {
 					u8(engine.random_below(len(Vhs_Noise_Symbols))),
 					u16(engine.random_below(len(s.config.noise_colors))),
 				}
@@ -255,64 +303,41 @@ vhstape_build :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	s.redraw_row = row_count - 1
 }
 
-vhstape_set_stable_appearance :: proc(
+vhstape_set_stable_appearance :: #force_inline proc(
 	s: ^Vhstape_State,
 	e: ^engine.Engine,
 	id: engine.Particle_Id,
-) {
-	engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-	if s.color_handling == .Dynamic {
-		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-		engine.set_foreground(
-			e,
-			id,
-			style.colors.fg != nil ? style.colors.fg : engine.Color{0x80, 0x80, 0x80},
-		)
-		engine.set_background(e, id, style.colors.bg)
-	} else {
-		engine.set_foreground(e, id, s.final_colors[id])
-		engine.set_background(e, id, nil)
-	}
+) #no_bounds_check {
+	engine.set_symbol(e, id, e.particles.initial_symbol[id])
+	engine.set_appearance(e, id, s.stable_codes[id])
 }
 
-vhstape_set_final_appearance :: proc(
+vhstape_set_final_appearance :: #force_inline proc(
 	s: ^Vhstape_State,
 	e: ^engine.Engine,
 	id: engine.Particle_Id,
-) {
-	engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-	if s.color_handling == .Dynamic {
-		appearance := engine.get_appearance(e, id)
-		engine.dynamic_apply_input_colors(
-			&appearance,
-			engine.get_initial_appearance(e, engine.Particle_Id(id)),
-		)
-		engine.set_appearance(e, id, appearance)
-	} else {
-		engine.set_foreground(e, id, s.final_colors[id])
-		engine.set_background(e, id, nil)
-	}
+) #no_bounds_check {
+	engine.set_symbol(e, id, e.particles.initial_symbol[id])
+	engine.set_appearance(e, id, s.final_codes[id])
 }
 
-
-vhstape_activate_character :: proc(s: ^Vhstape_State, id: engine.Particle_Id) {
+vhstape_activate_character :: #force_inline proc(s: ^Vhstape_State, id: engine.Particle_Id) #no_bounds_check {
 	if s.active_character_bits[id] != 0 do return
 	s.active_character_bits[id] = 1
 	append(&s.active_characters, id)
 }
 
-vhstape_noise_appearance :: proc(
+vhstape_noise_appearance :: #force_inline proc(
 	s: ^Vhstape_State,
 	frames: []Vhstape_Noise_Frame,
-	frame_count: int,
 	id: engine.Particle_Id,
 	frame: int,
 ) -> (
 	rune,
 	engine.Appearance_Id,
-) {
+) #no_bounds_check {
 	i := s.index_by_id[id]
-	choice := frames[i * frame_count + frame]
+	choice := frames[frame * len(s.characters) + i]
 	symbols := Vhs_Noise_Symbols
 	return symbols[choice.symbol], s.noise_codes[choice.color]
 }
@@ -322,63 +347,47 @@ vhstape_start_scene :: proc(
 	e: ^engine.Engine,
 	id: engine.Particle_Id,
 	scene: Vhstape_Scene,
-) {
+) #no_bounds_check {
 	s.scenes[id] = scene
-	symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
+	symbol := e.particles.initial_symbol[id]
 	switch scene {
 	case .Forward:
 		engine.set_symbol(e, id, symbol)
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance{colors = {fg = s.config.glitch_line_colors[0]}},
-		)
+		engine.set_appearance(e, id, s.glitch_line_codes[0])
 	case .Backward:
 		engine.set_symbol(e, id, symbol)
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance {
-				colors = {fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1]},
-			},
-		)
+		engine.set_appearance(e, id, s.glitch_line_codes[len(s.glitch_line_codes) - 1])
 	case .Base:
 		s.scene_ticks[id] = 0
 		vhstape_set_stable_appearance(s, e, id)
 	case .Snow:
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
-			symbol, appearance := vhstape_noise_appearance(
+			sym, appearance := vhstape_noise_appearance(
 				s,
 				s.snow_frames[:],
-				VHSTAPE_SNOW_FRAMES,
 				id,
 				step / 2,
 			)
-			engine.set_symbol(e, id, symbol)
+			engine.set_symbol(e, id, sym)
 			engine.set_appearance(e, id, appearance)
 		} else {
 			vhstape_set_stable_appearance(s, e, id)
 		}
 	case .Final_Snow:
 		s.scene_ticks[id] = 0
-		symbol, appearance := vhstape_noise_appearance(
+		sym, appearance := vhstape_noise_appearance(
 			s,
 			s.final_snow_frames[:],
-			VHSTAPE_FINAL_SNOW_FRAMES,
 			id,
 			0,
 		)
-		engine.set_symbol(e, id, symbol)
+		engine.set_symbol(e, id, sym)
 		engine.set_appearance(e, id, appearance)
 	case .Final_Redraw:
 		s.scene_ticks[id] = 0
 		engine.set_symbol(e, id, '█')
-		engine.set_appearance(
-			e,
-			id,
-			engine.Appearance{colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}},
-		)
+		engine.set_appearance(e, id, s.white_code)
 	case .Idle:
 	}
 }
@@ -390,7 +399,7 @@ vhstape_start_motion :: proc(
 	kind: Vhstape_Motion,
 	target: engine.Coord,
 	max_steps, hold: int,
-) {
+) #no_bounds_check {
 	s.motions[id] = kind
 	s.motion_frame[id] = 0
 	s.motion_frame_count[id] = max_steps
@@ -401,7 +410,7 @@ vhstape_start_motion :: proc(
 	vhstape_activate_character(s, id)
 }
 
-vhstape_steps :: proc(origin, target: engine.Coord, denominator: int) -> int {
+vhstape_steps :: #force_inline proc(origin, target: engine.Coord, denominator: int) -> int {
 	return engine.round_to_int(engine.line_length(origin, target, true) * f64(denominator) / 40.0)
 }
 
@@ -410,11 +419,11 @@ vhstape_start_restore :: proc(
 	e: ^engine.Engine,
 	id: engine.Particle_Id,
 	steps: int,
-) {
+) #no_bounds_check {
 	vhstape_start_motion(s, e, id, .Restore, e.particles.initial_coord[id], steps, 0)
 }
 
-vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
+vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) #no_bounds_check {
 	for id in engine.group_members(s.rows, row) {
 		steps := vhstape_steps(
 			e.particles.current_coord[id],
@@ -425,7 +434,7 @@ vhstape_restore_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
 	}
 }
 
-vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold: int) {
+vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold: int) #no_bounds_check {
 	for id in engine.group_members(s.rows, row) {
 		p := e.particles.initial_coord[id]
 		target := engine.coord(p.column + s.row_offsets[row], p.row)
@@ -435,7 +444,7 @@ vhstape_start_glitch_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, hold
 	}
 }
 
-vhstape_start_wave_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, offset: int) {
+vhstape_start_wave_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, offset: int) #no_bounds_check {
 	for id in engine.group_members(s.rows, row) {
 		p := e.particles.initial_coord[id]
 		target := engine.coord(p.column + offset, p.row)
@@ -451,28 +460,28 @@ vhstape_start_wave_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row, offset
 	}
 }
 
-vhstape_row_motion_complete :: proc(s: ^Vhstape_State, row: int) -> bool {
+vhstape_row_motion_complete :: proc(s: ^Vhstape_State, row: int) -> bool #no_bounds_check {
 	for id in engine.group_members(s.rows, row) {
 		if s.motions[id] != .Idle do return false
 	}
 	return true
 }
 
-vhstape_rows_complete :: proc(s: ^Vhstape_State, rows: []int) -> bool {
+vhstape_rows_complete :: proc(s: ^Vhstape_State, rows: []int) -> bool #no_bounds_check {
 	for row in rows {
 		if !vhstape_row_motion_complete(s, row) do return false
 	}
 	return true
 }
 
-vhstape_contains_row :: proc(rows: []int, row: int) -> bool {
+vhstape_contains_row :: proc(rows: []int, row: int) -> bool #no_bounds_check {
 	for candidate in rows {
 		if candidate == row do return true
 	}
 	return false
 }
 
-vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine.Canvas) {
+vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine.Canvas) #no_bounds_check {
 	if s.active_wave_top < 0 {
 		if canvas.text_height < 3 do return
 		lower := max(3, engine.round_to_int(f64(canvas.text_height) * 0.5))
@@ -515,13 +524,13 @@ vhstape_glitch_wave :: proc(s: ^Vhstape_State, e: ^engine.Engine, canvas: engine
 	for row, i in s.active_wave_rows do vhstape_start_wave_row(s, e, row, offsets[i])
 }
 
-vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
+vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) #no_bounds_check {
 	kind := s.motions[id]
 	if kind == .Idle do return
 	frame, frame_count := s.motion_frame[id], s.motion_frame_count[id]
 	if frame < frame_count {
 		t := f64(frame + 1) / f64(frame_count)
-		engine.set_particle(e, id, engine.tween(s.motion_origins[id], s.motion_targets[id], t))
+		engine.set_position(e, id, engine.tween(s.motion_origins[id], s.motion_targets[id], t))
 		frame += 1
 		s.motion_frame[id] = frame
 	}
@@ -534,53 +543,41 @@ vhstape_motion_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Par
 	if kind == .Glitch do vhstape_start_restore(s, e, id, s.return_steps[id])
 }
 
-vhstape_synced_color :: proc(
-	palette: []engine.Color,
+vhstape_synced_code :: #force_inline proc(
+	codes: []engine.Appearance_Id,
 	step, max_steps: int,
 	reverse: bool,
-) -> engine.Color {
+) -> engine.Appearance_Id #no_bounds_check {
 	i := clamp(
-		engine.round_to_int(f64(len(palette) - 1) * f64(max(step, 1)) / f64(max(max_steps, 1))),
+		engine.round_to_int(f64(len(codes) - 1) * f64(max(step, 1)) / f64(max(max_steps, 1))),
 		0,
-		len(palette) - 1,
+		len(codes) - 1,
 	)
-	if reverse do i = len(palette) - 1 - i
-	return palette[i]
+	if reverse do i = len(codes) - 1 - i
+	return codes[i]
 }
 
-vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) {
+vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Particle_Id) #no_bounds_check {
 	scene := s.scenes[id]
 	if scene == .Idle do return
-	symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
+	symbol := e.particles.initial_symbol[id]
 	switch scene {
 	case .Forward:
 		if s.motions[id] == .Idle {
 			engine.set_symbol(e, id, symbol)
-			engine.set_appearance(
-				e,
-				id,
-				engine.Appearance {
-					colors = {
-						fg = s.config.glitch_line_colors[len(s.config.glitch_line_colors) - 1],
-					},
-				},
-			)
+			engine.set_appearance(e, id, s.glitch_line_codes[len(s.glitch_line_codes) - 1])
 			s.scenes[id] = .Idle
 		} else {
 			engine.set_symbol(e, id, symbol)
 			engine.set_appearance(
 				e,
 				id,
-				engine.Appearance {
-					colors = {
-						fg = vhstape_synced_color(
-							s.config.glitch_line_colors[:],
-							s.motion_frame[id],
-							s.motion_frame_count[id],
-							false,
-						),
-					},
-				},
+				vhstape_synced_code(
+					s.glitch_line_codes,
+					s.motion_frame[id],
+					s.motion_frame_count[id],
+					false,
+				),
 			)
 		}
 	case .Backward:
@@ -591,16 +588,12 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 			engine.set_appearance(
 				e,
 				id,
-				engine.Appearance {
-					colors = {
-						fg = vhstape_synced_color(
-							s.config.glitch_line_colors[:],
-							s.motion_frame[id],
-							s.motion_frame_count[id],
-							true,
-						),
-					},
-				},
+				vhstape_synced_code(
+					s.glitch_line_codes,
+					s.motion_frame[id],
+					s.motion_frame_count[id],
+					true,
+				),
 			)
 		}
 	case .Base:
@@ -610,14 +603,13 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 		step := s.scene_ticks[id]
 		if step < VHSTAPE_SNOW_FRAMES * 2 {
 			if step % 2 == 0 {
-				symbol, appearance := vhstape_noise_appearance(
+				sym, appearance := vhstape_noise_appearance(
 					s,
 					s.snow_frames[:],
-					VHSTAPE_SNOW_FRAMES,
 					id,
 					step / 2,
 				)
-				engine.set_symbol(e, id, symbol)
+				engine.set_symbol(e, id, sym)
 				engine.set_appearance(e, id, appearance)
 			}
 		} else {
@@ -631,14 +623,13 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 	case .Final_Snow:
 		step := s.scene_ticks[id]
 		if step % 2 == 0 {
-			symbol, appearance := vhstape_noise_appearance(
+			sym, appearance := vhstape_noise_appearance(
 				s,
 				s.final_snow_frames[:],
-				VHSTAPE_FINAL_SNOW_FRAMES,
 				id,
 				step / 2,
 			)
-			engine.set_symbol(e, id, symbol)
+			engine.set_symbol(e, id, sym)
 			engine.set_appearance(e, id, appearance)
 		}
 		s.scene_ticks[id] += 1
@@ -647,11 +638,7 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 		if s.scene_ticks[id] < 6 {
 			if s.scene_ticks[id] == 0 {
 				engine.set_symbol(e, id, '█')
-				engine.set_appearance(
-					e,
-					id,
-					engine.Appearance{colors = {fg = engine.Color{0xFF, 0xFF, 0xFF}}},
-				)
+				engine.set_appearance(e, id, s.white_code)
 			}
 		} else {
 			vhstape_set_final_appearance(s, e, id)
@@ -662,7 +649,7 @@ vhstape_scene_step :: proc(s: ^Vhstape_State, e: ^engine.Engine, id: engine.Part
 	}
 }
 
-vhstape_update_active :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
+vhstape_update_active :: proc(s: ^Vhstape_State, e: ^engine.Engine) #no_bounds_check {
 	write := 0
 	for id in s.active_characters {
 		vhstape_motion_step(s, e, id)
@@ -677,14 +664,14 @@ vhstape_update_active :: proc(s: ^Vhstape_State, e: ^engine.Engine) {
 	resize(&s.active_characters, write)
 }
 
-vhstape_start_snow :: proc(s: ^Vhstape_State, e: ^engine.Engine, final: bool) {
+vhstape_start_snow :: proc(s: ^Vhstape_State, e: ^engine.Engine, final: bool) #no_bounds_check {
 	for id in s.characters {
 		vhstape_start_scene(s, e, id, final ? .Final_Snow : .Snow)
 		vhstape_activate_character(s, id)
 	}
 }
 
-vhstape_start_redraw_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) {
+vhstape_start_redraw_row :: proc(s: ^Vhstape_State, e: ^engine.Engine, row: int) #no_bounds_check {
 	for id in engine.group_members(s.rows, row) {
 		vhstape_start_scene(s, e, id, .Final_Redraw)
 		vhstape_activate_character(s, id)

@@ -30,33 +30,37 @@ parse_cli_color :: proc(s: string) -> (Color, bool) {
 	return color_from_hex(s)
 }
 
-xterm_to_rgb :: proc(code: u8) -> Color {
+@(private = "file", rodata)
+Ansi_16_Palette := [16]Color {
+	{0, 0, 0},
+	{128, 0, 0},
+	{0, 128, 0},
+	{128, 128, 0},
+	{0, 0, 128},
+	{128, 0, 128},
+	{0, 128, 128},
+	{192, 192, 192},
+	{128, 128, 128},
+	{255, 0, 0},
+	{0, 255, 0},
+	{255, 255, 0},
+	{0, 0, 255},
+	{255, 0, 255},
+	{0, 255, 255},
+	{255, 255, 255},
+}
+
+@(private = "file", rodata)
+Xterm_Cube_Steps := [6]u8{0, 95, 135, 175, 215, 255}
+
+xterm_to_rgb :: proc(code: u8) -> Color #no_bounds_check {
 	c := int(code)
-	base := [16]Color {
-		{0, 0, 0},
-		{128, 0, 0},
-		{0, 128, 0},
-		{128, 128, 0},
-		{0, 0, 128},
-		{128, 0, 128},
-		{0, 128, 128},
-		{192, 192, 192},
-		{128, 128, 128},
-		{255, 0, 0},
-		{0, 255, 0},
-		{255, 255, 0},
-		{0, 0, 255},
-		{255, 0, 255},
-		{0, 255, 255},
-		{255, 255, 255},
-	}
 	switch {
 	case c < 16:
-		return base[c]
+		return Ansi_16_Palette[c]
 	case c < 232:
 		v := c - 16
-		step :: proc(n: int) -> u8 {return n == 0 ? 0 : u8(55 + n * 40)}
-		return {step(v / 36), step((v / 6) % 6), step(v % 6)}
+		return {Xterm_Cube_Steps[v / 36], Xterm_Cube_Steps[(v / 6) % 6], Xterm_Cube_Steps[v % 6]}
 	case:
 		g := u8(8 + (c - 232) * 10)
 		return {g, g, g}
@@ -65,10 +69,15 @@ xterm_to_rgb :: proc(code: u8) -> Color {
 
 // Upstream builds gradients with integer floor-division channel deltas, not
 // float lerp; keep that so palettes match what users know.
-gradient_make :: proc(stops: []Color, steps: []int, do_loop: bool) -> [dynamic]Color {
-	spectrum: [dynamic]Color
+gradient_make :: proc(
+	stops: []Color,
+	steps: []int,
+	do_loop: bool,
+	allocator := context.allocator,
+) -> [dynamic]Color {
 	assert(len(stops) >= 1)
 	assert(len(steps) >= 1)
+	spectrum := make([dynamic]Color, allocator)
 	if len(stops) == 1 {
 		for _ in 0 ..< steps[0] do append(&spectrum, stops[0])
 		return spectrum
@@ -203,20 +212,45 @@ hsl_to_color :: proc(color: HSL_Color) -> Color {
 	}
 }
 
-color_to_xterm :: proc(c: Color) -> u8 {
+@(private = "file")
+xterm_cube_nearest :: #force_inline proc(v: u8) -> int {
+	if v <= 47 do return 0
+	if v <= 115 do return 1
+	if v <= 155 do return 2
+	if v <= 195 do return 3
+	if v <= 235 do return 4
+	return 5
+}
+
+color_to_xterm :: proc(c: Color) -> u8 #no_bounds_check {
 	// Match ttfx's hexterm.py: mean absolute RGB distance, first code wins ties.
-	// The division by three is order preserving, so the integer sum is enough.
+	// L1 distance on the 6x6x6 cube separates across channels, reducing the 216
+	// cube entries to one exact candidate between ANSI-16 and the 24 grayscales.
+	r, g, b := int(c.r), int(c.g), int(c.b)
 	best_code := 0
 	best_distance := 3 * 255 + 1
-	for code in 0 ..< 256 {
-		candidate := xterm_to_rgb(u8(code))
-		distance :=
-			abs(int(c.r) - int(candidate.r)) +
-			abs(int(c.g) - int(candidate.g)) +
-			abs(int(c.b) - int(candidate.b))
+	for candidate, code in Ansi_16_Palette {
+		distance := abs(r - int(candidate.r)) + abs(g - int(candidate.g)) + abs(b - int(candidate.b))
 		if distance < best_distance {
 			best_distance = distance
 			best_code = code
+		}
+	}
+	ir, ig, ib := xterm_cube_nearest(c.r), xterm_cube_nearest(c.g), xterm_cube_nearest(c.b)
+	cube_distance :=
+		abs(r - int(Xterm_Cube_Steps[ir])) +
+		abs(g - int(Xterm_Cube_Steps[ig])) +
+		abs(b - int(Xterm_Cube_Steps[ib]))
+	if cube_distance < best_distance {
+		best_distance = cube_distance
+		best_code = 16 + 36 * ir + 6 * ig + ib
+	}
+	for step in 0 ..< 24 {
+		gray := 8 + step * 10
+		distance := abs(r - gray) + abs(g - gray) + abs(b - gray)
+		if distance < best_distance {
+			best_distance = distance
+			best_code = 232 + step
 		}
 	}
 	return u8(best_code)

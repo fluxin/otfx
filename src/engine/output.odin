@@ -73,6 +73,41 @@ cell_encoding :: proc(e: ^Engine, index: int) -> []byte {
 	return e.slots[index][:e.cells[index].length]
 }
 
+// Terminal display column advance of a scalar value. Printable ASCII resolves
+// in one unsigned range check; zero-width/empty and East Asian wide/emoji glyphs
+// return != 1 so frame_output resynchronizes the next run's cursor column.
+rune_columns :: #force_inline proc(r: rune) -> int {
+	if u32(r - 0x20) < 0x5f do return 1
+	if r < 0x20 || (r >= 0x7f && r < 0xa0) do return 0
+	switch r {
+	case 0x0300 ..= 0x036f,
+	     0x1ab0 ..= 0x1aff,
+	     0x1dc0 ..= 0x1dff,
+	     0x200b ..= 0x200f,
+	     0x20d0 ..= 0x20ff,
+	     0xfe00 ..= 0xfe0f,
+	     0xfe20 ..= 0xfe2f:
+		return 0
+	case 0x1100 ..= 0x115f,
+	     0x2329 ..= 0x232a,
+	     0x2e80 ..= 0x303e,
+	     0x3040 ..= 0x33bf,
+	     0x3400 ..= 0x4dbf,
+	     0x4e00 ..= 0xa4cf,
+	     0xa960 ..= 0xa97c,
+	     0xac00 ..= 0xd7a3,
+	     0xf900 ..= 0xfaff,
+	     0xfe10 ..= 0xfe19,
+	     0xfe30 ..= 0xfe6f,
+	     0xff01 ..= 0xff60,
+	     0xffe0 ..= 0xffe6,
+	     0x1f000 ..= 0x1faff,
+	     0x20000 ..= 0x3fffd:
+		return 2
+	}
+	return 1
+}
+
 // Changed cells go out as runs. Each run starts at an absolute column, so
 // unchanged cells cost nothing and glyph widths cannot drift along a row.
 // Slots copy whole; the frame advances only past each cell's encoded bytes.
@@ -91,9 +126,10 @@ frame_output :: proc(e: ^Engine) -> []byte #no_bounds_check {
 			cursor_row = row
 			when FRAME_STATS_ENABLED {e.stats.runs += 1}
 		}
+		cell := e.cells[index]
 		copy(e.output[used:][:SLOT_MAX], e.slots[index][:])
-		used += int(e.cells[index].length)
-		previous = index
+		used += int(cell.length)
+		previous = index if cell.unit_width else -1
 	}
 	when FRAME_STATS_ENABLED {e.stats.output_bytes += used}
 	return e.output[:used]
@@ -174,13 +210,28 @@ resize_layout_changed :: proc(e: ^Engine, term_w, term_h: int) -> bool {
 	return canvas.top != e.canvas.top || canvas.right != e.canvas.right || layout != e.layout
 }
 
+mark_all_cells_dirty :: proc(e: ^Engine) {
+	for i in 0 ..< len(e.cells) do mark_cell_dirty(e, i)
+}
+
 resize_settled :: proc(e: ^Engine) -> bool {
 	if take_resize_signal() do e.resize_seen_at = time.tick_now()
 	seen, has_seen := e.resize_seen_at.?
 	if !has_seen || time.duration_milliseconds(time.tick_since(seen)) < 50 do return false
 	e.resize_seen_at = nil
-	if e.cfg.ignore_terminal_dimensions do return false
+	if e.cfg.ignore_terminal_dimensions {
+		mark_all_cells_dirty(e)
+		return false
+	}
 	term_w, term_h := terminal_dimensions()
-	if term_w == e.terminal_width && term_h == e.terminal_height do return false
-	return resize_layout_changed(e, term_w, term_h)
+	if term_w == e.terminal_width && term_h == e.terminal_height {
+		mark_all_cells_dirty(e)
+		return false
+	}
+	if !resize_layout_changed(e, term_w, term_h) {
+		e.terminal_width, e.terminal_height = term_w, term_h
+		mark_all_cells_dirty(e)
+		return false
+	}
+	return true
 }

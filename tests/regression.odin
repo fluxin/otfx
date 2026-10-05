@@ -405,3 +405,175 @@ rings_disperse_reuses_storage :: proc(t: ^testing.T) {
 	for i in 0 ..< 3 do effects.rings_begin_disperse(&state, &e, i == 0)
 	testing.expect_value(t, track.total_allocation_count, before)
 }
+
+@(test)
+engine_and_geometry_zero_leaks :: proc(t: ^testing.T) {
+	track: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&track, context.allocator)
+	defer mem.tracking_allocator_destroy(&track)
+	context.allocator = mem.tracking_allocator(&track)
+
+	cfg := engine.config_default()
+	cfg.ignore_terminal_dimensions = true
+
+	plain, plain_err := engine.engine_make("hello\nworld", cfg)
+	testing.expect_value(t, plain_err, engine.Input_Error.None)
+	testing.expect_value(t, len(plain.shared_appearances), 1)
+	first_code := plain.particles.shared_appearance_id[plain.particle_sets.input[0]]
+	testing.expect(t, first_code != engine.NO_APPEARANCE)
+	for id in plain.particle_sets.input {
+		testing.expect_value(t, plain.particles.shared_appearance_id[id], first_code)
+	}
+	engine.engine_destroy(&plain)
+
+	styled, styled_err := engine.engine_make("\x1b[31mhi\x1b[0m\nA\x07B\u0085C\n\n\n", cfg)
+	testing.expect_value(t, styled_err, engine.Input_Error.None)
+	testing.expect_value(t, styled.canvas.text_height, 2)
+	testing.expect_value(t, styled.canvas.text_width, 5)
+	testing.expect_value(t, len(styled.particle_sets.input), 5)
+	expected_row := []rune{'A', 'B', 'C'}
+	expected_cols := []int{1, 3, 5}
+	for r, i in expected_row {
+		id := styled.particle_sets.input[2 + i]
+		testing.expect_value(t, styled.particles.symbol[id], r)
+		testing.expect_value(t, styled.particles.initial_coord[id].column, expected_cols[i])
+	}
+	engine.engine_destroy(&styled)
+
+	for bad in ([]string{"\x1b", "\x1b[2JX", "\x1b[38;5;999mX"}) {
+		_, err := engine.engine_make(bad, cfg)
+		testing.expect(t, err != .None)
+	}
+	bad_tab_cfg := cfg
+	bad_tab_cfg.tab_width = 0
+	_, tab_err := engine.engine_make("\tX", bad_tab_cfg)
+	testing.expect_value(t, tab_err, engine.Input_Error.Invalid_Tab_Width)
+
+	ring := engine.find_coords_on_circle({5, 5}, 4, 24, true)
+	testing.expect(t, len(ring) > 0)
+	delete(ring)
+
+	empty_ring := engine.find_coords_on_circle({5, 5}, 0, 12, true)
+	testing.expect_value(t, len(empty_ring), 0)
+
+	disc := engine.find_coords_in_circle({5, 5}, 6)
+	testing.expect(t, len(disc) > 0)
+	delete(disc)
+
+	_, ease_ok := engine.easing_parse("OUT_BOUNCE")
+	testing.expect(t, ease_ok)
+
+	testing.expect_value(t, len(track.allocation_map), 0)
+	testing.expect_value(t, len(track.bad_free_array), 0)
+}
+
+@(test)
+xterm_quantizer_matches_oracle :: proc(t: ^testing.T) {
+	oracle :: proc(c: engine.Color) -> u8 {
+		best_code := 0
+		best_dist := 3 * 255 + 1
+		for code in 0 ..< 256 {
+			cand := engine.xterm_to_rgb(u8(code))
+			dist := abs(int(c.r) - int(cand.r)) + abs(int(c.g) - int(cand.g)) + abs(int(c.b) - int(cand.b))
+			if dist < best_dist {
+				best_dist = dist
+				best_code = code
+			}
+		}
+		return u8(best_code)
+	}
+
+	for code in 0 ..< 256 {
+		c := engine.xterm_to_rgb(u8(code))
+		testing.expect_value(t, engine.color_to_xterm(c), oracle(c))
+	}
+	edges := [16]u8{0, 47, 48, 95, 115, 116, 135, 155, 156, 175, 195, 196, 215, 235, 236, 255}
+	for r in edges {
+		for g in edges {
+			for b in edges {
+				c := engine.Color{r, g, b}
+				if engine.color_to_xterm(c) != oracle(c) {
+					testing.expect_value(t, engine.color_to_xterm(c), oracle(c))
+					return
+				}
+			}
+		}
+	}
+}
+
+@(test)
+cursor_resync_after_zero_and_wide_glyphs :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+
+	cfg := engine.config_default()
+	cfg.canvas_width, cfg.canvas_height = 4, 1
+	cfg.ignore_terminal_dimensions = true
+	e, err := engine.engine_make("ABCD", cfg)
+	testing.expect_value(t, err, engine.Input_Error.None)
+	code := engine.prepare_appearance(&e, engine.Appearance{})
+	for id in e.particle_sets.input {
+		engine.set_particle(&e, id, engine.Visible(true))
+		engine.set_appearance(&e, id, code)
+	}
+	engine.frame_build(&e)
+	testing.expect_value(t, string(frame_without_padding(&e)), "ABCD")
+
+	// Contiguous 1-column non-ASCII runes emit without redundant cursor jumps.
+	engine.set_symbol(&e, e.particle_sets.input[0], '𐍈')
+	engine.set_symbol(&e, e.particle_sets.input[1], 'ｱ')
+	engine.frame_build(&e)
+	testing.expect_value(t, string(frame_without_padding(&e)), "𐍈ｱ")
+
+	// Wide glyphs advance the terminal cursor by 2 columns, so the next cell must resync.
+	engine.set_symbol(&e, e.particle_sets.input[0], '漢')
+	engine.set_symbol(&e, e.particle_sets.input[1], 'X')
+	engine.frame_build(&e)
+	testing.expect_value(t, string(frame_without_padding(&e)), "漢\x1b[2GX")
+
+	// A zero symbol (e.g. background-only cell) emits 0 glyph columns, so the next cell must resync.
+	bg_only := engine.prepare_appearance(&e, engine.Appearance{colors = {bg = engine.Color{10, 20, 30}}})
+	engine.set_symbol(&e, e.particle_sets.input[0], 0)
+	engine.set_appearance(&e, e.particle_sets.input[0], bg_only)
+	engine.set_symbol(&e, e.particle_sets.input[1], 'Y')
+	engine.frame_build(&e)
+	testing.expect(t, strings.has_suffix(string(frame_without_padding(&e)), "\x1b[2GY"))
+}
+
+@(test)
+control_symbol_bool_flag_and_orbittingvolley_layer :: proc(t: ^testing.T) {
+	arena: mem.Dynamic_Arena
+	mem.dynamic_arena_init(&arena)
+	defer mem.dynamic_arena_destroy(&arena)
+	context.allocator = mem.dynamic_arena_allocator(&arena)
+
+	for bad in ([]string{"\x1b", "\n", "\x7f", "\u0085"}) {
+		sym: rune
+		idx := 0
+		testing.expect(t, !effects.parse_symbol_flag(&sym, []string{bad}, &idx, bad, true))
+	}
+	flag_val := false
+	testing.expect(t, !effects.parse_bool_flag(&flag_val, true))
+	testing.expect(t, effects.parse_bool_flag(&flag_val, false) && flag_val)
+
+	waves := effects.waves_config_default()
+	testing.expect(t, effects.waves_parse(&waves, []string{"--wave-symbols", " ", "*"}))
+	testing.expect_value(t, len(waves.wave_symbols), 2)
+	testing.expect_value(t, waves.wave_symbols[0], ' ')
+
+	cfg := engine.config_default()
+	cfg.frame_rate = 0
+	cfg.ignore_terminal_dimensions = true
+	run, ok := common.run_make(.Orbittingvolley, nil, cfg, "AB\nCD", 1)
+	testing.expect(t, ok)
+	for {
+		_, _, produced := common.run_step(&run)
+		if !produced do break
+		free_all(context.temp_allocator)
+	}
+	for id in run.engine_state.particle_sets.input {
+		testing.expect_value(t, run.engine_state.particles.layer[id], 0)
+	}
+}

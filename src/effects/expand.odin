@@ -58,11 +58,13 @@ expand_parse :: proc(cfg: ^Expand_Config, args: []string) -> bool {
 Expand_State :: struct {
 	config:         Expand_Config,
 	characters:     [dynamic]engine.Particle_Id,
-	colors:         [dynamic][11]engine.Color_Pair,
+	targets:        [dynamic]engine.Coord,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
 	active_indexes: [dynamic]int,
 	motion_slots:   [dynamic]int,
 	motion_factors: [dynamic]f64,
-	color_steps:    [dynamic]int,
+	color_steps:    [dynamic]i8,
 	max_steps:      [dynamic]int,
 	step_limit:     int,
 	tick:           int,
@@ -74,8 +76,9 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -95,29 +98,33 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
-	s.colors = make([dynamic][11]engine.Color_Pair, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.active_indexes = make([dynamic]int, n)
-	steps := make([]int, n, context.temp_allocator)
-	s.color_steps = make([dynamic]int, n)
+	s.color_steps = make([dynamic]i8, n)
 	for &step in s.color_steps do step = -1
+	if n == 0 do return
+
+	steps := make([]int, n, context.temp_allocator)
+	defer delete(steps, context.temp_allocator)
+	fade_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
+	start_color := s.config.final_gradient_stops[0]
 
 	for id, i in s.characters {
 		c := e.particles.initial_coord[id]
-		final_color := engine.gradient_sample(sampler, spectrum[:], c)
-		input := engine.get_initial_appearance(e, id)
-		for step in 0 ..< 11 {
-			appearance := engine.get_appearance(e, id)
-			if s.color_handling == .Dynamic {
-				appearance.colors = engine.tween(engine.Color_Pair{s.config.final_gradient_stops[0], s.config.final_gradient_stops[0]}, input.colors, 10, step)
-			} else {
-				appearance.colors.fg = engine.tween(
-					s.config.final_gradient_stops[0],
-					final_color,
-					10,
-					step,
-				)
+		s.targets[i] = c
+		if s.color_handling == .Dynamic {
+			input := engine.get_initial_appearance(e, id)
+			fade_tweens[i] = {
+				from = {colors = {start_color, start_color}},
+				to   = {colors = input.colors},
 			}
-			s.colors[i][step] = appearance.colors
+		} else {
+			final_color := engine.gradient_sample(sampler, spectrum[:], c)
+			fade_tweens[i] = {
+				from = {colors = {fg = start_color}},
+				to   = {colors = {fg = final_color}},
+			}
 		}
 		s.active_indexes[i] = i
 		e.particles.current_coord[id] = e.canvas.center
@@ -131,6 +138,11 @@ expand_build :: proc(s: ^Expand_State, e: ^engine.Engine) {
 		e.particles.flags[id] += {.Visible}
 		e.particles.layer[id] = 1
 	}
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	s.fades = engine.ramp_make(e, unique_tweens[:], 10)
+
 	s.max_steps, s.motion_slots = engine.group_values(steps)
 	s.motion_factors = make([dynamic]f64, len(s.max_steps))
 }
@@ -140,28 +152,28 @@ expand_next :: proc(s: ^Expand_State, e: ^engine.Engine) -> bool #no_bounds_chec
 	for steps, slot in s.max_steps {
 		if s.tick < steps do s.motion_factors[slot] = ease.ease(s.config.expand_easing, f64(s.tick + 1) / f64(steps))
 	}
+	center := e.canvas.center
 	write := 0
 	for i in s.active_indexes {
 		id := s.characters[i]
 		slot := s.motion_slots[i]
 		maximum := s.max_steps[slot]
 		factor := s.motion_factors[slot]
-		position := engine.tween(e.canvas.center, e.particles.initial_coord[id], factor)
+		target := s.targets[i]
+		position := engine.tween(center, target, factor)
 		step := min(engine.round_to_int(factor * 10), 10)
 		if s.tick + 1 == maximum {
-			position = e.particles.initial_coord[id]
+			position = target
 			step = 10
-			engine.set_particle(e, id, engine.Layer(0))
+			engine.set_layer(e, id, 0)
 		} else {
 			s.active_indexes[write] = i
 			write += 1
 		}
-		engine.set_particle(e, id, position)
-		if step != s.color_steps[i] {
-			s.color_steps[i] = step
-			appearance := engine.get_appearance(e, id)
-			appearance.colors = s.colors[i][step]
-			engine.set_appearance(e, id, appearance)
+		engine.set_position(e, id, position)
+		if i8(step) != s.color_steps[i] {
+			s.color_steps[i] = i8(step)
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[i], step))
 		}
 	}
 	resize(&s.active_indexes, write)

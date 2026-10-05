@@ -7,10 +7,8 @@ import "core:testing"
 
 @(test)
 particle_constructor_rejects_surrogate :: proc(t: ^testing.T) {
-	arena: mem.Dynamic_Arena
-	mem.dynamic_arena_init(&arena)
-	defer mem.dynamic_arena_destroy(&arena)
-	context.allocator = mem.dynamic_arena_allocator(&arena)
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
 	cfg := engine.config_default()
 	cfg.canvas_width, cfg.canvas_height = 1, 1
 	cfg.ignore_terminal_dimensions = true
@@ -26,10 +24,8 @@ particle_constructor_rejects_surrogate :: proc(t: ^testing.T) {
 
 @(test)
 symbol_setter_rejects_out_of_range_rune :: proc(t: ^testing.T) {
-	arena: mem.Dynamic_Arena
-	mem.dynamic_arena_init(&arena)
-	defer mem.dynamic_arena_destroy(&arena)
-	context.allocator = mem.dynamic_arena_allocator(&arena)
+	context.allocator = context.temp_allocator
+	defer free_all(context.temp_allocator)
 	cfg := engine.config_default()
 	cfg.canvas_width, cfg.canvas_height = 1, 1
 	cfg.ignore_terminal_dimensions = true
@@ -60,8 +56,8 @@ private_appearance_edits_leave_shared_appearances_unchanged :: proc(t: ^testing.
 	second := engine.add_particle(&e, 'Q', code, {2, 1})
 	testing.expect_value(t, len(e.shared_appearances), entries)
 	for id in ([]engine.Particle_Id{first, second}) {
-		testing.expect_value(t, e.particles[id].initial_appearance_id, code)
-		testing.expect_value(t, e.particles[id].shared_appearance_id, code)
+		testing.expect_value(t, e.particles.initial_appearance_id[id], code)
+		testing.expect_value(t, e.particles.shared_appearance_id[id], code)
 		expect_appearance(t, engine.get_appearance(&e, id), shared)
 		engine.set_particle(&e, id, engine.Visible(true))
 	}
@@ -75,10 +71,10 @@ private_appearance_edits_leave_shared_appearances_unchanged :: proc(t: ^testing.
 	}
 	expect_appearance(t, engine.get_appearance(&e, first), expected)
 	expect_appearance(t, engine.get_appearance(&e, second), shared)
-	testing.expect_value(t, e.particles[first].shared_appearance_id, engine.NO_APPEARANCE)
-	testing.expect_value(t, e.particles[second].shared_appearance_id, code)
+	testing.expect_value(t, e.particles.shared_appearance_id[first], engine.NO_APPEARANCE)
+	testing.expect_value(t, e.particles.shared_appearance_id[second], code)
 	expect_appearance(t, e.shared_appearances[code - 1], shared)
-	testing.expect_value(t, e.particles[first].initial_appearance_id, code)
+	testing.expect_value(t, e.particles.initial_appearance_id[first], code)
 	expect_appearance(t, engine.get_initial_appearance(&e, first), shared)
 	engine.frame_build(&e)
 	expect_frame_cell(t, &e, 0, 0, 'X', expected)
@@ -88,9 +84,9 @@ private_appearance_edits_leave_shared_appearances_unchanged :: proc(t: ^testing.
 	engine.set_symbol(&e, first, 'Y')
 	engine.compose_frame(&e)
 	expected = shared
-	testing.expect_value(t, e.particles[first].shared_appearance_id, code)
-	testing.expect_value(t, e.particles[first].symbol, 'Y')
-	testing.expect_value(t, e.particles[second].symbol, 'Q')
+	testing.expect_value(t, e.particles.shared_appearance_id[first], code)
+	testing.expect_value(t, e.particles.symbol[first], 'Y')
+	testing.expect_value(t, e.particles.symbol[second], 'Q')
 	expect_appearance(t, engine.get_appearance(&e, first), expected)
 	expect_appearance(t, engine.get_appearance(&e, second), shared)
 	engine.frame_build(&e)
@@ -131,7 +127,7 @@ prepared_edits_preserve_unedited_fields :: proc(t: ^testing.T) {
 	engine.set_foreground(&e, id, appearance.colors.fg)
 	engine.set_symbol(&e, id, 'B')
 	engine.compose_frame(&e)
-	testing.expect_value(t, e.particles[id].symbol, 'B')
+	testing.expect_value(t, e.particles.symbol[id], 'B')
 	expect_appearance(t, engine.get_appearance(&e, id), appearance)
 	// Returning to the last emitted appearance before emission produces no diff.
 	engine.set_appearance(&e, id, code)
@@ -139,7 +135,7 @@ prepared_edits_preserve_unedited_fields :: proc(t: ^testing.T) {
 	expect_visible_draws(t, &e)
 	engine.set_symbol(&e, id, 'C')
 	engine.compose_frame(&e)
-	testing.expect_value(t, e.particles[id].symbol, 'C')
+	testing.expect_value(t, e.particles.symbol[id], 'C')
 	expect_appearance(t, engine.get_appearance(&e, id), appearance)
 	engine.frame_build(&e)
 	expect_appearance(t, engine.get_render_appearance(&e, id)^, appearance)

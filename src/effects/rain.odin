@@ -84,8 +84,10 @@ Rain_State :: struct {
 	pending:        [dynamic]engine.Particle_Id,
 	by_row:         [dynamic]engine.Particle_Id, // flat pool sorted by input row asc
 	active_slots:   [dynamic]int, // dense slots that still move or fade
-	final_colors:   [dynamic]engine.Color,
-	drop_colors:    [dynamic]engine.Color,
+	targets:        [dynamic]engine.Coord,
+	drop_codes:     [dynamic]engine.Appearance_Id,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
 	drop_symbols:   [dynamic]rune,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
@@ -99,8 +101,9 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -126,33 +129,65 @@ rain_build :: proc(s: ^Rain_State, e: ^engine.Engine) {
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.final_colors = make([dynamic]engine.Color, n)
-	s.drop_colors = make([dynamic]engine.Color, n)
+	s.targets = make([dynamic]engine.Coord, n)
+	s.drop_codes = make([dynamic]engine.Appearance_Id, n)
 	s.drop_symbols = make([dynamic]rune, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
 	reserve(&s.pending, n)
 	reserve(&s.active_slots, n)
-	rows := make([]Rain_Row, n)
-	defer delete(rows)
+	if n == 0 do return
+
+	rows := make([]Rain_Row, n, context.temp_allocator)
+	defer delete(rows, context.temp_allocator)
+
+	palette_codes := make([]engine.Appearance_Id, len(s.config.rain_colors), context.temp_allocator)
+	defer delete(palette_codes, context.temp_allocator)
+	for rc, ci in s.config.rain_colors {
+		palette_codes[ci] = engine.prepare_appearance(e, {colors = {fg = rc}})
+	}
+	fade_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
 
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		c := initial_coords[id]
+		s.targets[i] = c
 		rows[i] = {id, c.row, c.column}
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
-		s.drop_colors[i] = s.config.rain_colors[engine.random_below(len(s.config.rain_colors))]
+		ci := engine.random_below(len(s.config.rain_colors))
+		drop_color := s.config.rain_colors[ci]
+		s.drop_codes[i] = palette_codes[ci]
 		s.drop_symbols[i] = s.config.rain_symbols[engine.random_below(len(s.config.rain_symbols))]
-		e.particles.current_coord[id] = engine.coord(c.column, e.canvas.top)
+		if s.color_handling == .Dynamic {
+			init_style := engine.get_initial_appearance(e, id)
+			fade_tweens[i] = {
+				from = {colors = {drop_color, drop_color}},
+				to   = {colors = init_style.colors},
+			}
+		} else {
+			final_color := engine.gradient_sample(sampler, spectrum[:], c)
+			fade_tweens[i] = {
+				from = {colors = {fg = drop_color}},
+				to   = {colors = {fg = final_color}},
+			}
+		}
+		origin := engine.coord(c.column, e.canvas.top)
+		e.particles.current_coord[id] = origin
 		speed := engine.random_float_range(s.config.movement_speed.lo, s.config.movement_speed.hi)
 		s.max_steps[i] = max(
 			engine.round_to_int(
-				engine.line_length(e.particles.current_coord[id], c, true) / speed,
+				engine.line_length(origin, c, true) / speed,
 			),
 			1,
 		)
 		s.start_ticks[i] = -1
 	}
+
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	s.fades = engine.ramp_make(e, unique_tweens[:], 7)
+
 	// One flat pool sorted by input row ascending; the front run of equal rows
 	// is the min-row group.
 	slice.sort_by(rows, proc(a, b: Rain_Row) -> bool {
@@ -167,7 +202,6 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	by_row := s.by_row[:]
 	pending := &s.pending
 	initial_coords := e.particles.initial_coord[:len(e.particles)]
-	visible_flags := e.particles.flags[:]
 	if s.by_row_head >= len(by_row) && len(pending^) == 0 && len(s.active_slots) == 0 {
 		return false
 	}
@@ -190,58 +224,46 @@ rain_next :: proc(s: ^Rain_State, e: ^engine.Engine) -> bool #no_bounds_check {
 			unordered_remove(pending, idx)
 			slot := s.index_by_id[next]
 			s.start_ticks[slot] = s.tick
-			engine.set_particle(e, next, engine.Visible(true))
+			engine.set_visible(e, next, true)
 			append(&s.active_slots, slot)
 		}
 	}
+	top_row := e.canvas.top
 	write := 0
 	for slot in s.active_slots {
 		id := s.characters[slot]
 		start := s.start_ticks[slot]
 		age := s.tick - start
-		if age < s.max_steps[slot] - 1 {
-			progress := f64(age + 1) / f64(s.max_steps[slot])
-			engine.set_particle(
+		max_step := s.max_steps[slot]
+		target := s.targets[slot]
+		if age < max_step - 1 {
+			progress := f64(age + 1) / f64(max_step)
+			engine.set_position(
 				e,
 				id,
 				engine.tween(
-					engine.coord(e.particles.initial_coord[id].column, e.canvas.top),
-					e.particles.initial_coord[id],
+					engine.coord(target.column, top_row),
+					target,
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
 			if age == 0 {
 				engine.set_symbol(e, id, s.drop_symbols[slot])
-				engine.set_foreground(e, id, s.drop_colors[slot])
+				engine.set_appearance(e, id, s.drop_codes[slot])
 			}
 		} else {
-			if age == s.max_steps[slot] - 1 {
-				engine.set_particle(e, id, e.particles.initial_coord[id])
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			if age == max_step - 1 {
+				engine.set_position(e, id, target)
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			}
-			fade_tick := age - (s.max_steps[slot] - 1)
+			fade_tick := age - (max_step - 1)
 			if fade_tick <= 21 && fade_tick % 3 == 0 {
 				fade_step := min(fade_tick / 3, 7)
-				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					appearance.colors = engine.tween(engine.Color_Pair{s.drop_colors[slot], s.drop_colors[slot]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 7, fade_step)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					engine.set_foreground(
-						e,
-						id,
-						engine.tween(
-							s.drop_colors[slot],
-							s.final_colors[slot],
-							7,
-							fade_step,
-						),
-					)
-				}
+				engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[slot], fade_step))
 			}
 		}
 		// The final full-color fade is at age max_steps + 22.
-		if age + 1 < s.max_steps[slot] + 23 {
+		if age + 1 < max_step + 23 {
 			s.active_slots[write] = slot
 			write += 1
 		}

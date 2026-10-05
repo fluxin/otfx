@@ -100,7 +100,11 @@ Rings_Mode :: enum u8 {
 Rings_State :: struct {
 	config:             Rings_Config,
 	ids:                [dynamic]engine.Particle_Id,
-	final_colors:       [dynamic]engine.Color,
+	home_coords:        [dynamic]engine.Coord,
+	final_codes:        [dynamic]engine.Appearance_Id,
+	disperse_ramp:      engine.Appearance_Ramp,
+	spin_ramp:          engine.Appearance_Ramp,
+	fade_index:         [dynamic]int,
 	ring_by_slot:       [dynamic]int, // -1 for external glyphs
 	clockwise:          [dynamic]u8,
 	target_slots:       [dynamic]int,
@@ -124,18 +128,18 @@ Rings_State :: struct {
 	color_handling:     engine.Existing_Color_Handling,
 }
 
-rings_coords :: proc(s: ^Rings_State, slot: int) -> []engine.Coord {
+rings_coords :: #force_inline proc(s: ^Rings_State, slot: int) -> []engine.Coord #no_bounds_check {
 	ring := &s.rings[s.ring_by_slot[slot]]
 	return s.clockwise[slot] != 0 ? ring.cw[:] : ring.ccw[:]
 }
 
-rings_begin_line :: proc(
+rings_begin_line :: #force_inline proc(
 	s: ^Rings_State,
 	slot: int,
 	origin: engine.Coord,
 	target: engine.Coord,
 	speed: f64,
-) {
+) #no_bounds_check {
 	s.origins[slot], s.targets[slot] = origin, target
 	s.steps[slot] = 0
 	s.max_steps[slot] = max(
@@ -150,8 +154,9 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(final_spectrum[:])
+	defer delete(final_spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -165,10 +170,11 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		e.canvas,
 	}
 	chars := engine.get_particles(query, engine.PARTICLE_FILTER_INPUT, .Top_Bottom_Left_Right)
-	defer delete(chars[:])
+	defer delete(chars)
 	n := len(chars)
 	append(&s.ids, ..chars[:])
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.home_coords = make([dynamic]engine.Coord, n)
+	s.final_codes = make([dynamic]engine.Appearance_Id, n)
 	s.ring_by_slot = make([dynamic]int, n)
 	s.clockwise = make([dynamic]u8, n)
 	s.target_slots = make([dynamic]int, n)
@@ -180,27 +186,39 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	s.max_steps = make([dynamic]int, n)
 	s.modes = make([dynamic]Rings_Mode, n)
 
-	initial_coords := e.particles.initial_coord
+	final_colors := make([]engine.Color, n, context.temp_allocator)
+	defer delete(final_colors, context.temp_allocator)
+	initial_styles := make([]engine.Appearance, n, context.temp_allocator)
+	defer delete(initial_styles, context.temp_allocator)
 
+	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
 	for id, slot in chars {
-		s.final_colors[slot] = engine.gradient_sample(
-			sampler,
-			final_spectrum[:],
-			initial_coords[id],
-		)
+		c := initial_coords[id]
+		s.home_coords[slot] = c
+		fc := engine.gradient_sample(sampler, final_spectrum[:], c)
+		final_colors[slot] = fc
 		s.ring_by_slot[slot] = -1
 		if s.color_handling == .Dynamic {
-			appearance := engine.get_appearance(e, id)
-			engine.dynamic_apply_input_colors(
-				&appearance,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)),
-			)
-			engine.set_appearance(e, id, appearance)
+			init_style := engine.get_initial_appearance(e, id)
+			initial_styles[slot] = {colors = init_style.colors}
 		} else {
-			engine.set_foreground(e, id, s.final_colors[slot])
+			initial_styles[slot] = {colors = {fg = fc}}
 		}
 		visible_flags[id] += {.Visible}
+	}
+	if n > 0 {
+		unique_styles, style_indices := engine.group_values(initial_styles)
+		defer delete(unique_styles)
+		defer delete(style_indices)
+		unique_codes := make([]engine.Appearance_Id, len(unique_styles), context.temp_allocator)
+		defer delete(unique_codes, context.temp_allocator)
+		for st, idx in unique_styles do unique_codes[idx] = engine.prepare_appearance(e, st)
+		for id, slot in chars {
+			code := unique_codes[style_indices[slot]]
+			s.final_codes[slot] = code
+			engine.set_appearance(e, id, code)
+		}
 	}
 
 	ring_gap := max(
@@ -215,7 +233,7 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 			if engine.canvas_in(e.canvas, p) do in_canvas += 1
 		}
 		if f64(in_canvas) / f64(max(len(coords), 1)) < 0.25 {
-			delete(coords[:])
+			delete(coords)
 			break
 		}
 		ring := Ring {
@@ -229,9 +247,10 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		append(&s.rings, ring)
 	}
 
-	pending := make([dynamic]int, n)
+	pending := make([]int, n, context.temp_allocator)
+	defer delete(pending, context.temp_allocator)
 	for i in 0 ..< n do pending[i] = i
-	engine.random_shuffle(pending[:])
+	engine.random_shuffle(pending)
 	next := 0
 	for ri in 0 ..< len(s.rings) {
 		ring := &s.rings[ri]
@@ -245,7 +264,28 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 		}
 		if next == n do break
 	}
-	delete(pending[:])
+
+	if s.color_handling != .Dynamic && n > 0 {
+		disperse_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+		defer delete(disperse_tweens, context.temp_allocator)
+		for slot in 0 ..< n {
+			ri := s.ring_by_slot[slot]
+			fc := final_colors[slot]
+			rc := ri >= 0 ? s.rings[ri].color : fc
+			disperse_tweens[slot] = {
+				from = {colors = {fg = rc}},
+				to   = {colors = {fg = fc}},
+			}
+		}
+		unique_disperse: [dynamic]engine.Tween(engine.Appearance)
+		unique_disperse, s.fade_index = engine.group_values(disperse_tweens)
+		defer delete(unique_disperse)
+		unique_spin := make([]engine.Tween(engine.Appearance), len(unique_disperse), context.temp_allocator)
+		defer delete(unique_spin, context.temp_allocator)
+		for tw, k in unique_disperse do unique_spin[k] = {from = tw.to, to = tw.from}
+		s.disperse_ramp = engine.ramp_make(e, unique_disperse[:], 8)
+		s.spin_ramp = engine.ramp_make(e, unique_spin, 8)
+	}
 
 	s.spin_remaining = s.config.spin_duration
 	s.disperse_remaining = s.config.disperse_duration
@@ -254,7 +294,7 @@ rings_build :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	s.start_remaining = 100
 }
 
-rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) {
+rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) #no_bounds_check {
 	for slot in 0 ..< len(s.ids) {
 		id := s.ids[slot]
 		ring_index := s.ring_by_slot[slot]
@@ -264,7 +304,7 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 				rings_begin_line(
 					s,
 					slot,
-					e.particles.current_coord[s.ids[slot]],
+					e.particles.current_coord[id],
 					engine.canvas_random_coord(e.canvas, true, false),
 					0.8,
 				)
@@ -290,7 +330,7 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 			rings_begin_line(
 				s,
 				slot,
-				e.particles.current_coord[s.ids[slot]],
+				e.particles.current_coord[id],
 				s.waypoints[slot][0],
 				0.3,
 			)
@@ -299,7 +339,7 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 			rings_begin_line(
 				s,
 				slot,
-				e.particles.current_coord[s.ids[slot]],
+				e.particles.current_coord[id],
 				s.waypoints[slot][0],
 				0.14,
 			)
@@ -308,7 +348,7 @@ rings_begin_disperse :: proc(s: ^Rings_State, e: ^engine.Engine, initial: bool) 
 	s.color_tick = 0
 }
 
-rings_begin_spin :: proc(s: ^Rings_State, e: ^engine.Engine) {
+rings_begin_spin :: proc(s: ^Rings_State, e: ^engine.Engine) #no_bounds_check {
 	for slot in 0 ..< len(s.ids) {
 		if s.ring_by_slot[slot] < 0 do continue
 		s.modes[slot] = .Condense
@@ -318,22 +358,22 @@ rings_begin_spin :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	s.color_tick = 0
 }
 
-rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) {
+rings_begin_final :: proc(s: ^Rings_State, e: ^engine.Engine) #no_bounds_check {
 	for slot in 0 ..< len(s.ids) {
 		id := s.ids[slot]
-		engine.set_particle(e, id, engine.Visible(true))
+		engine.set_visible(e, id, true)
 		s.modes[slot] = .Home
 		rings_begin_line(
 			s,
 			slot,
-			e.particles.current_coord[s.ids[slot]],
-			e.particles.initial_coord[id],
+			e.particles.current_coord[id],
+			s.home_coords[slot],
 			0.8,
 		)
 	}
 }
 
-rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
+rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) #no_bounds_check {
 	if s.color_handling == .Dynamic do return // applied once during build
 	sample := 0
 	switch s.phase {
@@ -348,43 +388,28 @@ rings_update_colors :: proc(s: ^Rings_State, e: ^engine.Engine) {
 	}
 	if s.color_sample == sample do return
 	s.color_sample = sample
-	for slot in 0 ..< len(s.ids) {
-		id := s.ids[slot]
-		appearance := engine.get_appearance(e, id)
-
-		ring_index := s.ring_by_slot[slot]
-		if ring_index < 0 {
-			if s.phase == .Final {
-				appearance.colors.fg = s.final_colors[slot]
-			}
-			engine.set_appearance(e, id, appearance)
-			continue
+	switch s.phase {
+	case .Disperse:
+		step := min(s.color_tick / 10, 8)
+		for slot in 0 ..< len(s.ids) {
+			if s.ring_by_slot[slot] < 0 do continue
+			engine.set_appearance(e, s.ids[slot], engine.ramp_code(s.disperse_ramp, s.fade_index[slot], step))
 		}
-		ring_color := s.rings[ring_index].color
-		switch s.phase {
-		case .Disperse:
-			appearance.colors.fg = engine.tween(
-				ring_color,
-				s.final_colors[slot],
-				8,
-				min(s.color_tick / 10, 8),
-			)
-		case .Spin:
-			appearance.colors.fg = engine.tween(
-				s.final_colors[slot],
-				ring_color,
-				8,
-				min(s.color_tick / 3, 8),
-			)
-		case .Final:
-			appearance.colors.fg = s.final_colors[slot]
-		case .Start, .Complete:
+	case .Spin:
+		step := min(s.color_tick / 3, 8)
+		for slot in 0 ..< len(s.ids) {
+			if s.ring_by_slot[slot] < 0 do continue
+			engine.set_appearance(e, s.ids[slot], engine.ramp_code(s.spin_ramp, s.fade_index[slot], step))
 		}
-		engine.set_appearance(e, id, appearance)
+	case .Final:
+		for slot in 0 ..< len(s.ids) {
+			engine.set_appearance(e, s.ids[slot], s.final_codes[slot])
+		}
+	case .Start, .Complete:
 	}
 }
 
-rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) {
+rings_update_motion :: proc(s: ^Rings_State, e: ^engine.Engine) #no_bounds_check {
 	write := 0
 	for slot in s.active_slots {
 		mode := s.modes[slot]

@@ -81,7 +81,8 @@ orbittingvolley_parse :: proc(cfg: ^Orbittingvolley_Config, args: []string) -> b
 Orbittingvolley_State :: struct {
 	config:             Orbittingvolley_Config,
 	characters:         [dynamic]engine.Particle_Id,
-	final_colors:       [dynamic]engine.Color,
+	final_codes:        [dynamic]engine.Appearance_Id,
+	targets:            [dynamic]engine.Coord,
 	active_indexes:     [dynamic]int,
 	launch_starts:      [dynamic]int,
 	launch_origins:     [dynamic]engine.Coord,
@@ -92,7 +93,7 @@ Orbittingvolley_State :: struct {
 	launcher_ids:       [4]engine.Particle_Id,
 	launcher_positions: [4]engine.Coord,
 	launcher_symbols:   [4]rune,
-	launcher_spectrum:  [dynamic]engine.Color,
+	spectrum_codes:     [dynamic]engine.Appearance_Id,
 	launcher_sampler:   engine.Gradient_Sampler,
 	launcher_advance:   f64,
 	delay:              int,
@@ -107,19 +108,23 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
+	s.spectrum_codes = make([dynamic]engine.Appearance_Id, len(spectrum))
+	for color, ci in spectrum {
+		if ci > 0 && color == spectrum[ci - 1] {
+			s.spectrum_codes[ci] = s.spectrum_codes[ci - 1]
+		} else {
+			s.spectrum_codes[ci] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+		}
+	}
 	text_sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
 		e.canvas.text_left,
 		e.canvas.text_right,
 		s.config.final_gradient_direction,
-	)
-	s.launcher_spectrum = engine.gradient_make(
-		s.config.final_gradient_stops[:],
-		s.config.final_gradient_steps[:],
-		false,
 	)
 	s.launcher_sampler = engine.gradient_sampler(
 		e.canvas.bottom,
@@ -140,16 +145,38 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	reserve(&s.active_indexes, n)
-	s.final_colors = make([dynamic]engine.Color, n)
+	s.final_codes = make([dynamic]engine.Appearance_Id, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.launch_starts = make([dynamic]int, n)
 	s.launch_origins = make([dynamic]engine.Coord, n)
 	s.launch_steps = make([dynamic]int, n)
 	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
-	for id, i in s.characters {
-		s.final_colors[i] = engine.gradient_sample(text_sampler, spectrum[:], initial_coords[id])
-		s.launch_starts[i] = -1
-		visible_flags[id] -= {.Visible}
+	if s.color_handling == .Dynamic && n > 0 {
+		dyn_styles := make([]engine.Appearance, n, context.temp_allocator)
+		defer delete(dyn_styles, context.temp_allocator)
+		for id, i in s.characters {
+			s.targets[i] = initial_coords[id]
+			s.launch_starts[i] = -1
+			visible_flags[id] -= {.Visible}
+			init_style := engine.get_initial_appearance(e, id)
+			dyn_styles[i] = {colors = init_style.colors, bold = init_style.bold}
+		}
+		unique_styles, style_indices := engine.group_values(dyn_styles)
+		defer delete(unique_styles)
+		defer delete(style_indices)
+		unique_codes := make([]engine.Appearance_Id, len(unique_styles), context.temp_allocator)
+		defer delete(unique_codes, context.temp_allocator)
+		for style, idx in unique_styles do unique_codes[idx] = engine.prepare_appearance(e, style)
+		for i in 0 ..< n do s.final_codes[i] = unique_codes[style_indices[i]]
+	} else {
+		for id, i in s.characters {
+			c := initial_coords[id]
+			s.targets[i] = c
+			s.final_codes[i] = s.spectrum_codes[engine.gradient_sample_index(text_sampler, len(s.spectrum_codes), c)]
+			s.launch_starts[i] = -1
+			visible_flags[id] -= {.Visible}
+		}
 	}
 
 	// Center-to-outside source ordering, then branch-wrapped round-robin
@@ -175,7 +202,8 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	// prefix here would corrupt the immutable span boundaries used at runtime.
 	cursors: [4]int
 	for i in 0 ..< 4 do cursors[i] = s.magazine_offsets[i]
-	index_by_id := make([dynamic]int, len(e.particles), context.temp_allocator)
+	index_by_id := make([]int, len(e.particles), context.temp_allocator)
+	defer delete(index_by_id, context.temp_allocator)
 	for id, i in s.characters do index_by_id[id] = i
 	launcher = 0
 	for id in center_groups.members {
@@ -197,10 +225,10 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 		engine.coord(e.canvas.right, e.canvas.bottom),
 		engine.coord(e.canvas.left, e.canvas.bottom),
 	}
+	plain := engine.prepare_appearance(e, engine.Appearance{})
 	launchers := engine.particle_batch(e, 4)
 	for i in 0 ..< 4 {
-		appearance := engine.prepare_appearance(e, engine.Appearance{})
-		id := engine.add_particle(&launchers, s.launcher_symbols[i], appearance, starts[i])
+		id := engine.add_particle(&launchers, s.launcher_symbols[i], plain, starts[i])
 		s.launcher_ids[i] = id
 		s.launcher_positions[i] = starts[i]
 		e.particles.layer[id] = 2
@@ -208,7 +236,7 @@ orbittingvolley_build :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
 	}
 }
 
-orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) {
+orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) #no_bounds_check {
 	// The primary launcher traverses the top edge. The other three are its
 	// phase-shifted perimeter children, matching the original visible orbit.
 	s.launcher_advance += s.config.launcher_movement_speed
@@ -232,32 +260,32 @@ orbittingvolley_update_launchers :: proc(s: ^Orbittingvolley_State, e: ^engine.E
 	for i in 0 ..< 4 {
 		id := s.launcher_ids[i]
 		p := s.launcher_positions[i]
-		engine.set_particle(e, id, p)
-		engine.set_symbol(e, id, s.launcher_symbols[i])
-		engine.set_foreground(
+		engine.set_position(e, id, p)
+		engine.set_appearance(
 			e,
 			id,
-			engine.gradient_sample(s.launcher_sampler, s.launcher_spectrum[:], p),
+			s.spectrum_codes[engine.gradient_sample_index(s.launcher_sampler, len(s.spectrum_codes), p)],
 		)
 	}
 }
 
 orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bool #no_bounds_check {
-	active := !s.launchers_hidden
-	for i in s.active_indexes {
-		if s.tick - s.launch_starts[i] < s.launch_steps[i] {
-			active = true
-			break
-		}
-	}
-	if !active do return false
-
 	magazines_left := false
 	for i in 0 ..< 4 {
 		if s.magazine_heads[i] < s.magazine_offsets[i + 1] do magazines_left = true
 	}
+	if !magazines_left && len(s.active_indexes) == 0 {
+		if s.launchers_hidden do return false
+		for id in s.launcher_ids {
+			engine.set_particle(e, id, engine.Visible(false))
+		}
+		s.launchers_hidden = true
+		s.tick += 1
+		return true
+	}
+
+	orbittingvolley_update_launchers(s, e)
 	if magazines_left {
-		orbittingvolley_update_launchers(s, e)
 		if s.delay == 0 {
 			per_launcher := max(int(s.config.volley_size * f64(len(s.characters)) / 4), 1)
 			for launcher in 0 ..< 4 {
@@ -274,30 +302,21 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 						engine.round_to_int(
 							engine.line_length(
 								s.launch_origins[i],
-								e.particles.initial_coord[id],
+								s.targets[i],
 								true,
 							) /
 							s.config.character_movement_speed,
 						),
 						1,
 					)
-					engine.set_particle(e, id, s.launch_origins[i])
-					engine.set_particle(e, id, engine.Layer(1))
-					engine.set_particle(e, id, engine.Visible(true))
+					engine.set_particle(e, id, s.launch_origins[i], true, 1)
 				}
 			}
 			s.delay = s.config.launch_delay
 		} else {
 			s.delay -= 1
 		}
-	} else if !s.launchers_hidden {
-		for id in s.launcher_ids {
-			engine.set_particle(e, id, engine.Visible(false))
-		}
-		s.launchers_hidden = true
 	}
-
-	initial_coords := e.particles.initial_coord
 
 	write := 0
 	for i in s.active_indexes {
@@ -305,35 +324,24 @@ orbittingvolley_next :: proc(s: ^Orbittingvolley_State, e: ^engine.Engine) -> bo
 		start := s.launch_starts[i]
 		age := s.tick - start
 		steps := s.launch_steps[i]
-		if age >= steps {
-			// Preserve the layer transition one tick after the final motion sample.
-			if age == steps {
-				engine.set_particle(e, id, engine.Layer(0))
-			}
-			continue
-		}
-		s.active_indexes[write] = i
-		write += 1
-		engine.set_particle(
+		if age >= steps do continue
+		engine.set_position(
 			e,
 			id,
 			engine.tween(
 				s.launch_origins[i],
-				initial_coords[id],
+				s.targets[i],
 				ease.ease(s.config.character_easing, f64(age + 1) / f64(steps)),
 			),
 		)
 		if age == 0 {
-			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_apply_input_colors(
-					&appearance,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				)
-				engine.set_appearance(e, id, appearance)
-			} else {
-				engine.set_foreground(e, id, s.final_colors[i])
-			}
+			engine.set_appearance(e, id, s.final_codes[i])
+		}
+		if age + 1 == steps {
+			engine.set_particle(e, id, engine.Layer(0))
+		} else {
+			s.active_indexes[write] = i
+			write += 1
 		}
 	}
 	resize(&s.active_indexes, write)

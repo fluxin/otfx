@@ -69,7 +69,8 @@ Print_State :: struct {
 	config:             Print_Config,
 	row_chars:          [dynamic]engine.Particle_Id,
 	rows:               [dynamic]Print_Row,
-	final_colors:       [dynamic]engine.Color,
+	fades:              engine.Appearance_Ramp,
+	fade_index:         [dynamic]int,
 	char_start_ticks:   [dynamic]int,
 	active_chars:       [dynamic]engine.Particle_Id,
 	current_row:        int,
@@ -85,11 +86,11 @@ Print_State :: struct {
 	color_handling:     engine.Existing_Color_Handling,
 }
 
-print_row_characters :: proc(s: ^Print_State, row_index: int) -> []engine.Particle_Id {
+print_row_characters :: #force_inline proc(s: ^Print_State, row_index: int) -> []engine.Particle_Id #no_bounds_check {
 	return engine.span_slice(s.row_chars[:], s.rows[row_index].span)
 }
 
-print_row_all_fill :: proc(chars: ^engine.Particle_Storage, ids: []engine.Particle_Id) -> bool {
+print_row_all_fill :: proc(chars: ^engine.Particle_Storage, ids: []engine.Particle_Id) -> bool #no_bounds_check {
 	for id in ids {
 		if (.Fill not_in chars.flags[id]) do return false
 	}
@@ -105,8 +106,9 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -124,22 +126,66 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(characters[:])
-	s.final_colors = make([dynamic]engine.Color, len(e.particles))
+	defer delete(characters)
+	storage_len := len(e.particles)
 	s.color_handling = e.cfg.existing_color_handling
-	s.char_start_ticks = make([dynamic]int, len(e.particles))
-	for i in 0 ..< len(s.char_start_ticks) do s.char_start_ticks[i] = -1
+	s.fade_index = make([dynamic]int, storage_len)
+	s.char_start_ticks = make([dynamic]int, storage_len)
+	for i in 0 ..< storage_len do s.char_start_ticks[i] = -1
 	white := engine.Color{0xff, 0xff, 0xff}
-	for id in characters {
-		coord := e.particles.initial_coord[id]
-		if coord.row >= e.canvas.text_bottom &&
-		   coord.row <= e.canvas.text_top &&
-		   coord.column >= e.canvas.text_left &&
-		   coord.column <= e.canvas.text_right {
-			s.final_colors[id] = engine.gradient_sample(sampler, spectrum[:], coord)
-		} else {
-			s.final_colors[id] = white
+
+	if len(characters) > 0 {
+		fade_tweens := make([]engine.Tween(engine.Appearance), len(characters), context.temp_allocator)
+		defer delete(fade_tweens, context.temp_allocator)
+		for id, k in characters {
+			if s.color_handling == .Dynamic {
+				style := engine.get_initial_appearance(e, id)
+				if style.colors.fg == nil && style.colors.bg == nil {
+					// Sentinel `from.bold = true` holds white on frames 0..=4 then clears at frame 5.
+					fade_tweens[k] = {from = {colors = {fg = white}, bold = true}}
+				} else {
+					fade_tweens[k] = {
+						from = {
+							colors = {
+								fg = style.colors.fg != nil ? white : nil,
+								bg = style.colors.bg != nil ? white : nil,
+							},
+						},
+						to   = {colors = style.colors},
+					}
+				}
+			} else {
+				coord := e.particles.initial_coord[id]
+				final_color := white
+				if coord.row >= e.canvas.text_bottom &&
+				   coord.row <= e.canvas.text_top &&
+				   coord.column >= e.canvas.text_left &&
+				   coord.column <= e.canvas.text_right {
+					final_color = engine.gradient_sample(sampler, spectrum[:], coord)
+				}
+				fade_tweens[k] = {
+					from = {colors = {fg = white}},
+					to   = {colors = {fg = final_color}},
+				}
+			}
 		}
+		unique_tweens, indices := engine.group_values(fade_tweens)
+		defer delete(unique_tweens)
+		defer delete(indices)
+		styles := make([]engine.Appearance, len(unique_tweens) * 6, context.temp_allocator)
+		defer delete(styles, context.temp_allocator)
+		for tw, row in unique_tweens {
+			if tw.from.bold {
+				for step in 0 ..< 5 do styles[row * 6 + step] = {colors = {fg = white}}
+				styles[row * 6 + 5] = {}
+			} else {
+				for step in 0 ..= 5 {
+					styles[row * 6 + step] = {colors = engine.tween(tw.from.colors, tw.to.colors, 5, step)}
+				}
+			}
+		}
+		s.fades = engine.ramp_from_styles(e, styles, 5)
+		for id, k in characters do s.fade_index[id] = indices[k]
 	}
 
 	groups := engine.get_particles_grouped(query, engine.PARTICLE_FILTER_ALL_FILLS, .Row_T2B)
@@ -167,7 +213,6 @@ print_build :: proc(s: ^Print_State, e: ^engine.Engine) {
 }
 
 print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check {
-	white := engine.Color{0xff, 0xff, 0xff}
 	if len(s.active_chars) == 0 && !s.typing && !s.head_return_active do return false
 	if s.head_return_active {
 		// carriage return is still active
@@ -179,7 +224,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			for _ in 0 ..< count {
 				id := characters[row.typed]
 				row.typed += 1
-				engine.set_particle(e, id, engine.Visible(true))
+				engine.set_visible(e, id, true)
 				s.char_start_ticks[id] = s.tick
 				append(&s.active_chars, id)
 				s.last_column = e.particles.initial_coord[id].column
@@ -189,14 +234,8 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 				processed := &s.rows[row_index]
 				ids := print_row_characters(s, row_index)[:processed.typed]
 				for id in ids {
-					engine.set_particle(
-						e,
-						id,
-						engine.Coord {
-							e.particles.current_coord[id].column,
-							e.particles.current_coord[id].row + (1),
-						},
-					)
+					cur := e.particles.current_coord[id]
+					engine.set_position(e, id, {cur.column, cur.row + 1})
 				}
 			}
 			previous := s.current_row
@@ -218,8 +257,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			}
 
 			s.head_origin = engine.coord(s.last_column, 1)
-			engine.set_particle(e, s.typing_head, s.head_origin)
-			engine.set_particle(e, s.typing_head, engine.Visible(true))
+			engine.set_placement(e, s.typing_head, s.head_origin, true, e.particles.layer[s.typing_head])
 			target_column := e.particles.initial_coord[current_ids[0]].column
 			s.head_target = engine.coord(target_column, 1)
 			s.head_max_steps = max(
@@ -235,6 +273,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			s.typing = false
 		}
 	}
+	typing_symbols := Print_Typing_Symbols
 	write := 0
 	for id in s.active_chars {
 		age := s.tick - s.char_start_ticks[id]
@@ -242,33 +281,13 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		if age % 3 == 0 {
 			frame := min(age / 3, 5)
 			if frame < 4 {
-				engine.set_symbol(e, id, Print_Typing_Symbols[frame])
+				engine.set_symbol(e, id, typing_symbols[frame])
 			} else if frame == 4 {
 				engine.set_symbol(e, id, '░')
 			} else {
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			}
-			if s.color_handling == .Dynamic {
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				if fg, ok := style.colors.fg.?; ok {
-					engine.set_foreground(e, id, engine.tween(white, fg, 5, frame))
-				} else if style.colors.bg == nil && frame < 5 {
-					engine.set_foreground(e, id, white)
-				} else {
-					engine.set_foreground(e, id, nil)
-				}
-				if bg, ok := style.colors.bg.?; ok {
-					engine.set_background(e, id, engine.tween(white, bg, 5, frame))
-				} else {
-					engine.set_background(e, id, nil)
-				}
-			} else {
-				engine.set_foreground(
-					e,
-					id,
-					engine.tween(white, s.final_colors[id], 5, frame),
-				)
-			}
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[id], frame))
 		}
 		if age + 1 < 18 {
 			s.active_chars[write] = id
@@ -279,7 +298,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 	if s.head_return_active {
 		age := s.tick - s.head_start_tick
 		progress := f64(age + 1) / f64(s.head_max_steps)
-		engine.set_particle(
+		engine.set_position(
 			e,
 			s.typing_head,
 			engine.tween(
@@ -289,8 +308,7 @@ print_next :: proc(s: ^Print_State, e: ^engine.Engine) -> bool #no_bounds_check 
 			),
 		)
 		if age + 1 >= s.head_max_steps {
-			engine.set_particle(e, s.typing_head, s.head_target)
-			engine.set_particle(e, s.typing_head, engine.Visible(false))
+			engine.set_placement(e, s.typing_head, s.head_target, false, e.particles.layer[s.typing_head])
 			s.head_return_active = false
 		}
 	}

@@ -70,9 +70,9 @@ slide_parse :: proc(cfg: ^Slide_Config, args: []string) -> bool {
 		case "--gap":
 			if !parse_int_flag(&cfg.gap, args, &i, value, has_value, minimum = 0) do return false
 		case "--reverse-direction":
-			cfg.reverse_direction = true
+			if !parse_bool_flag(&cfg.reverse_direction, has_value) do return false
 		case "--merge":
-			cfg.merge = true
+			if !parse_bool_flag(&cfg.merge, has_value) do return false
 		case "--movement-easing":
 			if !parse_ease_flag(&cfg.movement_easing, args, &i, value, has_value) do return false
 		case "--final-gradient-stops":
@@ -100,6 +100,7 @@ Slide_State :: struct {
 	groups:         engine.Particle_Groups,
 	heads:          [dynamic]int,
 	origins:        [dynamic]engine.Coord,
+	targets:        [dynamic]engine.Coord,
 	steps:          [dynamic]int,
 	max_steps:      [dynamic]int,
 	active_slots:   [dynamic]int,
@@ -113,8 +114,9 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -137,15 +139,19 @@ slide_build :: proc(s: ^Slide_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
 	s.final_index = make([dynamic]int, n)
-	s.fades = engine.ramp_make(e, engine.tweens_from(s.config.final_gradient_stops[0], spectrum[:]), 10)
+	tweens := engine.tweens_from(s.config.final_gradient_stops[0], spectrum[:])
+	defer delete(tweens, context.temp_allocator)
+	s.fades = engine.ramp_make(e, tweens, 10)
 	s.origins = make([dynamic]engine.Coord, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.steps = make([dynamic]int, n)
 	s.max_steps = make([dynamic]int, n)
 	for id, i in s.characters {
 		c := e.particles.initial_coord[id]
+		s.targets[i] = c
 		s.index_by_id[id] = i
 		s.final_index[i] = engine.gradient_sample_index(sampler, len(spectrum), c)
-		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+		engine.set_symbol(e, id, e.particles.initial_symbol[id])
 		engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[i], 0))
 	}
 
@@ -279,7 +285,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		step := s.steps[i]
 		finished := step + 1 >= max(s.max_steps[i], gradient_ticks)
 		if finished {
-			engine.set_position(e, id, e.particles.initial_coord[id])
+			engine.set_position(e, id, s.targets[i])
 		} else if step < s.max_steps[i] {
 			progress := f64(step + 1) / f64(s.max_steps[i])
 			engine.set_position(
@@ -287,7 +293,7 @@ slide_next :: proc(s: ^Slide_State, e: ^engine.Engine) -> bool #no_bounds_check 
 				id,
 				engine.tween(
 					s.origins[i],
-					e.particles.initial_coord[id],
+					s.targets[i],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)

@@ -72,10 +72,12 @@ Bouncyballs_State :: struct {
 	config:         Bouncyballs_Config,
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
-	ball_colors:    [dynamic]engine.Color,
+	ball_codes:     [dynamic]engine.Appearance_Id,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
 	ball_symbols:   [dynamic]rune,
 	origins:        [dynamic]engine.Coord,
+	targets:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
 	row_groups:     engine.Particle_Groups,
@@ -92,8 +94,9 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -119,19 +122,43 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 	reserve(&s.pending, pending_capacity)
 	s.color_handling = e.cfg.existing_color_handling
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.final_colors = make([dynamic]engine.Color, n)
-	s.ball_colors = make([dynamic]engine.Color, n)
+	s.ball_codes = make([dynamic]engine.Appearance_Id, n)
 	s.ball_symbols = make([dynamic]rune, n)
 	s.origins = make([dynamic]engine.Coord, n)
+	s.targets = make([dynamic]engine.Coord, n)
 	s.max_steps = make([dynamic]int, n)
 	s.start_ticks = make([dynamic]int, n)
+	if n == 0 do return
+
+	ball_styles := make([]engine.Appearance, n, context.temp_allocator)
+	fade_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(ball_styles, context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
 
 	for id, i in s.characters {
 		s.index_by_id[id] = i
 		initial_coord := e.particles.initial_coord[id]
-		s.ball_colors[i] = s.config.ball_colors[engine.random_below(len(s.config.ball_colors))]
+		s.targets[i] = initial_coord
+		ball_color := s.config.ball_colors[engine.random_below(len(s.config.ball_colors))]
 		s.ball_symbols[i] = s.config.ball_symbols[engine.random_below(len(s.config.ball_symbols))]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], initial_coord)
+		final_color := engine.gradient_sample(sampler, spectrum[:], initial_coord)
+		if s.color_handling == .Dynamic {
+			init_style := engine.get_initial_appearance(e, id)
+			ball_styles[i] = {
+				colors = {fg = ball_color, bg = init_style.colors.bg},
+				bold   = init_style.bold,
+			}
+			fade_tweens[i] = {
+				from = {colors = {ball_color, ball_color}, bold = init_style.bold},
+				to   = {colors = init_style.colors, bold = init_style.bold},
+			}
+		} else {
+			ball_styles[i] = {colors = {fg = ball_color}}
+			fade_tweens[i] = {
+				from = {colors = {fg = ball_color}},
+				to   = {colors = {fg = final_color}},
+			}
+		}
 		drop_row := int(f64(e.canvas.top) * engine.random_float_range(1, 1.5))
 		s.origins[i] = engine.coord(initial_coord.column, drop_row)
 		e.particles.current_coord[id] = s.origins[i]
@@ -143,6 +170,21 @@ bouncyballs_build :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) {
 		)
 		s.start_ticks[i] = -1
 	}
+
+	unique_balls, ball_indices := engine.group_values(ball_styles)
+	defer delete(unique_balls)
+	defer delete(ball_indices)
+	unique_ball_codes := make([]engine.Appearance_Id, len(unique_balls), context.temp_allocator)
+	defer delete(unique_ball_codes, context.temp_allocator)
+	for style, idx in unique_balls {
+		unique_ball_codes[idx] = engine.prepare_appearance(e, style)
+	}
+	for i in 0 ..< n do s.ball_codes[i] = unique_ball_codes[ball_indices[i]]
+
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	s.fades = engine.ramp_make(e, unique_tweens[:], 10)
 }
 
 bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool #no_bounds_check {
@@ -159,7 +201,7 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool #no_b
 				if len(s.pending) == 0 do break
 				index := engine.random_below(len(s.pending))
 				id := s.pending[index]
-				ordered_remove(&s.pending, index)
+				unordered_remove(&s.pending, index)
 				slot := s.index_by_id[id]
 				s.start_ticks[slot] = s.tick
 				append(&s.active_slots, slot)
@@ -174,49 +216,38 @@ bouncyballs_next :: proc(s: ^Bouncyballs_State, e: ^engine.Engine) -> bool #no_b
 	for slot in s.active_slots {
 		id := s.characters[slot]
 		age := s.tick - s.start_ticks[slot]
-		if age >= s.max_steps[slot] + 65 do continue
-		if age < s.max_steps[slot] - 1 {
-			progress := f64(age + 1) / f64(s.max_steps[slot])
-			engine.set_particle(
+		max_steps := s.max_steps[slot]
+		if age >= max_steps + 65 do continue
+		if age < max_steps - 1 {
+			progress := f64(age + 1) / f64(max_steps)
+			engine.set_position(
 				e,
 				id,
 				engine.tween(
 					s.origins[slot],
-					e.particles.initial_coord[id],
+					s.targets[slot],
 					ease.ease(s.config.movement_easing, progress),
 				),
 			)
 			if age == 0 {
 				engine.set_symbol(e, id, s.ball_symbols[slot])
-				engine.set_foreground(e, id, s.ball_colors[slot])
+				engine.set_appearance(e, id, s.ball_codes[slot])
 			}
 		} else {
-			if age == s.max_steps[slot] - 1 {
-				engine.set_particle(e, id, e.particles.initial_coord[id])
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			if age == max_steps - 1 {
+				engine.set_position(e, id, s.targets[slot])
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			}
-			fade_tick := age - (s.max_steps[slot] - 1)
+			fade_tick := age - (max_steps - 1)
 			if fade_tick <= 60 && fade_tick % 6 == 0 {
-				fade_step := min(fade_tick / 6, 10)
-				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					appearance.colors = engine.tween(engine.Color_Pair{s.ball_colors[slot], s.ball_colors[slot]}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 10, fade_step)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					engine.set_foreground(
-						e,
-						id,
-						engine.tween(
-							s.ball_colors[slot],
-							s.final_colors[slot],
-							10,
-							fade_step,
-						),
-					)
-				}
+				engine.set_appearance(
+					e,
+					id,
+					engine.ramp_code(s.fades, s.fade_index[slot], min(fade_tick / 6, 10)),
+				)
 			}
 		}
-		if age + 1 < s.max_steps[slot] + 65 {
+		if age + 1 < max_steps + 65 {
 			s.active_slots[write] = slot
 			write += 1
 		}

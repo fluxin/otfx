@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:image"
 import "core:slice"
 
@@ -27,10 +28,11 @@ Color_Space :: 1 << 24
 // millions of pixels through this, and a map lookup per pixel dominates the
 // whole run. The tables are allocated once and shared by every effect.
 Quantizer :: struct {
-	counts:   []u32,
-	lookup:   []u8,
-	observed: [dynamic]u32, // distinct keys, so a reset never scans 16M entries
-	palette:  Palette,
+	allocator: runtime.Allocator,
+	counts:    []u32,
+	lookup:    []u8,
+	observed:  [dynamic]u32, // distinct keys, so a reset never scans 16M entries
+	palette:   Palette,
 }
 
 color_key :: #force_inline proc(color: image.RGB_Pixel) -> u32 {
@@ -42,15 +44,16 @@ color_key :: #force_inline proc(color: image.RGB_Pixel) -> u32 {
 // one happens to be current when a colour is first observed.
 quantizer_make :: proc(allocator := context.allocator) -> Quantizer {
 	return {
-		counts = make([]u32, Color_Space, allocator),
-		lookup = make([]u8, Color_Space, allocator),
-		observed = make([dynamic]u32, 0, 4096, allocator),
+		allocator = allocator,
+		counts    = make([]u32, Color_Space, allocator),
+		lookup    = make([]u8, Color_Space, allocator),
+		observed  = make([dynamic]u32, 0, 4096, allocator),
 	}
 }
 
 quantizer_destroy :: proc(q: ^Quantizer) {
-	delete(q.counts)
-	delete(q.lookup)
+	delete(q.counts, q.allocator)
+	delete(q.lookup, q.allocator)
 	delete(q.observed)
 }
 

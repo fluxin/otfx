@@ -80,8 +80,16 @@ Particle_Query :: struct {
 	canvas:         Canvas,
 }
 
-collect_particles :: proc(q: Particle_Query, filter: Particle_Filter) -> [dynamic]Particle_Id {
-	all: [dynamic]Particle_Id
+collect_particles :: proc(
+	q: Particle_Query,
+	filter: Particle_Filter,
+	allocator := context.allocator,
+) -> [dynamic]Particle_Id {
+	count := 0
+	if .Input in filter do count += len(q.sets.input)
+	if .Inner_Fill in filter do count += len(q.sets.inner_fill)
+	if .Outer_Fill in filter do count += len(q.sets.outer_fill)
+	all := make([dynamic]Particle_Id, 0, count, allocator)
 	if .Input in filter do append(&all, ..q.sets.input[:])
 	if .Inner_Fill in filter do append(&all, ..q.sets.inner_fill[:])
 	if .Outer_Fill in filter do append(&all, ..q.sets.outer_fill[:])
@@ -106,8 +114,8 @@ particle_order_rows :: proc(rows: []Particle_Order_Row) {
 		low[0], high[0] = min(low[0], row.within_key), max(high[0], row.within_key)
 		low[1], high[1] = min(low[1], row.group_key), max(high[1], row.group_key)
 	}
-	scratch := make([]Particle_Order_Row, len(rows))
-	defer delete(scratch)
+	scratch := make([]Particle_Order_Row, len(rows), context.temp_allocator)
+	defer delete(scratch, context.temp_allocator)
 	source, destination := rows, scratch
 	for lane in 0 ..< 2 {
 		span := uint(high[lane]) - uint(low[lane])
@@ -143,10 +151,11 @@ get_particles :: proc(
 	q: Particle_Query,
 	filter: Particle_Filter,
 	srt: Particle_Sort,
+	allocator := context.allocator,
 ) -> [dynamic]Particle_Id {
-	all := collect_particles(q, filter)
-	rows := make([]Particle_Order_Row, len(all))
-	defer delete(rows)
+	all := collect_particles(q, filter, allocator)
+	rows := make([]Particle_Order_Row, len(all), context.temp_allocator)
+	defer delete(rows, context.temp_allocator)
 	// key = (max_row - row) * width + column, dense pass over the SOA fields
 	width := q.canvas.right + 1
 	top := q.canvas.top
@@ -184,20 +193,21 @@ group_members :: proc(g: Particle_Groups, i: int) -> []Particle_Id {
 }
 
 groups_delete :: proc(g: ^Particle_Groups) {
-	delete(g.members[:])
-	delete(g.spans[:])
+	delete(g.members)
+	delete(g.spans)
 }
 
 get_particles_grouped :: proc(
 	q: Particle_Query,
 	filter: Particle_Filter,
 	grouping: Particle_Group,
+	allocator := context.allocator,
 ) -> Particle_Groups {
-	all := collect_particles(q, filter)
-	defer delete(all[:])
+	all := collect_particles(q, filter, context.temp_allocator)
+	defer delete(all)
 
-	rows := make([]Particle_Order_Row, len(all))
-	defer delete(rows)
+	rows := make([]Particle_Order_Row, len(all), context.temp_allocator)
+	defer delete(rows, context.temp_allocator)
 
 	reverse_groups :=
 		grouping == .Column_R2L ||
@@ -226,9 +236,10 @@ get_particles_grouped :: proc(
 	}
 	particle_order_rows(rows)
 
-	out: Particle_Groups
-	reserve(&out.members, len(rows))
-	reserve(&out.spans, len(rows))
+	out := Particle_Groups {
+		members = make([dynamic]Particle_Id, 0, len(rows), allocator),
+		spans   = make([dynamic]Span, 0, len(rows), allocator),
+	}
 	group_start := 0
 	for row, i in rows {
 		append(&out.members, row.id)

@@ -16,9 +16,9 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 	cfg := engine.config_default()
 	cfg.frame_rate = 0
 	e, err := engine.engine_make(input, cfg)
-	assert(err == .None)
+	if err != .None do os.exit(1)
 	fx, ok := effects.make_effect(kind, nil)
-	assert(ok)
+	if !ok do os.exit(1)
 	effects.build_effect(&fx, &e)
 	free_all(context.temp_allocator)
 	when engine.FRAME_STATS_ENABLED {e.stats = {}}
@@ -43,7 +43,7 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 		s := e.stats
 		other := playback - update - s.compose - s.emit - s.write
 		fmt.eprintf(
-			"%v\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
+			"%v\t%d\t%d\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%.6f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n",
 			kind,
 			sample,
 			frames,
@@ -60,7 +60,6 @@ trial :: proc(input: string, kind: effects.Effect_Kind, sample: int, print: bool
 			s.candidate_visits,
 			s.patched_cells,
 			s.cell_bytes_written,
-			s.ownership_visits,
 		)
 	} else {
 		fmt.eprintf(
@@ -82,11 +81,11 @@ main :: proc() {
 		os.exit(1)
 	}
 	input, err := os.read_entire_file(os.args[1], context.allocator)
-	assert(err == nil)
+	if err != nil do os.exit(1)
 	defer delete(input)
 	when engine.FRAME_STATS_ENABLED {
 		fmt.eprintln(
-			"effect\tsample\tframes\tupdate_ms\tcompose_ms\temit_ms\twrite_ms\tplayback_ms\tother_ms\truns\toutput_bytes\twrite_calls\twrite_bytes\tcandidate_visits\tpatched_cells\tcell_bytes_written\townership_visits",
+			"effect\tsample\tframes\tupdate_ms\tcompose_ms\temit_ms\twrite_ms\tplayback_ms\tother_ms\truns\toutput_bytes\twrite_calls\twrite_bytes\tcandidate_visits\tpatched_cells\tcell_bytes_written",
 		)
 	} else {fmt.eprintln("effect\tsample\tframes\tupdate_ms\tframe_build_ms\tplayback_ms")}
 	for kind in ([]effects.Effect_Kind{.Colorshift, .Decrypt, .Binarypath, .Burn, .Laseretch, .Rain, .Print}) {

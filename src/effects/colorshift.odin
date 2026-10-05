@@ -58,17 +58,17 @@ colorshift_parse :: proc(cfg: ^Colorshift_Config, args: []string) -> bool {
 		case "--gradient-frames":
 			if !parse_int_flag(&cfg.gradient_frames, args, &i, value, has_value) do return false
 		case "--no-travel":
-			cfg.no_travel = true
+			if !parse_bool_flag(&cfg.no_travel, has_value) do return false
 		case "--travel-direction":
 			if !parse_gdir_flag(&cfg.travel_direction, args, &i, value, has_value) do return false
 		case "--reverse-travel-direction":
-			cfg.reverse_travel_direction = true
+			if !parse_bool_flag(&cfg.reverse_travel_direction, has_value) do return false
 		case "--no-loop":
-			cfg.no_loop = true
+			if !parse_bool_flag(&cfg.no_loop, has_value) do return false
 		case "--cycles":
 			if !parse_int_flag(&cfg.cycles, args, &i, value, has_value) do return false
 		case "--skip-final-gradient":
-			cfg.skip_final_gradient = true
+			if !parse_bool_flag(&cfg.skip_final_gradient, has_value) do return false
 		case "--final-gradient-stops":
 			if !parse_colors_flag(&cfg.final_gradient_stops, args, &i, value, has_value) do return false
 		case "--final-gradient-steps":
@@ -87,7 +87,8 @@ Colorshift_State :: struct {
 	config:            Colorshift_Config,
 	gradient:          [dynamic]engine.Color, // one shared palette
 	shifts:            [dynamic]int, // indexed like particle_sets.input
-	final_colors:      [dynamic]engine.Color, // indexed like particle_sets.input
+	final_slots:       [dynamic]int,
+	final_ramp:        engine.Appearance_Ramp,
 	appearances:       [dynamic]engine.Appearance_Id,
 	tick:              int,
 	palette_index:     int,
@@ -117,16 +118,24 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		!s.config.no_loop,
 	)
 	assert(s.config.gradient_frames >= 1)
+	n := len(s.gradient)
+	s.appearances = make([dynamic]engine.Appearance_Id, n)
+	for color, k in s.gradient {
+		s.appearances[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+	}
+
 	ids := e.particle_sets.input[:]
 	s.color_handling = e.cfg.existing_color_handling
 	s.shifts = make([dynamic]int, len(ids))
-	if s.config.cycles != 0 && !s.config.skip_final_gradient {
-		s.final_colors = make([dynamic]engine.Color, len(ids))
+	need_final := s.config.cycles != 0 && !s.config.skip_final_gradient
+	final_tweens: []engine.Tween(engine.Appearance)
+	if need_final {
+		final_tweens = make([]engine.Tween(engine.Appearance), len(ids), context.temp_allocator)
 	}
+	defer delete(final_tweens, context.temp_allocator)
+
 	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
-
-	n := len(s.gradient)
 
 	for id, i in ids {
 		c := initial_coords[id]
@@ -160,20 +169,34 @@ colorshift_build :: proc(s: ^Colorshift_State, e: ^engine.Engine) {
 		}
 		if k == n do k = 0
 		s.shifts[i] = k
-		engine.set_foreground(e, id, s.gradient[k])
-		if len(s.final_colors) != 0 {
-			s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
-		}
-		if s.color_handling == .Dynamic &&
-		   (engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg != nil ||
-				   engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg != nil) {
+		engine.set_appearance(e, id, s.appearances[k])
+		init_style := engine.get_initial_appearance(e, engine.Particle_Id(id))
+		if s.color_handling == .Dynamic && (init_style.colors.fg != nil || init_style.colors.bg != nil) {
 			s.dynamic_has_color = true
+		}
+		if need_final {
+			start_index := k - 1
+			if start_index < 0 do start_index += n
+			start := s.gradient[start_index]
+			if s.color_handling == .Dynamic {
+				final_tweens[i] = {
+					from = {colors = {start, start}},
+					to   = {colors = init_style.colors},
+				}
+			} else {
+				final_tweens[i] = {
+					from = {colors = {fg = start}},
+					to   = {colors = {fg = engine.gradient_sample(final_sampler, final_spectrum[:], c)}},
+				}
+			}
 		}
 	}
 
-	s.appearances = make([dynamic]engine.Appearance_Id, n)
-	for color, k in s.gradient {
-		s.appearances[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+	if need_final && len(ids) > 0 {
+		unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+		unique_tweens, s.final_slots = engine.group_values(final_tweens)
+		defer delete(unique_tweens)
+		s.final_ramp = engine.ramp_make(e, unique_tweens[:], 8)
 	}
 }
 
@@ -210,24 +233,13 @@ colorshift_next :: proc(s: ^Colorshift_State, e: ^engine.Engine) -> bool #no_bou
 		transition_steps :: 8
 		if transition_step > transition_steps do return false
 		if transition_tick % frames == 0 {
-			for id, i in ids {
-				appearance_symbol := e.particles.initial_symbol[engine.Particle_Id(id)]
-				appearance := engine.Appearance{}
-				start_index := s.shifts[i] - 1
-				if start_index < 0 do start_index += n
-				start := s.gradient[start_index]
-				if s.color_handling == .Dynamic {
-					appearance.colors = engine.tween(engine.Color_Pair{start, start}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, transition_steps, transition_step)
-				} else {
-					appearance.colors.fg = engine.tween(
-						start,
-						s.final_colors[i],
-						transition_steps,
-						transition_step,
-					)
+			for base := 0; base < len(ids); base += 8 {
+				count := min(8, len(ids) - base)
+				codes: [8]engine.Appearance_Id
+				for lane in 0 ..< count {
+					codes[lane] = engine.ramp_code(s.final_ramp, s.final_slots[base + lane], transition_step)
 				}
-				engine.set_symbol(e, id, appearance_symbol)
-				engine.set_appearance(e, id, appearance)
+				engine.set_appearances(e, ids[base:base + count], codes[:count])
 			}
 		}
 	}

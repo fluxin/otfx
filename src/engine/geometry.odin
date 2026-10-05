@@ -72,11 +72,13 @@ find_coords_on_circle :: proc(
 	origin: Coord,
 	radius, coords_limit: int,
 	unique: bool,
+	allocator := context.allocator,
 ) -> [dynamic]Coord {
-	points: [dynamic]Coord
-	if radius == 0 do return points
+	if radius == 0 do return {}
 	limit := coords_limit != 0 ? coords_limit : round_to_int(math.TAU * f64(radius))
-	seen: [dynamic]Coord
+	points := make([dynamic]Coord, 0, limit, allocator)
+	seen := make([dynamic]Coord, context.temp_allocator)
+	defer delete(seen)
 	angle_step := math.TAU / f64(limit)
 	radial := linalg.Vector2f64{f64(radius), 0}
 	origin_v := coord_vec(origin)
@@ -105,14 +107,18 @@ find_coords_on_circle :: proc(
 
 // TerminalTextEffects calls this a circle; terminal cell aspect makes it an
 // ellipse with horizontal radius diameter and vertical radius diameter/2.
-find_coords_in_circle :: proc(center: Coord, diameter: int) -> [dynamic]Coord {
-	coords: [dynamic]Coord
-	if diameter == 0 do return coords
-	a_squared := math.pow(f64(diameter), 2)
-	b_squared := math.pow(f64(diameter) / 2, 2)
+find_coords_in_circle :: proc(
+	center: Coord,
+	diameter: int,
+	allocator := context.allocator,
+) -> [dynamic]Coord {
+	if diameter == 0 do return {}
+	coords := make([dynamic]Coord, allocator)
+	a_squared := f64(diameter * diameter)
+	b_squared := (f64(diameter) * 0.5) * (f64(diameter) * 0.5)
 	for column in center.column - diameter ..= center.column + diameter {
 		x := f64(column - center.column)
-		x_component := math.pow(x, 2) / a_squared
+		x_component := (x * x) / a_squared
 		max_row_offset := int(math.sqrt(b_squared * (1 - x_component)))
 		for row in center.row - max_row_offset ..= center.row + max_row_offset {
 			append(&coords, coord(column, row))
@@ -154,7 +160,7 @@ find_normalized_distance_from_center :: proc(
 
 easing_parse :: proc(s: string) -> (ease.Ease, bool) {
 	k: ease.Ease
-	switch strings.to_lower(s) {
+	switch strings.to_lower(s, context.temp_allocator) {
 	case "linear":
 		k = .Linear
 	case "in_sine":

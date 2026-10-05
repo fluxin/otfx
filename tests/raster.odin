@@ -2,57 +2,61 @@ package regression
 
 import "../src/engine"
 import "core:container/bit_array"
-import "core:container/intrusive/list"
-import "core:container/xar"
 import "core:mem"
 import "core:testing"
 
 // Independently validate links, membership, published keys, and visible winner.
 expect_published_cells :: proc(t: ^testing.T, e: ^engine.Engine) {
-	seen := make([]bool, len(e.particles))
-	defer delete(seen)
+	seen := make([]bool, len(e.particles), context.temp_allocator)
+	defer delete(seen, context.temp_allocator)
 	for cell, index in e.cells {
-		previous: ^list.Node
+		previous := engine.NO_PARTICLE
 		previous_key: u64
 		best: u64
 		expected_top := engine.NO_PARTICLE
 		count := 0
-		it := list.iterator_head(cell.occupants, engine.Render_Node, "link")
-		for node in list.iterate_next(&it) {
+		for id := cell.head; id != engine.NO_PARTICLE; id = e.render_nodes[id].next {
 			count += 1
 			if count > len(e.particles) {testing.expect(t, false, "cell list cycle"); break}
-			id := engine.Particle_Id(node.key.id)
+			node := e.render_nodes[id]
+			key := transmute(u64)engine.render_node_key(id, node.layer)
 			testing.expect(t, !seen[id])
 			seen[id] = true
 			testing.expect_value(t, e.particles[id].cell, index)
-			testing.expect_value(t, e.particles[id].layer, int(node.key.layer))
-			testing.expect_value(t, node, xar.get_ptr(&e.render_nodes, id))
-			testing.expect_value(t, node.link.prev, previous)
-			if previous != nil && !cell.unordered do testing.expect(t, previous_key < transmute(u64)node.key)
-			if expected_top == engine.NO_PARTICLE || transmute(u64)node.key > best {
-				best = transmute(u64)node.key
+			testing.expect_value(t, e.particles[id].layer, int(node.layer))
+			testing.expect_value(t, node.prev, previous)
+			if previous != engine.NO_PARTICLE && !cell.unordered do testing.expect(t, previous_key < key)
+			if expected_top == engine.NO_PARTICLE || key > best {
+				best = key
 				expected_top = id
 			}
-			previous = &node.link
-			previous_key = transmute(u64)node.key
+			previous = id
+			previous_key = key
 		}
-		testing.expect_value(t, previous, cell.occupants.tail)
+		testing.expect_value(t, previous, cell.tail)
 		testing.expect_value(t, cell.top, expected_top)
 		testing.expect(t, !cell.needs_resolve)
 	}
-	for particle, id in e.particles do testing.expect_value(t, seen[id], particle.cell >= 0)
+	for particle, id in e.particles {
+		testing.expect_value(t, seen[id], particle.cell >= 0)
+		if !seen[id] && id < len(e.render_nodes) {
+			testing.expect_value(t, e.render_nodes[id].prev, engine.NO_PARTICLE)
+			testing.expect_value(t, e.render_nodes[id].next, engine.NO_PARTICLE)
+		}
+	}
 }
 
-cell_keys :: proc(cell: engine.Render_Cell) -> []engine.Render_Key {
+cell_keys :: proc(e: ^engine.Engine, cell: engine.Render_Cell) -> []engine.Render_Key {
 	keys := make([dynamic]engine.Render_Key, context.temp_allocator)
-	it := list.iterator_head(cell.occupants, engine.Render_Node, "link")
-	for node in list.iterate_next(&it) do append(&keys, node.key)
+	for id := cell.head; id != engine.NO_PARTICLE; id = e.render_nodes[id].next {
+		append(&keys, engine.render_node_key(id, e.render_nodes[id].layer))
+	}
 	return keys[:]
 }
 
-cell_layer_count :: proc(cell: engine.Render_Cell, layer: int) -> int {
+cell_layer_count :: proc(e: ^engine.Engine, cell: engine.Render_Cell, layer: int) -> int {
 	count := 0
-	for entry in cell_keys(cell) do count += int(int(entry.layer) == layer)
+	for entry in cell_keys(e, cell) do count += int(int(entry.layer) == layer)
 	return count
 }
 
@@ -159,7 +163,7 @@ cell_layers_reuse_storage_and_reveal_lower_occupants :: proc(t: ^testing.T) {
 	}
 	engine.frame_build(&e)
 	storage :: proc(e: ^engine.Engine) -> (count, capacity: int) {
-		count, capacity = len(cell_keys(e.cells[0])), xar.cap(e.render_nodes) + cap(e.render_keys)
+		count, capacity = len(cell_keys(e, e.cells[0])), cap(e.render_nodes) + cap(e.render_keys)
 		return
 	}
 	slots, _ := storage(&e)
@@ -227,10 +231,10 @@ flat_cell_stack_reuses_storage_across_layers :: proc(t: ^testing.T) {
 		engine.frame_build(&e)
 		testing.expect_value(t, draw_at(&e, 0), i32(id))
 	}
-	testing.expect_value(t, len(cell_keys(e.cells[0])), 1)
+	testing.expect_value(t, len(cell_keys(&e, e.cells[0])), 1)
 	engine.set_layer(&e, id, engine.Layer(max(u32)))
 	engine.frame_build(&e)
-	testing.expect_value(t, cell_keys(e.cells[0])[0].layer, max(u32))
+	testing.expect_value(t, cell_keys(&e, e.cells[0])[0].layer, max(u32))
 	testing.expect_value(t, track.total_allocation_count, allocations)
 	expect_published_cells(t, &e)
 }
@@ -548,7 +552,7 @@ cell_stack_interior_growth_is_amortized :: proc(t: ^testing.T) {
 		engine.frame_build(&e)
 	}
 	testing.expect(t, track.total_allocation_count - allocations < 16)
-	testing.expect_value(t, len(cell_keys(e.cells[0])), len(ids) + 1)
+	testing.expect_value(t, len(cell_keys(&e, e.cells[0])), len(ids) + 1)
 	testing.expect_value(t, e.cells[0].top, ids[len(ids) - 1])
 	expect_published_cells(t, &e)
 }

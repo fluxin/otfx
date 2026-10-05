@@ -3,9 +3,6 @@ package common
 import "../../src/effects"
 import "../../src/engine"
 
-import "core:reflect"
-import "core:strings"
-
 // Shared by the tools that drive the engine directly instead of shelling out to
 // the CLI: the documentation renderer and the parity capture. Both need the same
 // three things -- resolve an effect name, build a seeded run, step it a frame at
@@ -16,19 +13,12 @@ Run :: struct {
 	effect:       effects.Effect,
 }
 
-// The CLI's effect names are the enum names lowercased, so the enum stays the
-// single source of truth and a new effect needs no table update here.
-effect_name :: proc(kind: effects.Effect_Kind, allocator := context.allocator) -> string {
-	name, _ := reflect.enum_name_from_value(kind)
-	return strings.to_lower(name, allocator)
+effect_name :: #force_inline proc(kind: effects.Effect_Kind) -> string {
+	return effects.effect_name(kind)
 }
 
 effect_kind_from_name :: proc(name: string) -> (effects.Effect_Kind, bool) {
-	for candidate in effects.Effect_Kind {
-		found := effect_name(candidate, context.temp_allocator)
-		if found == name do return candidate, true
-	}
-	return {}, false
+	return effects.effect_kind_parse(name)
 }
 
 // Reseeding before the engine is built is what makes a run reproducible, and it

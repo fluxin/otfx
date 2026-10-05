@@ -110,21 +110,24 @@ published cell and its render node's published key supply that information.
 Initialization queues new IDs through the same path. Capacity follows particle
 capacity; no separate admission scan or full particle/cell-grid scan is required.
 
-Each particle has one 24-byte renderer-owned `Render_Node`, containing native
-intrusive-list links and a packed 64-bit `(layer, particle ID)` key.
-`xar.Array(Render_Node, 2)` supplies stable addresses and direct ID lookup.
-Preparation runs after engine/effect build and on population growth; the usual
-frame path checks population length once. This also supports Thunderstorm's
-playback-created particles. One reusable key array reserves against particle
-capacity for winner resolution.
+Each particle has one 12-byte renderer-owned `Render_Node` (`prev, next:
+Particle_Id` intrusive links plus published `layer: u32`) stored in a flat
+`[dynamic]Render_Node` indexed directly by `Particle_Id`. Preparation runs after
+engine/effect build and on population growth; the usual frame path checks
+population length once. This also supports Thunderstorm's playback-created
+particles. One reusable `(u64)` key scratch array reserves against particle
+capacity for lazy winner resolution.
 
-A 24-byte `Render_Cell` contains its intrusive-list header, winning ID,
-`unordered`/`needs_resolve` flags, and the encoded length of its slot. Arrivals append and
-compare their published key with the cached winner. An append below the previous
-tail marks the list unordered. Departures unlink their exact node directly;
-covered departures need neither a scan nor pixel dirtiness. An ordered winner
-departure exposes the tail. An unordered winner departure queues that cell once,
-clears its winner, and defers resolution until all queued particle changes finish.
+A 16-byte `Render_Cell` contains `head, tail, top: Particle_Id`,
+`flags: bit_set[Cell_Flag; u8]` (`Unordered`, `Needs_Resolve`), `slot_length: u8`,
+and cached `unit_width: u16` (`1` when its encoded glyph is single-column ASCII
+or blank, `0` otherwise). Arrivals append using `Particle_Id` index links and
+compare their `(layer, id)` priority with the cached winner. An append below the
+previous tail marks the list `Unordered`. Departures unlink by `Particle_Id`
+index directly; covered departures need neither a scan nor pixel dirtiness. An
+ordered winner departure exposes `tail`. An unordered winner departure marks
+`Needs_Resolve`, queues that cell once, clears `top`, and defers resolution
+until all queued particle changes finish.
 
 Composition drains each queued ID once, unlinking old membership and appending
 final membership only when its cell or layer changes. Published node keys stay
@@ -184,10 +187,11 @@ never change once prepared: selecting the ID a particle already uses is a no-op,
 and a different style is a new prepared appearance or a local edit. All queued
 publication happens before any prefix is encoded.
 
-The renderer copies that prefix, encodes the particle's rune, appends the reset,
-and clears the cell slot's unused tail. There are no glyph or appearance maps.
-Particles retain no complete packet or `Packet_Fields`; prefixes belong to
-appearances. `.Always` selects the initial appearance for rendering.
+The renderer copies that prefix, encodes the particle's rune (or `' '` when the
+rune is zero), appends the reset when styled, and stores the encoded byte count
+in `slot_length`. There are no glyph or appearance maps. Particles retain no
+complete packet or `Packet_Fields`; prefixes belong to appearances. `.Always`
+selects the initial appearance for rendering.
 
 `write_particle` prepares a local appearance copy when needed and uses the same
 packet writer with a local 51-byte buffer. It does not populate retained prefixes
@@ -221,11 +225,13 @@ Construction marks every cell, so the first frame paints the whole canvas.
 frame into the engine-owned `output` buffer: the frame origin, then each run of
 adjacent changed cells. A run starts with a cursor-next-line (`ESC[nE`) when its
 row differs from the cursor's, and a cursor-character-absolute (`ESC[nG`) unless
-it starts in column one. Unchanged cells never reach the terminal, and absolute
-columns keep glyph-width differences from drifting along a row. Each slot is
-copied whole at its fixed size, and the frame advances only past the cell's
-encoded bytes, so slot padding is never emitted. `output` is sized at
-construction for the worst case, every cell its own run with both moves.
+it starts in column one or continues immediately after a cell whose cached
+`unit_width == 1`. Unchanged cells never reach the terminal, and `ESC[nG]` after
+any potentially wide/ambiguous glyph keeps glyph-width differences from drifting
+along a row while contiguous single-column runs stream without redundant cursor
+positioning. Each slot is copied whole at its fixed size, and the frame advances
+only past the cell's encoded bytes, so slot padding is never emitted. `output` is
+sized at construction for the worst case, every cell its own run with both moves.
 
 `print_frame` writes that buffer with `write_all`, which retries short writes
 from the exact byte and handles EINTR. `frame_bytes(e, allocator)` returns a
@@ -244,9 +250,8 @@ cleanup in the same way.
 `compose_frame` updates admission independently of emission. Pending cell
 changes survive composition-only calls. Slots and the output buffer are
 allocated once at construction and never grow during playback.
-Playback storage tests enforce allocation-free bounded cases. Four currently
-fail because the experimental cell arrays grow during playback; those tests
-have not been weakened.
+All 92 tests in `odin test tests` pass with memory-leak tracking enabled,
+including playback storage tests enforcing allocation-free bounded execution.
 
 ## Lifetime and resize
 
@@ -257,9 +262,10 @@ resize handler. Effects may animate outside the viewport; the engine clips at
 membership publication, and those particles can later re-enter.
 
 Input and fill populations are counted before SoA initialization. Ordinary
-`add_particle(e, symbol, position)` grows storage automatically. A known generated
-population can use `particle_batch(e, count)`; callers never reserve internal
-renderer arrays. Borrowed SoA column slices must not survive particle growth.
+`add_particle(e, symbol, appearance_id, position)` grows storage automatically.
+A known generated population can pre-size storage with `reserve_particles(e, count)`
+or `particle_batch(e, count)`; callers never reserve internal renderer arrays
+directly. Borrowed SoA column slices must not survive particle growth.
 
 ## Shared animation work
 
@@ -273,10 +279,13 @@ color samples may skip calculation while the final particle remains visible.
 Rings and Middleout skip unchanged color samples; Decrypt retires completed tails.
 
 Animation still runs frame by frame. Smoke, Burn, and Laseretch precompute compact
-traversal/arrival data, not rendered frames. Thunderstorm generates recursive
-geometry into reusable particle pools; visibility admits only revealed segments.
-Its variable branches and sparks may grow during playback rather than imposing
-a cap that drops geometry.
+traversal/arrival data, not rendered frames.
+
+### Thunderstorm
+
+Thunderstorm generates recursive geometry into reusable particle pools; visibility
+admits only revealed segments. Its variable branches and sparks may grow during
+playback rather than imposing a cap that drops geometry.
 
 ## Diagnostics
 

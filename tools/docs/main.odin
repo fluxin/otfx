@@ -214,10 +214,10 @@ raster_render_cells :: proc(
 				cell_background,
 			)
 		}
-		if e.particles[id].symbol == 0 do continue
+		ch := e.particles.symbol[id]
+		if ch == 0 do continue
 		fg := Foreground
 		if color, ok := appearance.colors.fg.?; ok do fg = color_pixel(color)
-		ch := e.particles[id].symbol
 		if shape, is_shape := block_for(ch); is_shape {
 			raster_shape(r, column, screen_row, shape, fg, cell_background)
 		} else if shape, is_shape := box_for(ch); is_shape {
@@ -245,7 +245,7 @@ preview_start :: proc(kind: effects.Effect_Kind, text: string) -> (run: common.R
 	cfg.terminal_background_color = {Background[0], Background[1], Background[2]}
 
 	run, ok = common.run_make(kind, demo_args(kind), cfg, text, Preview_Seed)
-	if !ok do fmt.eprintfln("failed to build the %s preview", effect_name(kind, context.temp_allocator))
+	if !ok do fmt.eprintfln("failed to build the %s preview", effect_name(kind))
 	return run, ok
 }
 
@@ -431,16 +431,18 @@ main :: proc() {
 	// Optional effect names restrict the run, so a single preview can be
 	// re-rendered while iterating instead of rebuilding the whole gallery.
 	selected := os.args[1:]
+	for argument in selected {
+		if _, known := common.effect_kind_from_name(argument); !known {
+			fmt.eprintfln("unknown effect: %s", argument)
+			os.exit(2)
+		}
+	}
 	for kind in effects.Effect_Kind {
 		name := effect_name(kind)
 		wanted := len(selected) == 0
 		for argument in selected do wanted |= argument == name
-		if !wanted {
-			delete(name)
-			continue
-		}
+		if !wanted do continue
 		if !gif_write_preview(kind, name, text, &chain, &quantizer) do os.exit(1)
-		delete(name)
 		free_all(context.temp_allocator)
 	}
 }

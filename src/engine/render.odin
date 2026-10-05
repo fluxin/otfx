@@ -2,8 +2,6 @@ package engine
 
 import "base:intrinsics"
 import "core:container/bit_array"
-import "core:container/intrusive/list"
-import "core:container/xar"
 import "core:sort"
 import "core:time"
 
@@ -15,35 +13,68 @@ Render_Key :: bit_field u64 {
 	layer: u32 | 32,
 }
 
+// Flat 12-byte index-linked node indexed directly by Particle_Id.
+// Index links survive [dynamic]Render_Node growth without pointer indirection.
 Render_Node :: struct {
-	link: list.Node,
-	key:  Render_Key,
+	prev, next: Particle_Id,
+	layer:      u32,
 }
+#assert(size_of(Render_Node) == 12)
 
+// Compact 16-byte cell (four cells per 64-byte cache line).
 Render_Cell :: struct {
-	occupants:     list.List,
-	top:           Particle_Id,
-	unordered:     bool,
-	needs_resolve: bool,
-	length:        u8, // encoded bytes at the front of the cell's slot
+	head, tail, top: Particle_Id,
+	unordered:       bool,
+	needs_resolve:   bool,
+	unit_width:      bool, // winning glyph advances terminal cursor by 1 column
+	length:          u8, // encoded bytes at the front of the cell's slot
+}
+#assert(size_of(Render_Cell) == 16)
+
+render_node_key :: #force_inline proc(id: Particle_Id, layer: u32) -> Render_Key {
+	return Render_Key{id = u32(id), layer = layer}
 }
 
 // Prepare once after engine/effect build, and again only if playback adds IDs.
-// SHIFT=2 gives the installed xar enough chunk-table entries for all u32 IDs.
 render_prepare :: proc(e: ^Engine) {
-	if xar.len(e.render_nodes) == len(e.particles) do return
+	old_len := len(e.render_nodes)
+	if old_len == len(e.particles) do return
 	reserve(&e.render_keys, cap(e.particles))
-	for xar.len(e.render_nodes) < len(e.particles) {
-		_, err := xar.append(&e.render_nodes, Render_Node{})
-		assert(err == nil)
+	resize(&e.render_nodes, len(e.particles))
+	#no_bounds_check for i in old_len ..< len(e.render_nodes) {
+		e.render_nodes[i] = {prev = NO_PARTICLE, next = NO_PARTICLE}
 	}
 }
 
 @(private)
-cell_tail :: #force_inline proc(cell: ^Render_Cell) -> ^Render_Node {
-	it := list.iterator_tail(cell.occupants, Render_Node, "link")
-	node, _ := list.iterate_prev(&it)
-	return node
+cell_push_back :: #force_inline proc(e: ^Engine, cell: ^Render_Cell, id: Particle_Id) #no_bounds_check {
+	node := &e.render_nodes[id]
+	tail := cell.tail
+	node.prev = tail
+	node.next = NO_PARTICLE
+	if tail != NO_PARTICLE {
+		e.render_nodes[tail].next = id
+	} else {
+		cell.head = id
+	}
+	cell.tail = id
+}
+
+@(private)
+cell_unlink :: #force_inline proc(e: ^Engine, cell: ^Render_Cell, id: Particle_Id) #no_bounds_check {
+	node := &e.render_nodes[id]
+	prev, next := node.prev, node.next
+	if prev != NO_PARTICLE {
+		e.render_nodes[prev].next = next
+	} else {
+		cell.head = next
+	}
+	if next != NO_PARTICLE {
+		e.render_nodes[next].prev = prev
+	} else {
+		cell.tail = prev
+	}
+	node.prev, node.next = NO_PARTICLE, NO_PARTICLE
 }
 
 Render_Row :: struct {
@@ -52,8 +83,8 @@ Render_Row :: struct {
 
 // Accumulate change kinds; queue each ID once. Published placement lives in its node.
 queue_particle :: #force_inline proc(e: ^Engine, id: Particle_Id, change: Particle_Flag) #no_bounds_check {
-	flags := e.particles[id].flags
-	e.particles[id].flags = flags + {change, .Update_Queued}
+	flags := e.particles.flags[id]
+	e.particles.flags[id] = flags + {change, .Update_Queued}
 	if .Update_Queued in flags do return
 	append(&e.updates, id)
 }
@@ -93,21 +124,20 @@ next_set_bit :: #force_inline proc(it: ^bit_array.Bit_Array_Iterator) -> (index:
 
 // A known node unlinks directly, even when it is covered and the cell unordered.
 cell_remove :: proc(e: ^Engine, id: Particle_Id) #no_bounds_check {
-	index := e.particles[id].cell
+	index := e.particles.cell[id]
 	cell := &e.cells[index]
-	node := xar.get_ptr(&e.render_nodes, id)
-	list.remove(&cell.occupants, &node.link)
-	e.particles[id].cell = -1
+	cell_unlink(e, cell, id)
+	e.particles.cell[id] = -1
 	if cell.top != id do return
 	cell.top = NO_PARTICLE
 	mark_cell_dirty(e, index)
-	if list.is_empty(&cell.occupants) {
+	if cell.head == NO_PARTICLE {
 		cell.unordered = false
 	} else if cell.unordered {
 		cell.needs_resolve = true
 		append(&e.resolve_cells, index)
 	} else {
-		cell.top = Particle_Id(cell_tail(cell).key.id)
+		cell.top = cell.tail
 	}
 }
 
@@ -116,38 +146,37 @@ cell_remove :: proc(e: ^Engine, id: Particle_Id) #no_bounds_check {
 cell_resolve :: proc(e: ^Engine, index: int) #no_bounds_check {
 	cell := &e.cells[index]
 	clear(&e.render_keys)
-	it := list.iterator_head(cell.occupants, Render_Node, "link")
-	for node in list.iterate_next(&it) do append(&e.render_keys, node.key)
-	if cell.unordered do sort.quick_sort(transmute([]u64)e.render_keys[:])
-	cell.occupants = {}
-	for key in e.render_keys {
-		node := xar.get_ptr(&e.render_nodes, key.id)
-		list.push_back(&cell.occupants, &node.link)
+	for id := cell.head; id != NO_PARTICLE; id = e.render_nodes[id].next {
+		append(&e.render_keys, render_node_key(id, e.render_nodes[id].layer))
 	}
-	cell.top = NO_PARTICLE
-	if len(e.render_keys) > 0 do cell.top = Particle_Id(e.render_keys[len(e.render_keys) - 1].id)
+	if cell.unordered do sort.quick_sort(transmute([]u64)e.render_keys[:])
+	cell.head, cell.tail = NO_PARTICLE, NO_PARTICLE
+	for key in e.render_keys {
+		cell_push_back(e, cell, Particle_Id(key.id))
+	}
+	cell.top = cell.tail
 	cell.unordered = false
 	cell.needs_resolve = false
 }
 
 cell_insert :: proc(e: ^Engine, index: int, id: Particle_Id) #no_bounds_check {
 	cell := &e.cells[index]
-	layer := e.particles[id].layer
+	layer := e.particles.layer[id]
 	assert(layer >= 0 && layer < max(int), "layer must be a nonnegative array index")
 	assert(u64(layer) <= u64(max(u32)), "layer exceeds 32-bit render key")
-	node := xar.get_ptr(&e.render_nodes, id)
-	node.key = Render_Key {
-		id    = u32(id),
-		layer = u32(layer),
+	node_layer := u32(layer)
+	e.render_nodes[id].layer = node_layer
+	node_key := transmute(u64)render_node_key(id, node_layer)
+	if tail := cell.tail; tail != NO_PARTICLE {
+		if transmute(u64)render_node_key(tail, e.render_nodes[tail].layer) > node_key {
+			cell.unordered = true
+		}
 	}
-	if tail := cell_tail(cell); tail != nil && transmute(u64)tail.key > transmute(u64)node.key {
-		cell.unordered = true
-	}
-	list.push_back(&cell.occupants, &node.link)
-	e.particles[id].cell = index
+	cell_push_back(e, cell, id)
+	e.particles.cell[id] = index
 	if cell.needs_resolve do return
 	if cell.top == NO_PARTICLE ||
-	   transmute(u64)node.key > transmute(u64)xar.get_ptr(&e.render_nodes, cell.top).key {
+	   node_key > transmute(u64)render_node_key(cell.top, e.render_nodes[cell.top].layer) {
 		cell.top = id
 		mark_cell_dirty(e, index)
 	}
@@ -171,19 +200,19 @@ compose_frame :: proc(e: ^Engine) {
 	// Queue insertion accesses the particle with checks on; IDs are never removed.
 	// Published cells come from cell_index, and all SoA columns share one length.
 	#no_bounds_check for id in e.updates {
-		changes := e.particles[id].flags
-		e.particles[id].flags -= {.Update_Queued, .Placement_Changed, .Content_Changed}
+		changes := e.particles.flags[id]
+		e.particles.flags[id] -= {.Update_Queued, .Placement_Changed, .Content_Changed}
 		when FRAME_STATS_ENABLED {e.stats.candidate_visits += 1}
-		cell := e.particles[id].cell
+		cell := e.particles.cell[id]
 		if .Placement_Changed in changes {
 			previous_cell := cell
-			cell = cell_index(e, e.particles[id].current_coord) if .Visible in changes else -1
+			cell = cell_index(e, e.particles.current_coord[id]) if .Visible in changes else -1
 			if previous_cell >= 0 &&
 			   (cell != previous_cell ||
-					   e.particles[id].layer != int(xar.get_ptr(&e.render_nodes, id).key.layer)) {
+					   e.particles.layer[id] != int(e.render_nodes[id].layer)) {
 				cell_remove(e, id)
 			}
-			if cell >= 0 && e.particles[id].cell < 0 {
+			if cell >= 0 && e.particles.cell[id] < 0 {
 				cell_insert(e, cell, id)
 			}
 		}
@@ -199,10 +228,12 @@ patch_cell :: proc(e: ^Engine, index: int) #no_bounds_check {
 	cell, slot := &e.cells[index], &e.slots[index]
 	if id := cell.top; id != NO_PARTICLE {
 		cell.length = u8(encode_particle(e, id, slot[:]))
+		cell.unit_width = rune_columns(e.particles.symbol[id]) == 1
 	} else {
 		// A space erases the departed glyph and advances the cursor.
 		slot[0] = ' '
 		cell.length = 1
+		cell.unit_width = true
 	}
 	when FRAME_STATS_ENABLED {
 		e.stats.patched_cells += 1

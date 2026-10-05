@@ -95,6 +95,213 @@ Effect_Kind :: enum {
 	Thunderstorm,
 }
 
+Effect_Metadata :: struct {
+	name:       string,
+	blurb:      string,
+	flag_names: string,
+}
+
+@(rodata)
+Effect_Catalog := [Effect_Kind]Effect_Metadata {
+	.Slide = {
+		name       = "slide",
+		blurb      = "slide characters in from outside the canvas",
+		flag_names = "--movement-speed --grouping --gap --reverse-direction --merge --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+	.Beams = {
+		name       = "beams",
+		blurb      = "beams illuminate the canvas",
+		flag_names = "--beam-row-symbols --beam-column-symbols --beam-delay --beam-row-speed-range --beam-column-speed-range --beam-gradient-stops --beam-gradient-steps --beam-gradient-frames --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction --final-wipe-speed",
+	},
+	.Rings = {
+		name       = "rings",
+		blurb      = "characters form spinning rings",
+		flag_names = "--ring-colors --ring-gap --spin-duration --spin-speed --disperse-duration --spin-disperse-cycles --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Waves = {
+		name       = "waves",
+		blurb      = "waves travel across the text",
+		flag_names = "--wave-symbols --wave-gradient-stops --wave-gradient-steps --wave-count --wave-length --wave-direction --wave-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Matrix = {
+		name       = "matrix",
+		blurb      = "matrix digital rain",
+		flag_names = "--highlight-color --rain-color-gradient --rain-symbols --rain-fall-delay-range --rain-column-delay-range --rain-time --symbol-swap-chance --color-swap-chance --resolve-delay --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+	.Decrypt = {
+		name       = "decrypt",
+		blurb      = "movie-style decryption",
+		flag_names = "--typing-speed --ciphertext-colors --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Rain = {
+		name       = "rain",
+		blurb      = "rain drops from the top",
+		flag_names = "--rain-colors --movement-speed --rain-symbols --final-gradient-stops --final-gradient-steps --final-gradient-direction --movement-easing",
+	},
+	.Wipe = {
+		name       = "wipe",
+		blurb      = "wipe the text into view",
+		flag_names = "--wipe-direction --wipe-delay --wipe-ease --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+	.Scattered = {
+		name       = "scattered",
+		blurb      = "scatter and reassemble",
+		flag_names = "--movement-speed --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+	.Expand = {
+		name       = "expand",
+		blurb      = "expand from the center",
+		flag_names = "--expand-easing --movement-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Middleout = {
+		name       = "middleout",
+		blurb      = "expand from the middle row",
+		flag_names = "--starting-color --expand-direction --center-movement-speed --full-movement-speed --center-easing --full-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Colorshift = {
+		name       = "colorshift",
+		blurb      = "shifting color gradient",
+		flag_names = "--gradient-stops --gradient-steps --gradient-frames --no-travel --travel-direction --reverse-travel-direction --no-loop --cycles --skip-final-gradient --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Highlight = {
+		name       = "highlight",
+		blurb      = "specular highlight sweep",
+		flag_names = "--highlight-brightness --highlight-direction --highlight-width --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Sweep = {
+		name       = "sweep",
+		blurb      = "sweep reveal, then color",
+		flag_names = "--sweep-symbols --first-sweep-direction --second-sweep-direction --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Randomsequence = {
+		name       = "randomsequence",
+		blurb      = "random reveal sequence",
+		flag_names = "--speed --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+	.Pour = {
+		name       = "pour",
+		blurb      = "pour characters into place",
+		flag_names = "--pour-direction --pour-speed --movement-speed-range --gap --starting-color --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction --movement-easing",
+	},
+	.Bouncyballs = {
+		name       = "bouncyballs",
+		blurb      = "drop bouncing balls into place",
+		flag_names = "--ball-colors --ball-symbols --ball-delay --movement-speed --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Spray = {
+		name       = "spray",
+		blurb      = "spray characters from one point",
+		flag_names = "--spray-position --spray-volume --movement-speed-range --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Slice = {
+		name       = "slice",
+		blurb      = "slide sliced text halves into place",
+		flag_names = "--slice-direction --movement-speed --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Overflow = {
+		name       = "overflow",
+		blurb      = "overflow shuffled rows before settling",
+		flag_names = "--overflow-gradient-stops --overflow-cycles-range --overflow-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Print = {
+		name       = "print",
+		blurb      = "type lines with a moving print head",
+		flag_names = "--print-head-return-speed --print-speed --print-head-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Errorcorrect = {
+		name       = "errorcorrect",
+		blurb      = "swap misplaced characters back into place",
+		flag_names = "--error-pairs --swap-delay --error-color --correct-color --movement-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Unstable = {
+		name       = "unstable",
+		blurb      = "rumble, explode, and reassemble the text",
+		flag_names = "--unstable-color --explosion-ease --explosion-speed --reassembly-ease --reassembly-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Smoke = {
+		name       = "smoke",
+		blurb      = "flood the text with a rising smoke front",
+		flag_names = "--starting-color --smoke-symbols --smoke-gradient-stops --use-whole-canvas --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Burn = {
+		name       = "burn",
+		blurb      = "burn characters into their final color",
+		flag_names = "--starting-color --burn-colors --smoke-chance --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Crumble = {
+		name       = "crumble",
+		blurb      = "crumble, vacuum, and restore the text",
+		flag_names = "--final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Fireworks = {
+		name       = "fireworks",
+		blurb      = "launch shells that bloom into the text",
+		flag_names = "--explode-anywhere --firework-colors --firework-symbol --firework-volume --launch-delay --explode-distance --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Spotlights = {
+		name       = "spotlights",
+		blurb      = "search the text with moving spotlights",
+		flag_names = "--beam-width-ratio --beam-falloff --search-duration --search-speed-range --spotlight-count --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Vhstape = {
+		name       = "vhstape",
+		blurb      = "glitch rows, add static, then redraw",
+		flag_names = "--glitch-line-colors --glitch-wave-colors --noise-colors --glitch-line-chance --noise-chance --total-glitch-time --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Orbittingvolley = {
+		name       = "orbittingvolley",
+		blurb      = "orbiting launchers volley text into place",
+		flag_names = "--top-launcher-symbol --right-launcher-symbol --bottom-launcher-symbol --left-launcher-symbol --launcher-movement-speed --character-movement-speed --volley-size --launch-delay --character-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Synthgrid = {
+		name       = "synthgrid",
+		blurb      = "grow a synth grid and generate the text",
+		flag_names = "--grid-gradient-stops --grid-gradient-steps --grid-gradient-direction --text-gradient-stops --text-gradient-steps --text-gradient-direction --grid-row-symbol --grid-column-symbol --text-generation-symbols --max-active-blocks",
+	},
+	.Bubbles = {
+		name       = "bubbles",
+		blurb      = "float text in bubbles, pop, and settle",
+		flag_names = "--rainbow --bubble-colors --pop-color --bubble-speed --bubble-delay --pop-condition --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Binarypath = {
+		name       = "binarypath",
+		blurb      = "send binary glyphs through the canvas",
+		flag_names = "--binary-colors --movement-speed --active-binary-groups --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Swarm = {
+		name       = "swarm",
+		blurb      = "move glyphs through coordinated swarms",
+		flag_names = "--base-color --flash-color --swarm-size --swarm-coordination --swarm-area-count-range --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Laseretch = {
+		name       = "laseretch",
+		blurb      = "etch text with a scanning laser",
+		flag_names = "--etch-pattern --etch-speed --etch-delay --cool-gradient-stops --laser-gradient-stops --spark-gradient-stops --spark-cooling-frames --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+	.Blackhole = {
+		name       = "blackhole",
+		blurb      = "form, collapse, and explode a black hole",
+		flag_names = "--blackhole-color --star-colors --final-gradient-stops --final-gradient-steps --final-gradient-direction",
+	},
+	.Thunderstorm = {
+		name       = "thunderstorm",
+		blurb      = "rain and lightning strike through the text",
+		flag_names = "--lightning-color --glowing-text-color --text-glow-time --raindrop-symbols --spark-symbols --spark-glow-color --spark-glow-time --storm-time --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction",
+	},
+}
+
+effect_name :: #force_inline proc(kind: Effect_Kind) -> string {
+	return Effect_Catalog[kind].name
+}
+
+effect_kind_parse :: proc(name: string) -> (Effect_Kind, bool) {
+	catalog := Effect_Catalog
+	for kind in Effect_Kind {
+		if catalog[kind].name == name do return kind, true
+	}
+	return .Slide, false
+}
+
 make_effect :: proc(kind: Effect_Kind, args: []string) -> (Effect, bool) {
 	switch kind {
 	case .Slide:
@@ -476,6 +683,12 @@ opt_value :: proc(args: []string, i: ^int, value: string, has_value: bool) -> (s
 	return "", false
 }
 
+parse_bool_flag :: #force_inline proc(ptr: ^bool, has_value: bool) -> bool {
+	if has_value do return false
+	ptr^ = true
+	return true
+}
+
 parse_int_flag :: proc(
 	ptr: ^int,
 	args: []string,
@@ -484,10 +697,9 @@ parse_int_flag :: proc(
 	has_value: bool,
 	minimum := 1,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	n, ok2 := strconv.parse_int(v)
-	if !ok2 || n < minimum do return false
+	v := opt_value(args, i, value, has_value) or_return
+	n := strconv.parse_int(v) or_return
+	if n < minimum do return false
 	ptr^ = int(n)
 	return true
 }
@@ -499,10 +711,9 @@ parse_float_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	f, ok2 := strconv.parse_f64(v)
-	if !ok2 || math.is_nan(f) || math.is_inf(f) do return false
+	v := opt_value(args, i, value, has_value) or_return
+	f := strconv.parse_f64(v) or_return
+	if math.is_nan(f) || math.is_inf(f) do return false
 	ptr^ = f
 	return true
 }
@@ -514,11 +725,8 @@ parse_color_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	c, ok2 := engine.parse_cli_color(v)
-	if !ok2 do return false
-	ptr^ = c
+	v := opt_value(args, i, value, has_value) or_return
+	ptr^ = engine.parse_cli_color(v) or_return
 	return true
 }
 
@@ -527,9 +735,13 @@ parse_color_flag :: proc(
 opt_list_values :: proc(args: []string, i: ^int, value: string, has_value: bool) -> []string {
 	v, ok := opt_value(args, i, value, has_value)
 	if !ok do return nil
-	fields := make([dynamic]string, 0, context.temp_allocator)
+	fields := make([dynamic]string, context.temp_allocator)
 	for {
-		append(&fields, ..strings.split(v, " ", context.temp_allocator))
+		if v == " " {
+			append(&fields, v)
+		} else {
+			append(&fields, ..strings.fields(v, context.temp_allocator))
+		}
 		if i^ + 1 == len(args) || strings.has_prefix(args[i^ + 1], "--") do break
 		i^ += 1
 		v = args[i^]
@@ -548,8 +760,7 @@ parse_colors_flag :: proc(
 	if len(fields) == 0 do return false
 	clear(list)
 	for field in fields {
-		c, ok2 := engine.parse_cli_color(field)
-		if !ok2 do return false
+		c := engine.parse_cli_color(field) or_return
 		append(list, c)
 	}
 	return true
@@ -566,8 +777,8 @@ parse_ints_flag :: proc(
 	if len(fields) == 0 do return false
 	clear(list)
 	for field in fields {
-		n, ok2 := strconv.parse_int(field)
-		if !ok2 || n <= 0 do return false
+		n := strconv.parse_int(field) or_return
+		if n <= 0 do return false
 		append(list, int(n))
 	}
 	return true
@@ -580,11 +791,8 @@ parse_ease_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	en, ok2 := engine.easing_parse(v)
-	if !ok2 do return false
-	ptr^ = en
+	v := opt_value(args, i, value, has_value) or_return
+	ptr^ = engine.easing_parse(v) or_return
 	return true
 }
 
@@ -595,11 +803,8 @@ parse_gdir_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	d, ok2 := engine.gdir_parse(v)
-	if !ok2 do return false
-	ptr^ = d
+	v := opt_value(args, i, value, has_value) or_return
+	ptr^ = engine.gdir_parse(v) or_return
 	return true
 }
 
@@ -610,12 +815,16 @@ parse_group_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	g, ok2 := engine.group_parse(v)
-	if !ok2 do return false
-	ptr^ = g
+	v := opt_value(args, i, value, has_value) or_return
+	ptr^ = engine.group_parse(v) or_return
 	return true
+}
+
+decode_single_symbol :: proc(s: string) -> (rune, bool) {
+	symbol, rune_bytes := utf8.decode_rune(s)
+	if rune_bytes == 0 || rune_bytes != len(s) || !utf8.valid_string(s) do return 0, false
+	if symbol < 0x20 || (symbol >= 0x7f && symbol <= 0x9f) do return 0, false
+	return symbol, true
 }
 
 parse_symbol_flag :: proc(
@@ -625,11 +834,8 @@ parse_symbol_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	symbol, rune_bytes := utf8.decode_rune(v)
-	if rune_bytes == 0 || rune_bytes != len(v) || !utf8.valid_string(v) do return false
-	ptr^ = symbol
+	v := opt_value(args, i, value, has_value) or_return
+	ptr^ = decode_single_symbol(v) or_return
 	return true
 }
 
@@ -644,8 +850,7 @@ parse_symbols_flag :: proc(
 	if len(fields) == 0 do return false
 	clear(list)
 	for field in fields {
-		symbol, rune_bytes := utf8.decode_rune(field)
-		if rune_bytes == 0 || rune_bytes != len(field) || !utf8.valid_string(field) do return false
+		symbol := decode_single_symbol(field) or_return
 		append(list, symbol)
 	}
 	return true
@@ -658,13 +863,11 @@ parse_float_range_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	lo_s, hi_s, ok2 := split_range(v)
-	if !ok2 do return false
-	lo, lok := strconv.parse_f64(lo_s)
-	hi, hok := strconv.parse_f64(hi_s)
-	if !lok || !hok || math.is_nan(lo) || math.is_inf(lo) || math.is_nan(hi) || math.is_inf(hi) || lo <= 0 || lo > hi do return false
+	v := opt_value(args, i, value, has_value) or_return
+	lo_s, hi_s := split_range(v) or_return
+	lo := strconv.parse_f64(lo_s) or_return
+	hi := strconv.parse_f64(hi_s) or_return
+	if math.is_nan(lo) || math.is_inf(lo) || math.is_nan(hi) || math.is_inf(hi) || lo <= 0 || lo > hi do return false
 	ptr^ = {lo, hi}
 	return true
 }
@@ -676,13 +879,11 @@ parse_int_range_flag :: proc(
 	value: string,
 	has_value: bool,
 ) -> bool {
-	v, ok := opt_value(args, i, value, has_value)
-	if !ok do return false
-	lo_s, hi_s, ok2 := split_range(v)
-	if !ok2 do return false
-	lo, lok := strconv.parse_int(lo_s)
-	hi, hok := strconv.parse_int(hi_s)
-	if !lok || !hok || lo <= 0 || lo > hi do return false
+	v := opt_value(args, i, value, has_value) or_return
+	lo_s, hi_s := split_range(v) or_return
+	lo := strconv.parse_int(lo_s) or_return
+	hi := strconv.parse_int(hi_s) or_return
+	if lo <= 0 || lo > hi do return false
 	ptr^ = {int(lo), int(hi)}
 	return true
 }

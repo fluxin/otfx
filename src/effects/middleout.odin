@@ -96,7 +96,10 @@ Middleout_Motion :: struct {
 Middleout_State :: struct {
 	config:         Middleout_Config,
 	characters:     [dynamic]engine.Particle_Id,
+	coords:         [dynamic]engine.Coord,
 	final_colors:   [dynamic]engine.Color,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
 	columns, rows:  []Middleout_Motion,
 	center_limit:   int,
 	full_limit:     int,
@@ -110,8 +113,9 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -131,13 +135,39 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 	)
 	n := len(s.characters)
 	s.color_handling = e.cfg.existing_color_handling
+	s.coords = make([dynamic]engine.Coord, n)
 	s.final_colors = make([dynamic]engine.Color, n)
 	s.columns = make([]Middleout_Motion, e.canvas.right + 1)
 	s.rows = make([]Middleout_Motion, e.canvas.top + 1)
+	if n == 0 do return
+
+	starting_code := engine.prepare_appearance(e, {colors = {fg = s.config.starting_color}})
+	fade_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
+	starting := s.config.starting_color
 	vertical := s.config.expand_direction == .Vertical
+
 	for id, i in s.characters {
 		c := e.particles.initial_coord[id]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], c)
+		s.coords[i] = c
+		style := engine.get_initial_appearance(e, id)
+		if !engine.canvas_in(e.canvas, c) {
+			fade_tweens[i] = {from = {colors = {fg = starting}}, to = {colors = {fg = starting}}}
+			continue
+		}
+		final_color := engine.gradient_sample(sampler, spectrum[:], c)
+		s.final_colors[i] = final_color
+		if s.color_handling == .Dynamic {
+			fade_tweens[i] = {
+				from = {colors = {starting, starting}},
+				to   = {colors = style.colors},
+			}
+		} else {
+			fade_tweens[i] = {
+				from = {colors = {fg = starting}},
+				to   = {colors = {fg = final_color}},
+			}
+		}
 
 		e.particles.current_coord[id] = e.canvas.center
 		mid := engine.coord(c.column, e.canvas.center_row)
@@ -165,14 +195,18 @@ middleout_build :: proc(s: ^Middleout_State, e: ^engine.Engine) {
 			)
 			s.full_limit = max(s.full_limit, full.steps)
 		}
-		style := engine.get_initial_appearance(e, engine.Particle_Id(id))
 		fade_ticks :=
 			s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 6 : 66
 		s.full_limit = max(s.full_limit, fade_ticks)
-		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-		engine.set_appearance(e, id, engine.Appearance{colors = {fg = s.config.starting_color}})
+		engine.set_symbol(e, id, e.particles.initial_symbol[id])
+		engine.set_appearance(e, id, starting_code)
 		e.particles.flags[id] += {.Visible}
 	}
+
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	s.fades = engine.ramp_make(e, unique_tweens[:], 10)
 }
 
 middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool #no_bounds_check {
@@ -185,42 +219,33 @@ middleout_next :: proc(s: ^Middleout_State, e: ^engine.Engine) -> bool #no_bound
 	column_axis := (s.config.expand_direction == .Vertical) != s.phase_full
 	motions := s.columns if column_axis else s.rows
 	easing := s.config.full_easing if s.phase_full else s.config.center_easing
+	canvas_center := e.canvas.center
 	for &motion, value in motions {
 		motion.changed = false
 		if s.phase_tick >= motion.steps do continue
 		progress := f64(s.phase_tick + 1) / f64(motion.steps)
-		target := e.canvas.center
+		target := canvas_center
 		if column_axis do target.column = value
 		else do target.row = value
-		point := engine.tween(e.canvas.center, target, ease.ease(easing, progress))
+		point := engine.tween(canvas_center, target, ease.ease(easing, progress))
 		position := point.column if column_axis else point.row
 		motion.changed = position != motion.position
 		motion.position = position
 	}
-	for id in s.characters {
-		initial := e.particles.initial_coord[id]
+	for id, i in s.characters {
+		initial := s.coords[i]
 		value := initial.column if column_axis else initial.row
-		if !motions[value].changed do continue
-		point := initial if s.phase_full else e.canvas.center
+		if value < 0 || value >= len(motions) || !motions[value].changed do continue
+		point := initial if s.phase_full else canvas_center
 		if column_axis do point.column = motions[value].position
 		else do point.row = motions[value].position
-		engine.set_particle(e, id, point)
+		engine.set_position(e, id, point)
 	}
 	if s.phase_full && s.phase_tick <= 60 && s.phase_tick % 6 == 0 {
 		gradient_step := s.phase_tick / 6
 		for id, i in s.characters {
-			appearance := engine.get_appearance(e, id)
-			if s.color_handling == .Dynamic {
-				appearance.colors = engine.tween(engine.Color_Pair{s.config.starting_color, s.config.starting_color}, engine.get_initial_appearance(e, id).colors, 10, gradient_step)
-			} else {
-				appearance.colors.fg = engine.tween(
-					s.config.starting_color,
-					s.final_colors[i],
-					10,
-					gradient_step,
-				)
-			}
-			engine.set_appearance(e, id, appearance)
+			if !engine.canvas_in(e.canvas, s.coords[i]) do continue
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[i], gradient_step))
 		}
 	}
 	s.phase_tick += 1

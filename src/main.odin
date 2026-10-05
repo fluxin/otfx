@@ -64,322 +64,19 @@ Random_Effect_Order :: [37]Effect_Kind {
 }
 
 effect_kind_parse :: proc(name: string) -> (Effect_Kind, bool) {
-	for kind in Effect_Kind {
-		if effect_kind_name(kind) == name do return kind, true
-	}
-	return .Slide, false
+	return effects.effect_kind_parse(name)
 }
 
-effect_kind_name :: proc(kind: Effect_Kind) -> string {
-	switch kind {
-	case .Slide:
-		return "slide"
-	case .Beams:
-		return "beams"
-	case .Rings:
-		return "rings"
-	case .Waves:
-		return "waves"
-	case .Matrix:
-		return "matrix"
-	case .Decrypt:
-		return "decrypt"
-	case .Rain:
-		return "rain"
-	case .Wipe:
-		return "wipe"
-	case .Scattered:
-		return "scattered"
-	case .Expand:
-		return "expand"
-	case .Middleout:
-		return "middleout"
-	case .Colorshift:
-		return "colorshift"
-	case .Highlight:
-		return "highlight"
-	case .Sweep:
-		return "sweep"
-	case .Randomsequence:
-		return "randomsequence"
-	case .Pour:
-		return "pour"
-	case .Bouncyballs:
-		return "bouncyballs"
-	case .Spray:
-		return "spray"
-	case .Slice:
-		return "slice"
-	case .Overflow:
-		return "overflow"
-	case .Print:
-		return "print"
-	case .Errorcorrect:
-		return "errorcorrect"
-	case .Unstable:
-		return "unstable"
-	case .Smoke:
-		return "smoke"
-	case .Burn:
-		return "burn"
-	case .Crumble:
-		return "crumble"
-	case .Fireworks:
-		return "fireworks"
-	case .Spotlights:
-		return "spotlights"
-	case .Vhstape:
-		return "vhstape"
-	case .Orbittingvolley:
-		return "orbittingvolley"
-	case .Synthgrid:
-		return "synthgrid"
-	case .Bubbles:
-		return "bubbles"
-	case .Binarypath:
-		return "binarypath"
-	case .Swarm:
-		return "swarm"
-	case .Laseretch:
-		return "laseretch"
-	case .Blackhole:
-		return "blackhole"
-	case .Thunderstorm:
-		return "thunderstorm"
-	}
-	return "?"
+effect_kind_name :: #force_inline proc(kind: Effect_Kind) -> string {
+	return effects.Effect_Catalog[kind].name
 }
 
-effect_blurb :: proc(kind: Effect_Kind) -> string {
-	switch kind {
-	case .Slide:
-		return "slide characters in from outside the canvas"
-	case .Beams:
-		return "beams illuminate the canvas"
-	case .Rings:
-		return "characters form spinning rings"
-	case .Waves:
-		return "waves travel across the text"
-	case .Matrix:
-		return "matrix digital rain"
-	case .Decrypt:
-		return "movie-style decryption"
-	case .Rain:
-		return "rain drops from the top"
-	case .Wipe:
-		return "wipe the text into view"
-	case .Scattered:
-		return "scatter and reassemble"
-	case .Expand:
-		return "expand from the center"
-	case .Middleout:
-		return "expand from the middle row"
-	case .Colorshift:
-		return "shifting color gradient"
-	case .Highlight:
-		return "specular highlight sweep"
-	case .Sweep:
-		return "sweep reveal, then color"
-	case .Randomsequence:
-		return "random reveal sequence"
-	case .Pour:
-		return "pour characters into place"
-	case .Bouncyballs:
-		return "drop bouncing balls into place"
-	case .Spray:
-		return "spray characters from one point"
-	case .Slice:
-		return "slide sliced text halves into place"
-	case .Overflow:
-		return "overflow shuffled rows before settling"
-	case .Print:
-		return "type lines with a moving print head"
-	case .Errorcorrect:
-		return "swap misplaced characters back into place"
-	case .Unstable:
-		return "rumble, explode, and reassemble the text"
-	case .Smoke:
-		return "flood the text with a rising smoke front"
-	case .Burn:
-		return "burn characters into their final color"
-	case .Crumble:
-		return "crumble, vacuum, and restore the text"
-	case .Fireworks:
-		return "launch shells that bloom into the text"
-	case .Spotlights:
-		return "search the text with moving spotlights"
-	case .Vhstape:
-		return "glitch rows, add static, then redraw"
-	case .Orbittingvolley:
-		return "orbiting launchers volley text into place"
-	case .Synthgrid:
-		return "grow a synth grid and generate the text"
-	case .Bubbles:
-		return "float text in bubbles, pop, and settle"
-	case .Binarypath:
-		return "send binary glyphs through the canvas"
-	case .Swarm:
-		return "move glyphs through coordinated swarms"
-	case .Laseretch:
-		return "etch text with a scanning laser"
-	case .Blackhole:
-		return "form, collapse, and explode a black hole"
-	case .Thunderstorm:
-		return "rain and lightning strike through the text"
-	}
-	return "?"
+effect_blurb :: #force_inline proc(kind: Effect_Kind) -> string {
+	return effects.Effect_Catalog[kind].blurb
 }
 
-effect_flag_names :: proc(kind: Effect_Kind) -> string {
-	switch kind {
-	case .Slide:
-		return(
-			"--movement-speed --grouping --gap --reverse-direction --merge --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	case .Beams:
-		return(
-			"--beam-row-symbols --beam-column-symbols --beam-delay --beam-row-speed-range --beam-column-speed-range --beam-gradient-stops --beam-gradient-steps --beam-gradient-frames --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction --final-wipe-speed" \
-		)
-	case .Rings:
-		return(
-			"--ring-colors --ring-gap --spin-duration --spin-speed --disperse-duration --spin-disperse-cycles --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Waves:
-		return(
-			"--wave-symbols --wave-gradient-stops --wave-gradient-steps --wave-count --wave-length --wave-direction --wave-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Matrix:
-		return(
-			"--highlight-color --rain-color-gradient --rain-symbols --rain-fall-delay-range --rain-column-delay-range --rain-time --symbol-swap-chance --color-swap-chance --resolve-delay --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	case .Decrypt:
-		return(
-			"--typing-speed --ciphertext-colors --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Rain:
-		return(
-			"--rain-colors --movement-speed --rain-symbols --final-gradient-stops --final-gradient-steps --final-gradient-direction --movement-easing" \
-		)
-	case .Wipe:
-		return(
-			"--wipe-direction --wipe-delay --wipe-ease --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	case .Scattered:
-		return(
-			"--movement-speed --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	case .Expand:
-		return(
-			"--expand-easing --movement-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Middleout:
-		return(
-			"--starting-color --expand-direction --center-movement-speed --full-movement-speed --center-easing --full-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Colorshift:
-		return(
-			"--gradient-stops --gradient-steps --gradient-frames --no-travel --travel-direction --reverse-travel-direction --no-loop --cycles --skip-final-gradient --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Highlight:
-		return(
-			"--highlight-brightness --highlight-direction --highlight-width --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Sweep:
-		return(
-			"--sweep-symbols --first-sweep-direction --second-sweep-direction --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Randomsequence:
-		return(
-			"--speed --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	case .Pour:
-		return(
-			"--pour-direction --pour-speed --movement-speed-range --gap --starting-color --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction --movement-easing" \
-		)
-	case .Bouncyballs:
-		return(
-			"--ball-colors --ball-symbols --ball-delay --movement-speed --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Spray:
-		return(
-			"--spray-position --spray-volume --movement-speed-range --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Slice:
-		return(
-			"--slice-direction --movement-speed --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Overflow:
-		return(
-			"--overflow-gradient-stops --overflow-cycles-range --overflow-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Print:
-		return(
-			"--print-head-return-speed --print-speed --print-head-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Errorcorrect:
-		return(
-			"--error-pairs --swap-delay --error-color --correct-color --movement-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Unstable:
-		return(
-			"--unstable-color --explosion-ease --explosion-speed --reassembly-ease --reassembly-speed --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Smoke:
-		return(
-			"--starting-color --smoke-symbols --smoke-gradient-stops --use-whole-canvas --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Burn:
-		return(
-			"--starting-color --burn-colors --smoke-chance --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Crumble:
-		return "--final-gradient-stops --final-gradient-steps --final-gradient-direction"
-	case .Fireworks:
-		return(
-			"--explode-anywhere --firework-colors --firework-symbol --firework-volume --launch-delay --explode-distance --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Spotlights:
-		return(
-			"--beam-width-ratio --beam-falloff --search-duration --search-speed-range --spotlight-count --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Vhstape:
-		return(
-			"--glitch-line-colors --glitch-wave-colors --noise-colors --glitch-line-chance --noise-chance --total-glitch-time --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Orbittingvolley:
-		return(
-			"--top-launcher-symbol --right-launcher-symbol --bottom-launcher-symbol --left-launcher-symbol --launcher-movement-speed --character-movement-speed --volley-size --launch-delay --character-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Synthgrid:
-		return(
-			"--grid-gradient-stops --grid-gradient-steps --grid-gradient-direction --text-gradient-stops --text-gradient-steps --text-gradient-direction --grid-row-symbol --grid-column-symbol --text-generation-symbols --max-active-blocks" \
-		)
-	case .Bubbles:
-		return(
-			"--rainbow --bubble-colors --pop-color --bubble-speed --bubble-delay --pop-condition --movement-easing --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Binarypath:
-		return(
-			"--binary-colors --movement-speed --active-binary-groups --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Swarm:
-		return(
-			"--base-color --flash-color --swarm-size --swarm-coordination --swarm-area-count-range --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Laseretch:
-		return(
-			"--etch-pattern --etch-speed --etch-delay --cool-gradient-stops --laser-gradient-stops --spark-gradient-stops --spark-cooling-frames --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	case .Blackhole:
-		return(
-			"--blackhole-color --star-colors --final-gradient-stops --final-gradient-steps --final-gradient-direction" \
-		)
-	case .Thunderstorm:
-		return(
-			"--lightning-color --glowing-text-color --text-glow-time --raindrop-symbols --spark-symbols --spark-glow-color --spark-glow-time --storm-time --final-gradient-stops --final-gradient-steps --final-gradient-frames --final-gradient-direction" \
-		)
-	}
-	return ""
+effect_flag_names :: #force_inline proc(kind: Effect_Kind) -> string {
+	return effects.Effect_Catalog[kind].flag_names
 }
 
 // ---------------------------------------------------------------------------
@@ -524,10 +221,13 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 			if !ok2 do return opts, false
 			opts.cfg.anchor_text = a
 		case "--wrap-text":
+			if has_value do return opts, false
 			opts.cfg.wrap_text = true
 		case "--xterm-colors":
+			if has_value do return opts, false
 			opts.cfg.xterm_colors = true
 		case "--no-color":
+			if has_value do return opts, false
 			opts.cfg.no_color = true
 		case "--existing-color-handling":
 			v, ok := value_of(args, &i, value, has_value)
@@ -536,14 +236,19 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 			if !ok2 do return opts, false
 			opts.cfg.existing_color_handling = handling
 		case "--no-eol":
+			if has_value do return opts, false
 			opts.cfg.no_eol = true
 		case "--no-restore-cursor":
+			if has_value do return opts, false
 			opts.cfg.no_restore_cursor = true
 		case "--ignore-terminal-dimensions":
+			if has_value do return opts, false
 			opts.cfg.ignore_terminal_dimensions = true
 		case "--reuse-canvas":
+			if has_value do return opts, false
 			opts.cfg.reuse_canvas = true
 		case "--virtual-clock":
+			if has_value do return opts, false
 			opts.cfg.virtual_clock = true
 		case "--tab-width":
 			v, ok := value_of(args, &i, value, has_value)
@@ -568,6 +273,7 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 			if !ok do return opts, false
 			opts.input_file = v
 		case "-R", "--random-effect":
+			if has_value do return opts, false
 			opts.random = true
 		case "--include-effects":
 			if !effect_filter_values(args, &i, value, has_value, &opts.include_effects) do return opts, false

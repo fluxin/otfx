@@ -94,15 +94,17 @@ Synthgrid_State :: struct {
 	cells:                   [dynamic]engine.Particle_Id,
 	active_cells:            [dynamic]engine.Particle_Id,
 	groups:                  engine.Particle_Groups,
-	final_colors:            [dynamic]engine.Color, // Particle_Id indexed
+	final_codes:             [dynamic]engine.Appearance_Id, // Particle_Id indexed
+	text_palette:            [dynamic]engine.Color,
+	text_codes:              [dynamic]engine.Appearance_Id,
 	start_ticks:             [dynamic]int, // Particle_Id indexed
 	group_by_id:             [dynamic]int, // Particle_Id indexed
 	generation_slot_by_id:   [dynamic]int, // Particle_Id indexed
 	group_remaining:         [dynamic]int,
 	group_order:             [dynamic]int,
 	generation_frame_counts: [dynamic]u8, // dense canvas-cell slot indexed
-	generation_symbols:      [dynamic]rune, // cell slot × fixed frame width
-	generation_colors:       [dynamic]engine.Color,
+	generation_symbols:      [dynamic]u16, // cell slot × fixed frame width -> config.text_generation_symbols
+	generation_colors:       [dynamic]u16, // cell slot × fixed frame width -> text_codes / text_palette
 	next_group:              int,
 	active_count:            int,
 	active_limit:            int,
@@ -141,28 +143,29 @@ synthgrid_add_grid_line :: proc(
 	origin: engine.Coord,
 	horizontal: bool,
 	sampler: engine.Gradient_Sampler,
-	spectrum: []engine.Color,
+	grid_codes: []engine.Appearance_Id,
 ) {
 	symbol := horizontal ? s.config.grid_row_symbol : s.config.grid_column_symbol
-	shared_id := engine.prepare_appearance(e, engine.Appearance{})
 	if horizontal {
+		engine.reserve_particles(e, max(e.canvas.right - e.canvas.left + 1, 0))
 		for column in e.canvas.left ..= e.canvas.right {
 			position := engine.coord(column, origin.row)
-			id := engine.add_particle(e, symbol, shared_id, position)
-			engine.set_particle(e, id, engine.Layer(2))
-			engine.set_particle(e, id, engine.Visible(false))
-			engine.set_foreground(e, id, engine.gradient_sample(sampler, spectrum, position))
+			code := grid_codes[engine.gradient_sample_index(sampler, len(grid_codes), position)]
+			id := engine.add_particle(e, symbol, code, position)
+			e.particles.layer[id] = 2
+			e.particles.flags[id] -= {.Visible}
 			append(&s.grid_ids, id)
 		}
 	} else {
 		// Horizontal border lines own the top/bottom intersections, exactly as
 		// the reference does, so vertical lines stop one row short of the top.
+		engine.reserve_particles(e, max(e.canvas.top - e.canvas.bottom, 0))
 		for row in e.canvas.bottom ..< e.canvas.top {
 			position := engine.coord(origin.column, row)
-			id := engine.add_particle(e, symbol, shared_id, position)
-			engine.set_particle(e, id, engine.Layer(2))
-			engine.set_particle(e, id, engine.Visible(false))
-			engine.set_foreground(e, id, engine.gradient_sample(sampler, spectrum, position))
+			code := grid_codes[engine.gradient_sample_index(sampler, len(grid_codes), position)]
+			id := engine.add_particle(e, symbol, code, position)
+			e.particles.layer[id] = 2
+			e.particles.flags[id] -= {.Visible}
 			append(&s.grid_ids, id)
 		}
 	}
@@ -176,8 +179,18 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		s.config.grid_gradient_stops[:],
 		s.config.grid_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(grid_spectrum[:])
+	defer delete(grid_spectrum)
+	grid_codes := make([]engine.Appearance_Id, len(grid_spectrum), context.temp_allocator)
+	defer delete(grid_codes, context.temp_allocator)
+	for color, gi in grid_spectrum {
+		if gi > 0 && color == grid_spectrum[gi - 1] {
+			grid_codes[gi] = grid_codes[gi - 1]
+		} else {
+			grid_codes[gi] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+		}
+	}
 	grid_sampler := engine.gradient_sampler(
 		e.canvas.bottom,
 		e.canvas.top,
@@ -185,12 +198,19 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		e.canvas.right,
 		s.config.grid_gradient_direction,
 	)
-	text_spectrum := engine.gradient_make(
+	s.text_palette = engine.gradient_make(
 		s.config.text_gradient_stops[:],
 		s.config.text_gradient_steps[:],
 		false,
 	)
-	defer delete(text_spectrum[:])
+	s.text_codes = make([dynamic]engine.Appearance_Id, len(s.text_palette))
+	for color, ti in s.text_palette {
+		if ti > 0 && color == s.text_palette[ti - 1] {
+			s.text_codes[ti] = s.text_codes[ti - 1]
+		} else {
+			s.text_codes[ti] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+		}
+	}
 	text_sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -199,30 +219,13 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		s.config.text_gradient_direction,
 	)
 
-	initial_coords := e.particles.initial_coord
-	visible_flags := e.particles.flags
-
 	append(&s.grid_offsets, 0)
 	left, right := e.canvas.left, e.canvas.right
 	bottom, top := e.canvas.bottom, e.canvas.top
-	synthgrid_add_grid_line(s, e, engine.coord(left, bottom), true, grid_sampler, grid_spectrum[:])
-	synthgrid_add_grid_line(s, e, engine.coord(left, top), true, grid_sampler, grid_spectrum[:])
-	synthgrid_add_grid_line(
-		s,
-		e,
-		engine.coord(left, bottom),
-		false,
-		grid_sampler,
-		grid_spectrum[:],
-	)
-	synthgrid_add_grid_line(
-		s,
-		e,
-		engine.coord(right, bottom),
-		false,
-		grid_sampler,
-		grid_spectrum[:],
-	)
+	synthgrid_add_grid_line(s, e, engine.coord(left, bottom), true, grid_sampler, grid_codes)
+	synthgrid_add_grid_line(s, e, engine.coord(left, top), true, grid_sampler, grid_codes)
+	synthgrid_add_grid_line(s, e, engine.coord(left, bottom), false, grid_sampler, grid_codes)
+	synthgrid_add_grid_line(s, e, engine.coord(right, bottom), false, grid_sampler, grid_codes)
 
 	row_gap, column_gap: int
 	if top > 2 * right {
@@ -232,41 +235,25 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		column_gap = synthgrid_find_even_gap(right) + 1
 		row_gap = math.floor_div(column_gap, 2)
 	}
-	row_ends: [dynamic]int
-	column_ends: [dynamic]int
-	defer delete(row_ends[:])
-	defer delete(column_ends[:])
+	row_ends := make([dynamic]int, context.temp_allocator)
+	column_ends := make([dynamic]int, context.temp_allocator)
+	defer delete(row_ends)
+	defer delete(column_ends)
 	for row := bottom + max(row_gap, 1); row < top; row += max(row_gap, 1) {
 		if top - row < 2 do continue
-		synthgrid_add_grid_line(
-			s,
-			e,
-			engine.coord(left, row),
-			true,
-			grid_sampler,
-			grid_spectrum[:],
-		)
+		synthgrid_add_grid_line(s, e, engine.coord(left, row), true, grid_sampler, grid_codes)
 		append(&row_ends, row)
 	}
 	for column := left + max(column_gap, 1); column < right; column += max(column_gap, 1) {
 		if right - column < 2 do continue
-		synthgrid_add_grid_line(
-			s,
-			e,
-			engine.coord(column, bottom),
-			false,
-			grid_sampler,
-			grid_spectrum[:],
-		)
+		synthgrid_add_grid_line(s, e, engine.coord(column, bottom), false, grid_sampler, grid_codes)
 		append(&column_ends, column)
 	}
 	append(&row_ends, top + 1)
 	append(&column_ends, right + 1)
 
-	// add_particle may grow the engine SoA, so refresh these direct columns
-	// before using them for block and text setup.
-	initial_coords = e.particles.initial_coord
-	visible_flags = e.particles.flags
+	initial_coords := e.particles.initial_coord
+	visible_flags := e.particles.flags
 
 	// Rust's coordinate table maps every canvas cell to either input text or a
 	// fill character. Keep the same dense direct lookup: block static fills are
@@ -281,11 +268,13 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		engine.PARTICLE_FILTER_ALL_FILLS,
 		.Top_Bottom_Left_Right,
 	)
-	cell_ids := make([dynamic]engine.Particle_Id, e.canvas.width * e.canvas.height)
-	defer delete(cell_ids[:])
+	cell_ids := make([]engine.Particle_Id, e.canvas.width * e.canvas.height, context.temp_allocator)
+	defer delete(cell_ids, context.temp_allocator)
 	for id in s.cells {
 		p := initial_coords[id]
-		cell_ids[(p.row - bottom) * e.canvas.width + (p.column - left)] = id
+		if engine.canvas_in(e.canvas, p) {
+			cell_ids[(p.row - bottom) * e.canvas.width + (p.column - left)] = id
+		}
 	}
 
 	// Blocks follow the grid boundaries, not radial distance. Preserve them as
@@ -309,29 +298,51 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 		previous_row = row_end
 	}
 
-	s.final_colors = make([dynamic]engine.Color, len(e.particles))
+	n_particles := len(e.particles)
+	s.final_codes = make([dynamic]engine.Appearance_Id, n_particles)
 	s.color_handling = e.cfg.existing_color_handling
-	s.start_ticks = make([dynamic]int, len(e.particles))
-	s.group_by_id = make([dynamic]int, len(e.particles))
-	s.generation_slot_by_id = make([dynamic]int, len(e.particles))
-	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i], s.group_by_id[i], s.generation_slot_by_id[i] = -1, -1, -1
+	s.start_ticks = make([dynamic]int, n_particles)
+	s.group_by_id = make([dynamic]int, n_particles)
+	s.generation_slot_by_id = make([dynamic]int, n_particles)
+	for i in 0 ..< n_particles do s.start_ticks[i], s.group_by_id[i], s.generation_slot_by_id[i] = -1, -1, -1
 	cell_count := len(s.cells)
 	reserve(&s.active_cells, cell_count)
 	s.generation_frame_counts = make([dynamic]u8, cell_count)
-	s.generation_symbols = make([dynamic]rune, cell_count * SYNTHGRID_MAX_GENERATION_FRAMES)
-	s.generation_colors = make([dynamic]engine.Color, cell_count * SYNTHGRID_MAX_GENERATION_FRAMES)
-	fill_flags := e.particles.flags
+	s.generation_symbols = make([dynamic]u16, cell_count * SYNTHGRID_MAX_GENERATION_FRAMES)
+	s.generation_colors = make([dynamic]u16, cell_count * SYNTHGRID_MAX_GENERATION_FRAMES)
+	blank_code := engine.prepare_appearance(e, engine.Appearance{})
+
+	if s.color_handling == .Dynamic && cell_count > 0 {
+		dyn_styles := make([]engine.Appearance, cell_count, context.temp_allocator)
+		defer delete(dyn_styles, context.temp_allocator)
+		for id, slot in s.cells {
+			init_style := engine.get_initial_appearance(e, id)
+			dyn_styles[slot] = {colors = init_style.colors, bold = init_style.bold}
+		}
+		unique_styles, slot_indices := engine.group_values(dyn_styles)
+		defer delete(unique_styles)
+		defer delete(slot_indices)
+		unique_codes := make([]engine.Appearance_Id, len(unique_styles), context.temp_allocator)
+		defer delete(unique_codes, context.temp_allocator)
+		for style, idx in unique_styles do unique_codes[idx] = engine.prepare_appearance(e, style)
+		for id, slot in s.cells do s.final_codes[id] = unique_codes[slot_indices[slot]]
+	}
+
 	for id, slot in s.cells {
-		if (.Fill not_in fill_flags[id]) do s.final_colors[id] = engine.gradient_sample(text_sampler, text_spectrum[:], initial_coords[id])
+		if s.color_handling != .Dynamic {
+			s.final_codes[id] =
+				(.Fill in visible_flags[id]) ? blank_code : s.text_codes[engine.gradient_sample_index(text_sampler, len(s.text_codes), initial_coords[id])]
+		}
 		visible_flags[id] -= {.Visible}
 		s.generation_slot_by_id[id] = slot
 		frame_count := engine.random_range(15, SYNTHGRID_MAX_GENERATION_FRAMES + 1)
 		s.generation_frame_counts[slot] = u8(frame_count)
 		base := slot * SYNTHGRID_MAX_GENERATION_FRAMES
 		for frame in 0 ..< frame_count {
-			s.generation_symbols[base + frame] =
-				s.config.text_generation_symbols[engine.random_below(len(s.config.text_generation_symbols))]
-			s.generation_colors[base + frame] = text_spectrum[engine.random_below(len(text_spectrum))]
+			s.generation_symbols[base + frame] = u16(
+				engine.random_below(len(s.config.text_generation_symbols)),
+			)
+			s.generation_colors[base + frame] = u16(engine.random_below(len(s.text_palette)))
 		}
 	}
 	group_count := len(s.groups.spans)
@@ -347,8 +358,6 @@ synthgrid_build :: proc(s: ^Synthgrid_State, e: ^engine.Engine) {
 }
 
 synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool #no_bounds_check {
-	visible_flags := e.particles.flags
-
 	if s.phase == .Grid_Expand {
 		all_extended := true
 		for line in 0 ..< len(s.grid_extended) {
@@ -382,11 +391,9 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool #no_bound
 			s.active_count += 1
 			s.next_group += 1
 		}
-		fill_flags := e.particles.flags
 		write := 0
 		for id in s.active_cells {
-			start := s.start_ticks[id]
-			age := s.tick - start
+			age := s.tick - s.start_ticks[id]
 			slot := s.generation_slot_by_id[id]
 			frame_count := int(s.generation_frame_counts[slot])
 			frame := age / 2
@@ -395,24 +402,16 @@ synthgrid_next :: proc(s: ^Synthgrid_State, e: ^engine.Engine) -> bool #no_bound
 				write += 1
 				if age % 2 != 0 do continue
 				index := slot * SYNTHGRID_MAX_GENERATION_FRAMES + frame
-				engine.set_symbol(e, id, s.generation_symbols[index])
-				engine.set_foreground(e, id, s.generation_colors[index])
-			} else {
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+				engine.set_symbol(e, id, s.config.text_generation_symbols[s.generation_symbols[index]])
+				ci := s.generation_colors[index]
 				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					engine.dynamic_apply_input_colors(
-						&appearance,
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					)
-					engine.set_appearance(e, id, appearance)
+					engine.set_foreground(e, id, s.text_palette[ci])
 				} else {
-					engine.set_foreground(
-						e,
-						id,
-						(.Fill in fill_flags[id]) ? nil : s.final_colors[id],
-					)
+					engine.set_appearance(e, id, s.text_codes[ci])
 				}
+			} else {
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
+				engine.set_appearance(e, id, s.final_codes[id])
 				if age == frame_count * 2 {
 					s.start_ticks[id] = -2
 					group := s.group_by_id[id]

@@ -118,14 +118,17 @@ Beams_Phase :: enum {
 Beams_State :: struct {
 	config:             Beams_Config,
 	characters:         [dynamic]engine.Particle_Id,
-	final_colors:       [dynamic]engine.Color,
-	faded_colors:       [dynamic]engine.Color,
+	style_by_id:        [dynamic]int,
+	fade_ramp:          engine.Appearance_Ramp,
+	brighten_ramp:      engine.Appearance_Ramp,
 	beam_start_ticks:   [dynamic]int,
 	beam_modes:         [dynamic]Beam_Direction,
 	wipe_start_ticks:   [dynamic]int,
 	beam_palette:       [dynamic]engine.Color,
 	row_symbols:        [dynamic]rune,
+	row_codes:          [dynamic]engine.Appearance_Id,
 	column_symbols:     [dynamic]rune,
+	column_codes:       [dynamic]engine.Appearance_Id,
 	group_chars:        [dynamic]engine.Particle_Id,
 	groups:             [dynamic]Beam_Group,
 	pending:            [dynamic]int, // group handles
@@ -141,33 +144,27 @@ Beams_State :: struct {
 	color_handling:     engine.Existing_Color_Handling,
 }
 
-// Expand symbols into the build-time lane; playback indexes the flat row.
-beams_expand_symbols :: proc(symbols: []rune, count: int) -> [dynamic]rune {
-	out := make([dynamic]rune, count)
-	repeat_factor := count / len(symbols)
-	overflow_count := count % len(symbols)
-	symbol_index, current_repeat := 0, 0
-	overflow_used := false
-	for i in 0 ..< count {
-		if current_repeat >= repeat_factor {
-			if overflow_count > 0 {
-				if overflow_used {
-					symbol_index += 1
-					current_repeat = 0
-					overflow_used = false
-				} else {
-					overflow_used = true
-					overflow_count -= 1
-				}
-			} else {
-				symbol_index += 1
-				current_repeat = 0
-			}
+beams_prepare_lane :: proc(
+	e: ^engine.Engine,
+	colors: []engine.Color,
+	symbols: []rune,
+) -> (
+	expanded_symbols: [dynamic]rune,
+	codes: [dynamic]engine.Appearance_Id,
+) {
+	entries := max(len(colors), len(symbols))
+	expanded_colors := engine.sequence_expand(colors, entries)
+	defer delete(expanded_colors)
+	expanded_symbols = engine.sequence_expand(symbols, entries)
+	codes = make([dynamic]engine.Appearance_Id, entries)
+	for color, i in expanded_colors {
+		if i > 0 && color == expanded_colors[i - 1] {
+			codes[i] = codes[i - 1]
+		} else {
+			codes[i] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
 		}
-		current_repeat += 1
-		out[i] = symbols[symbol_index]
 	}
-	return out
+	return
 }
 
 beams_make_group :: proc(
@@ -195,7 +192,7 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 			e.particles.initial_coord[:len(e.particles)],
 			e.canvas,
 		},
-		engine.PARTICLE_FILTER_ALL_FILLS,
+		engine.PARTICLE_FILTER_INPUT,
 		.Diagonal_TL2BR,
 	)
 
@@ -231,25 +228,45 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 	s.color_handling = e.cfg.existing_color_handling
 	max_slot := 0
 	for id in s.characters do max_slot = max(max_slot, int(id))
-	s.final_colors = make([dynamic]engine.Color, max_slot + 1)
-	s.faded_colors = make([dynamic]engine.Color, max_slot + 1)
+	s.style_by_id = make([dynamic]int, max_slot + 1)
 	s.beam_start_ticks = make([dynamic]int, max_slot + 1)
 	s.beam_modes = make([dynamic]Beam_Direction, max_slot + 1)
 	s.wipe_start_ticks = make([dynamic]int, max_slot + 1)
 	reserve(&s.appearance_active, len(s.characters))
 	for i in 0 ..= max_slot do s.beam_start_ticks[i], s.wipe_start_ticks[i] = -1, -1
 
+	final_styles := make([]engine.Appearance, len(s.characters), context.temp_allocator)
+	defer delete(final_styles, context.temp_allocator)
 	black := engine.Color{0x00, 0x00, 0x00}
-	for id in s.characters {
-		if (.Fill in e.particles.flags[id]) {
-			s.final_colors[id] = black
-			s.faded_colors[id] = black
-			continue
+	for id, i in s.characters {
+		if .Fill in e.particles.flags[id] {
+			final_styles[i] = {colors = {fg = black}}
+		} else if s.color_handling == .Dynamic {
+			final_styles[i] = {colors = engine.get_initial_appearance(e, id).colors}
+		} else {
+			c := e.particles.initial_coord[id]
+			final_styles[i] = {colors = {fg = engine.gradient_sample(final_sampler, final_spectrum[:], c)}}
 		}
-		c := e.particles.initial_coord[id]
-		s.final_colors[id] = engine.gradient_sample(final_sampler, final_spectrum[:], c)
-		s.faded_colors[id] = engine.adjust_color_brightness(s.final_colors[id], 0.3)
 	}
+	unique_styles, slot_styles := engine.group_values(final_styles)
+	defer delete(unique_styles)
+	defer delete(slot_styles)
+	for id, i in s.characters {
+		s.style_by_id[id] = slot_styles[i]
+	}
+	fade_tweens := make([]engine.Tween(engine.Appearance), len(unique_styles), context.temp_allocator)
+	brighten_tweens := make([]engine.Tween(engine.Appearance), len(unique_styles), context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
+	defer delete(brighten_tweens, context.temp_allocator)
+	for row_style, row in unique_styles {
+		faded := row_style.colors
+		if fg, ok := faded.fg.?; ok do faded.fg = engine.adjust_color_brightness(fg, 0.3)
+		if bg, ok := faded.bg.?; ok do faded.bg = engine.adjust_color_brightness(bg, 0.3)
+		fade_tweens[row] = {from = row_style, to = {colors = faded}}
+		brighten_tweens[row] = {from = {colors = faded}, to = row_style}
+	}
+	s.fade_ramp = engine.ramp_make(e, fade_tweens, 10)
+	s.brighten_ramp = engine.ramp_make(e, brighten_tweens, 10)
 
 	// scenes on the row pass only (rows and columns share characters)
 	row_groups := engine.get_particles_grouped(
@@ -286,92 +303,60 @@ beams_build :: proc(s: ^Beams_State, e: ^engine.Engine) {
 
 	s.beam_palette = beam_spectrum
 	beam_spectrum = nil
-	s.row_symbols = beams_expand_symbols(s.config.beam_row_symbols[:], len(s.beam_palette))
-	s.column_symbols = beams_expand_symbols(s.config.beam_column_symbols[:], len(s.beam_palette))
+	s.row_symbols, s.row_codes = beams_prepare_lane(
+		e,
+		s.beam_palette[:],
+		s.config.beam_row_symbols[:],
+	)
+	s.column_symbols, s.column_codes = beams_prepare_lane(
+		e,
+		s.beam_palette[:],
+		s.config.beam_column_symbols[:],
+	)
 
 	for gi in 0 ..< len(s.groups) do append(&s.pending, gi)
 	reserve(&s.active, len(s.groups))
 	engine.random_shuffle(s.pending[:])
 }
 
-beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Group) {
+beams_release_char :: proc(s: ^Beams_State, e: ^engine.Engine, group: ^Beam_Group) #no_bounds_check {
 	group.counter -= 1
 	next := s.group_chars[group.span.start + group.head]
 	group.head += 1
 	if s.beam_start_ticks[next] < 0 && s.wipe_start_ticks[next] < 0 do append(&s.appearance_active, next)
-	s.beam_end = max(s.beam_end, s.tick + len(s.beam_palette) * s.config.beam_gradient_frames + 22)
+	lane_len := len(s.row_symbols) if group.direction == .Row else len(s.column_symbols)
+	s.beam_end = max(s.beam_end, s.tick + lane_len * s.config.beam_gradient_frames + 22)
 	s.beam_start_ticks[next] = s.tick
 	s.beam_modes[next] = group.direction
 	engine.set_particle(e, next, engine.Visible(true))
 }
 
-beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
-	beam_ticks := len(s.beam_palette) * s.config.beam_gradient_frames + 22
+beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) #no_bounds_check {
 	write := 0
 	for id in s.appearance_active {
 		beam_start := s.beam_start_ticks[id]
 		if beam_start >= 0 {
+			mode := s.beam_modes[id]
+			lane_len := len(s.row_symbols) if mode == .Row else len(s.column_symbols)
+			beam_ticks := lane_len * s.config.beam_gradient_frames + 22
 			age := s.tick - beam_start
 			if age < beam_ticks {
 				s.appearance_active[write] = id
 				write += 1
-				palette_ticks := len(s.beam_palette) * s.config.beam_gradient_frames
+				palette_ticks := lane_len * s.config.beam_gradient_frames
 				if age < palette_ticks {
 					if age % s.config.beam_gradient_frames != 0 do continue
 				} else if (age - palette_ticks) % 2 != 0 {continue}
 				palette_index := age / s.config.beam_gradient_frames
-				if palette_index < len(s.beam_palette) {
-					symbols := s.beam_modes[id] == .Row ? s.row_symbols : s.column_symbols
+				if palette_index < lane_len {
+					symbols := s.row_symbols if mode == .Row else s.column_symbols
+					codes := s.row_codes if mode == .Row else s.column_codes
 					engine.set_symbol(e, id, symbols[palette_index])
-					engine.set_foreground(e, id, s.beam_palette[palette_index])
+					engine.set_appearance(e, id, codes[palette_index])
 				} else {
-					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-					step := min(
-						(age - len(s.beam_palette) * s.config.beam_gradient_frames) / 2,
-						10,
-					)
-					if s.color_handling == .Dynamic && (.Fill not_in e.particles.flags[id]) {
-						style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-						if fg, ok := style.colors.fg.?; ok {
-							engine.set_foreground(
-								e,
-								id,
-								engine.tween(
-									fg,
-									engine.adjust_color_brightness(fg, 0.3),
-									10,
-									step,
-								),
-							)
-						} else {
-							engine.set_foreground(e, id, nil)
-						}
-						if bg, ok := style.colors.bg.?; ok {
-							engine.set_background(
-								e,
-								id,
-								engine.tween(
-									bg,
-									engine.adjust_color_brightness(bg, 0.3),
-									10,
-									step,
-								),
-							)
-						} else {
-							engine.set_background(e, id, nil)
-						}
-					} else {
-						engine.set_foreground(
-							e,
-							id,
-							engine.tween(
-								s.final_colors[id],
-								s.faded_colors[id],
-								10,
-								step,
-							),
-						)
-					}
+					engine.set_symbol(e, id, e.particles.initial_symbol[id])
+					step := min((age - palette_ticks) / 2, 10)
+					engine.set_appearance(e, id, engine.ramp_code(s.fade_ramp, s.style_by_id[id], step))
 				}
 				continue
 			}
@@ -384,50 +369,9 @@ beams_update_appearances :: proc(s: ^Beams_State, e: ^engine.Engine) {
 				s.appearance_active[write] = id
 				write += 1
 				if age % s.config.final_gradient_frames != 0 do continue
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
 				step := min(age / s.config.final_gradient_frames, 10)
-				if s.color_handling == .Dynamic && (.Fill not_in e.particles.flags[id]) {
-					style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-					if fg, ok := style.colors.fg.?; ok {
-						engine.set_foreground(
-							e,
-							id,
-							engine.tween(
-								engine.adjust_color_brightness(fg, 0.3),
-								fg,
-								10,
-								step,
-							),
-						)
-					} else {
-						engine.set_foreground(e, id, nil)
-					}
-					if bg, ok := style.colors.bg.?; ok {
-						engine.set_background(
-							e,
-							id,
-							engine.tween(
-								engine.adjust_color_brightness(bg, 0.3),
-								bg,
-								10,
-								step,
-							),
-						)
-					} else {
-						engine.set_background(e, id, nil)
-					}
-				} else {
-					engine.set_foreground(
-						e,
-						id,
-						engine.tween(
-							s.faded_colors[id],
-							s.final_colors[id],
-							10,
-							step,
-						),
-					)
-				}
+				engine.set_appearance(e, id, engine.ramp_code(s.brighten_ramp, s.style_by_id[id], step))
 			} else {s.wipe_start_ticks[id] = -1}
 		}
 	}

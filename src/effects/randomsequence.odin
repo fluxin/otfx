@@ -59,10 +59,11 @@ Randomsequence_State :: struct {
 	config:         Randomsequence_Config,
 	characters:     [dynamic]engine.Particle_Id,
 	index_by_id:    [dynamic]int,
-	palette:        [dynamic]engine.Color,
+	fades:          engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
+	life_steps:     [dynamic]u8,
 	start_ticks:    [dynamic]int,
 	active_slots:   [dynamic]int,
-	palette_len:    int,
 	pending:        [dynamic]engine.Particle_Id,
 	chars_per_tick: int,
 	color_handling: engine.Existing_Color_Handling,
@@ -83,40 +84,79 @@ randomsequence_build :: proc(s: ^Randomsequence_State, e: ^engine.Engine) {
 		.Top_Bottom_Left_Right,
 	)
 	s.characters = chars
-	reserve(&s.active_slots, len(chars))
+	n := len(chars)
+	reserve(&s.active_slots, n)
+	reserve(&s.pending, n)
 	s.index_by_id = make([dynamic]int, len(e.particles))
-	s.start_ticks = make([dynamic]int, len(chars))
-	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
+	s.start_ticks = make([dynamic]int, n)
+	s.life_steps = make([dynamic]u8, n)
+	for i in 0 ..< n do s.start_ticks[i] = -1
+	if n == 0 do return
 
-	if s.color_handling != .Dynamic {
-		spectrum := engine.gradient_make(
-			s.config.final_gradient_stops[:],
-			s.config.final_gradient_steps[:],
-			false,
-		)
-		defer delete(spectrum[:])
-		sampler := engine.gradient_sampler(
-			e.canvas.text_bottom,
-			e.canvas.text_top,
-			e.canvas.text_left,
-			e.canvas.text_right,
-			s.config.final_gradient_direction,
-		)
-		bg := e.cfg.terminal_background_color
-		for id, slot in chars {
-			final := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
-			g := engine.gradient_make([]engine.Color{bg, final}, []int{7}, false)
-			if slot == 0 do s.palette_len = len(g)
-			append(&s.palette, ..g[:])
-			delete(g[:])
-		}
-	}
+	spectrum := engine.gradient_make(
+		s.config.final_gradient_stops[:],
+		s.config.final_gradient_steps[:],
+		false,
+		context.temp_allocator,
+	)
+	defer delete(spectrum)
+	sampler := engine.gradient_sampler(
+		e.canvas.text_bottom,
+		e.canvas.text_top,
+		e.canvas.text_left,
+		e.canvas.text_right,
+		s.config.final_gradient_direction,
+	)
+	bg := e.cfg.terminal_background_color
+
+	base_tweens := make([]engine.Tween(engine.Appearance), n, context.temp_allocator)
+	defer delete(base_tweens, context.temp_allocator)
 
 	for id, slot in chars {
 		s.index_by_id[id] = slot
 		e.particles.flags[id] -= {.Visible}
 		append(&s.pending, id)
+		if s.color_handling == .Dynamic {
+			style := engine.get_initial_appearance(e, id)
+			if style.colors.fg != nil || style.colors.bg != nil {
+				s.life_steps[slot] = 8
+				base_tweens[slot] = {
+					from = {colors = {bg, bg}},
+					to   = {colors = style.colors},
+				}
+			} else {
+				s.life_steps[slot] = 9
+				// Sentinel `from.bold = true` distinguishes uncolored dynamic from styled gray.
+				base_tweens[slot] = {
+					from = {colors = {fg = bg}, bold = true},
+					to   = {colors = {fg = engine.Color{0x80, 0x80, 0x80}}},
+				}
+			}
+		} else {
+			s.life_steps[slot] = 8
+			final := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
+			base_tweens[slot] = {
+				from = {colors = {fg = bg}},
+				to   = {colors = {fg = final}},
+			}
+		}
 	}
+
+	unique_tweens: [dynamic]engine.Tween(engine.Appearance)
+	unique_tweens, s.fade_index = engine.group_values(base_tweens)
+	defer delete(unique_tweens)
+	styles := make([]engine.Appearance, len(unique_tweens) * 9, context.temp_allocator)
+	defer delete(styles, context.temp_allocator)
+	for tw, row in unique_tweens {
+		for step in 0 ..= 7 {
+			styles[row * 9 + step] = {
+				colors = engine.tween(tw.from.colors, tw.to.colors, 7, step),
+			}
+		}
+		styles[row * 9 + 8] = tw.from.bold ? engine.Appearance{} : styles[row * 9 + 7]
+	}
+	s.fades = engine.ramp_from_styles(e, styles, 8)
+
 	engine.random_shuffle(s.pending[:])
 }
 
@@ -127,56 +167,21 @@ randomsequence_next :: proc(s: ^Randomsequence_State, e: ^engine.Engine) -> bool
 	for _ in 0 ..< s.chars_per_tick {
 		if len(s.pending) == 0 do break
 		next := pop(&s.pending)
-		engine.set_particle(e, next, engine.Visible(true))
+		engine.set_visible(e, next, true)
 		slot := s.index_by_id[next]
 		s.start_ticks[slot] = s.tick
 		append(&s.active_slots, slot)
-		engine.set_symbol(e, next, e.particles.initial_symbol[engine.Particle_Id(next)])
+		engine.set_symbol(e, next, e.particles.initial_symbol[next])
 	}
+	frames := s.config.final_gradient_frames
 	write := 0
 	for slot in s.active_slots {
 		age := s.tick - s.start_ticks[slot]
 		id := s.characters[slot]
-		life := s.palette_len * s.config.final_gradient_frames
-		if s.color_handling == .Dynamic {
-			style := engine.get_initial_appearance(e, id)
-			life =
-				(8 if style.colors.fg != nil || style.colors.bg != nil else 9) *
-				s.config.final_gradient_frames
-		}
-		if age % s.config.final_gradient_frames == 0 {
-			if s.color_handling == .Dynamic {
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				if style.colors.fg != nil || style.colors.bg != nil {
-					step := min(age / s.config.final_gradient_frames, 7)
-					appearance := engine.get_appearance(e, id)
-					appearance.colors = engine.tween(engine.Color_Pair{e.cfg.terminal_background_color, e.cfg.terminal_background_color}, style.colors, 7, step)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					if age < 8 * s.config.final_gradient_frames {
-						engine.set_foreground(
-							e,
-							id,
-							engine.tween(
-								e.cfg.terminal_background_color,
-								engine.Color{0x80, 0x80, 0x80},
-								7,
-								age / s.config.final_gradient_frames,
-							),
-						)
-						engine.set_background(e, id, nil)
-					} else {
-						engine.set_foreground(e, id, nil)
-						engine.set_background(e, id, nil)
-					}
-				}
-			} else {
-				engine.set_foreground(
-					e,
-					id,
-					s.palette[slot * s.palette_len + age / s.config.final_gradient_frames],
-				)
-			}
+		life := int(s.life_steps[slot]) * frames
+		if age % frames == 0 {
+			step := min(age / frames, 8)
+			engine.set_appearance(e, id, engine.ramp_code(s.fades, s.fade_index[slot], step))
 		}
 		if age + 1 < life {
 			s.active_slots[write] = slot

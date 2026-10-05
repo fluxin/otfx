@@ -48,7 +48,7 @@ smoke_parse :: proc(cfg: ^Smoke_Config, args: []string) -> bool {
 		case "--smoke-gradient-stops":
 			if !parse_colors_flag(&cfg.smoke_gradient_stops, args, &i, value, has_value) do return false
 		case "--use-whole-canvas":
-			cfg.use_whole_canvas = true
+			if !parse_bool_flag(&cfg.use_whole_canvas, has_value) do return false
 		case "--final-gradient-stops":
 			if !parse_colors_flag(&cfg.final_gradient_stops, args, &i, value, has_value) do return false
 		case "--final-gradient-steps":
@@ -75,11 +75,11 @@ Smoke_State :: struct {
 	arrived:        int, // characters[:arrived] have been reached by the flood
 	changes:        [dynamic]engine.Sample_Change,
 	samples:        [dynamic]int,
-	final_colors:   [dynamic]engine.Color,
-	smoke_palette:  [dynamic]engine.Color,
+	style_slots:    [dynamic]int,
+	smoke_codes:    [dynamic]engine.Appearance_Id,
 	smoke_symbols:  [dynamic]rune,
-	paint_pairs:    [dynamic]int,
-	paint_steps:    [dynamic]int,
+	paint_ramp:     engine.Appearance_Ramp,
+	dynamic_codes:  [dynamic]engine.Appearance_Id,
 	tick:           int,
 	last_tick:      int,
 	color_handling: engine.Existing_Color_Handling,
@@ -89,13 +89,15 @@ Smoke_State :: struct {
 // ticks. Cells are row-major, top to bottom. Four bits encode tree neighbors;
 // equal-weight candidate edges share flat buckets with random removal.
 // `order` receives the cells in BFS order, so their arrivals never decrease.
-smoke_arrivals :: proc(arrivals, order: []int, width: int) {
+smoke_arrivals :: proc(arrivals, order: []int, width: int) #no_bounds_check {
 	n := len(arrivals)
 	if n == 0 do return
-	context.allocator = context.temp_allocator
-	weights := make([]u8, n)
-	links := make([]u8, n)
-	visited := make([]bool, n)
+	weights := make([]u8, n, context.temp_allocator)
+	links := make([]u8, n, context.temp_allocator)
+	visited := make([]bool, n, context.temp_allocator)
+	defer delete(weights, context.temp_allocator)
+	defer delete(links, context.temp_allocator)
+	defer delete(visited, context.temp_allocator)
 	buckets: [100]engine.Span
 	lowest := len(buckets) // no bucket below this one holds an edge
 	current := engine.random_below(n)
@@ -112,7 +114,8 @@ smoke_arrivals :: proc(arrivals, order: []int, width: int) {
 	Edge :: struct {
 		source, direction: int,
 	}
-	edges := make([]Edge, 4 * n)
+	edges := make([]Edge, 4 * n, context.temp_allocator)
+	defer delete(edges, context.temp_allocator)
 	offsets := [4]int{-width, 1, width, -1}
 	visited[current] = true
 	for {
@@ -195,6 +198,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 		len(s.config.smoke_gradient_stops) + len(s.config.final_gradient_stops),
 		context.temp_allocator,
 	)
+	defer delete(stops)
 	append(&stops, ..s.config.smoke_gradient_stops[:])
 	for i := len(s.config.final_gradient_stops) - 1; i >= 0; i -= 1 do append(&stops, s.config.final_gradient_stops[i])
 	palette := engine.gradient_make(stops[:], []int{3, 4}, false)
@@ -202,8 +206,13 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	// Distribute the shorter lane evenly, with the remainder at the front,
 	// just like Python's apply_gradient_to_symbols (including long symbol lists).
 	entries := max(len(palette), len(s.config.smoke_symbols))
-	s.smoke_palette = engine.sequence_expand(palette[:], entries)
+	smoke_palette := engine.sequence_expand(palette[:], entries)
+	defer delete(smoke_palette)
 	s.smoke_symbols = engine.sequence_expand(s.config.smoke_symbols[:], entries)
+	s.smoke_codes = make([dynamic]engine.Appearance_Id, len(smoke_palette))
+	for color, k in smoke_palette {
+		s.smoke_codes[k] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+	}
 
 	query := engine.Particle_Query {
 		e.particle_sets,
@@ -220,6 +229,8 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	width := s.config.use_whole_canvas ? e.canvas.width : e.canvas.text_width
 	arrivals := make([]int, n, context.temp_allocator)
 	order := make([]int, n, context.temp_allocator)
+	defer delete(arrivals, context.temp_allocator)
+	defer delete(order, context.temp_allocator)
 	smoke_arrivals(arrivals, order, width)
 	// Store characters in flood order: the animating ones form one window.
 	s.characters = make([dynamic]engine.Particle_Id, n)
@@ -228,42 +239,65 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 		s.characters[i] = cells[cell]
 		s.arrivals[i] = arrivals[cell]
 	}
-	s.final_colors = make([dynamic]engine.Color, n)
-	initial_coords := e.particles.initial_coord
 
+	starting_code := engine.prepare_appearance(
+		e,
+		engine.Appearance {
+			colors = {
+				fg = s.color_handling == .Dynamic ? engine.Color{0x00, 0x00, 0x00} : s.config.starting_color,
+			},
+		},
+	)
+	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
+	final_colors := make([]engine.Color, n, context.temp_allocator)
+	defer delete(final_colors, context.temp_allocator)
 	for id, i in s.characters {
 		p := initial_coords[id]
 		s.last_tick = max(s.last_tick, s.arrivals[i])
-		s.final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
-		if s.color_handling == .Dynamic {
-			engine.set_foreground(e, id, engine.Color{0x00, 0x00, 0x00})
-			engine.set_background(e, id, nil)
-		} else {
-			engine.set_foreground(e, id, s.config.starting_color)
-		}
+		final_colors[i] = engine.gradient_sample(final_sampler, final_spectrum[:], p)
+		engine.set_appearance(e, id, starting_code)
 		visible_flags[id] += {.Visible}
 	}
 
 	// smoke frames last 3 ticks; final paint is a 5-tick gradient across every
 	// configured stop and then the character-specific destination color.
 	paint_entries := 1 + 5 * len(s.config.final_gradient_stops)
-	s.paint_pairs = make([dynamic]int, paint_entries)
-	s.paint_steps = make([dynamic]int, paint_entries)
-	pair, step := 0, 0
-	for i in 0 ..< paint_entries {
-		s.paint_pairs[i] = pair
-		s.paint_steps[i] = step
-		step += 1
-		if step == 6 {
-			pair += 1
-			step = 1
-		}
-	}
 	if s.color_handling == .Dynamic {
+		dyn_pairs := make([]engine.Color_Pair, n, context.temp_allocator)
+		defer delete(dyn_pairs, context.temp_allocator)
+		for id, i in s.characters {
+			dyn_pairs[i] = engine.get_initial_appearance(e, engine.Particle_Id(id)).colors
+		}
+		unique_pairs: [dynamic]engine.Color_Pair
+		unique_pairs, s.style_slots = engine.group_values(dyn_pairs)
+		defer delete(unique_pairs)
+		s.dynamic_codes = make([dynamic]engine.Appearance_Id, len(unique_pairs))
+		for pair, g in unique_pairs {
+			s.dynamic_codes[g] = engine.prepare_appearance(e, engine.Appearance{colors = pair})
+		}
 		s.last_tick += len(s.config.smoke_symbols) * 10 + 5
 	} else {
-		s.last_tick += len(s.smoke_palette) * 3 + paint_entries * 5
+		unique_finals: [dynamic]engine.Color
+		unique_finals, s.style_slots = engine.group_values(final_colors)
+		defer delete(unique_finals)
+		paint_styles := make([]engine.Appearance, len(unique_finals) * paint_entries, context.temp_allocator)
+		defer delete(paint_styles, context.temp_allocator)
+		for final, g in unique_finals {
+			pair, step := 0, 0
+			for entry in 0 ..< paint_entries {
+				paint_styles[g * paint_entries + entry] = {
+					colors = {fg = smoke_paint_color(s.config.final_gradient_stops[:], final, pair, step)},
+				}
+				step += 1
+				if step == 6 {
+					pair += 1
+					step = 1
+				}
+			}
+		}
+		s.paint_ramp = engine.ramp_from_styles(e, paint_styles, paint_entries - 1)
+		s.last_tick += len(s.smoke_codes) * 3 + paint_entries * 5
 	}
 	// Store one shared clock across smoke and paint, including their different
 	// hold durations. Particle-specific colors are computed only on changes.
@@ -271,7 +305,7 @@ smoke_build :: proc(s: ^Smoke_State, e: ^engine.Engine) {
 	s.changes = make([dynamic]engine.Sample_Change, n)
 	for &sample in s.previous do sample = -1
 	smoke_count :=
-		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
+		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_codes)
 	smoke_hold := s.color_handling == .Dynamic ? 10 : 3
 	paint_count := s.color_handling == .Dynamic ? 1 : paint_entries
 	s.samples = make([dynamic]int, smoke_count * smoke_hold + paint_count * 5)
@@ -285,9 +319,8 @@ smoke_paint_color :: proc(
 	stops: []engine.Color,
 	end: engine.Color,
 	pair, step: int,
-) -> engine.Color {
-	// Gradient(stops..., end, steps=5), sampled from build-time lookup rows so
-	// the dense per-character loop only performs direct indexed loads.
+) -> engine.Color #no_bounds_check {
+	// Gradient(stops..., end, steps=5), sampled at build time into `paint_ramp`.
 	start := stops[pair]
 	finish := pair + 1 < len(stops) ? stops[pair + 1] : end
 	return engine.tween(start, finish, 5, step)
@@ -296,7 +329,7 @@ smoke_paint_color :: proc(
 smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool #no_bounds_check {
 	if s.tick == s.last_tick do return false
 	smoke_count :=
-		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_palette)
+		s.color_handling == .Dynamic ? len(s.config.smoke_symbols) : len(s.smoke_codes)
 	for s.arrived < len(s.arrivals) && s.arrivals[s.arrived] <= s.tick do s.arrived += 1
 	changes := engine.sample_timeline_changes(
 		s.changes[:],
@@ -311,36 +344,20 @@ smoke_next :: proc(s: ^Smoke_State, e: ^engine.Engine) -> bool #no_bounds_check 
 		if sample < smoke_count {
 			if s.color_handling == .Dynamic {
 				engine.set_symbol(e, id, s.config.smoke_symbols[sample])
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_apply_input_colors(
-					&appearance,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				)
-				engine.set_appearance(e, id, appearance)
+				engine.set_appearance(e, id, s.dynamic_codes[s.style_slots[i]])
 			} else {
 				engine.set_symbol(e, id, s.smoke_symbols[sample])
-				engine.set_foreground(e, id, s.smoke_palette[sample])
+				engine.set_appearance(e, id, s.smoke_codes[sample])
 			}
 		} else {
 			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				engine.dynamic_apply_input_colors(
-					&appearance,
-					engine.get_initial_appearance(e, engine.Particle_Id(id)),
-				)
-				engine.set_appearance(e, id, appearance)
+				engine.set_appearance(e, id, s.dynamic_codes[s.style_slots[i]])
 			} else {
-				paint_entry := sample - smoke_count
-				engine.set_foreground(
+				engine.set_appearance(
 					e,
 					id,
-					smoke_paint_color(
-						s.config.final_gradient_stops[:],
-						s.final_colors[i],
-						s.paint_pairs[paint_entry],
-						s.paint_steps[paint_entry],
-					),
+					engine.ramp_code(s.paint_ramp, s.style_slots[i], sample - smoke_count),
 				)
 			}
 		}

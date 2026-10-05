@@ -66,27 +66,28 @@ binarypath_parse :: proc(cfg: ^Binarypath_Config, args: []string) -> bool {
 // This replaces the Rust port's per-glyph paths, scenes, callbacks, maps, and
 // vector-of-vector ownership graph with direct state evaluation.
 Binarypath_State :: struct {
-	config:             Binarypath_Config,
-	characters:         [dynamic]engine.Particle_Id,
-	bit_ids:            [dynamic]engine.Particle_Id,
-	final_colors:       [dynamic]engine.Color,
-	final_colors_by_id: [dynamic]engine.Color,
-	origins:            [dynamic]engine.Coord,
-	turns:              [dynamic]engine.Coord,
-	first_lengths:      [dynamic]f64,
-	total_lengths:      [dynamic]f64,
-	travel_steps:       [dynamic]int,
-	codes:              [dynamic]u32,
-	starts:             [dynamic]int,
-	collapsing:         [dynamic]int,
-	pending:            [dynamic]int,
-	active:             [dynamic]int,
-	final_wipe:         engine.Particle_Groups,
-	wipe_group:         int,
-	max_active:         int,
-	tick:               int,
-	wiping:             bool,
-	color_handling:     engine.Existing_Color_Handling,
+	config:         Binarypath_Config,
+	characters:     [dynamic]engine.Particle_Id,
+	first_bit_id:   engine.Particle_Id,
+	collapse_ramp:  engine.Appearance_Ramp,
+	style_index:    [dynamic]int,
+	final_codes:    [dynamic]engine.Appearance_Id,
+	origins:        [dynamic]engine.Coord,
+	turns:          [dynamic]engine.Coord,
+	first_lengths:  [dynamic]f64,
+	total_lengths:  [dynamic]f64,
+	travel_steps:   [dynamic]int,
+	codes:          [dynamic]u32,
+	starts:         [dynamic]int,
+	collapsing:     [dynamic]int,
+	pending:        [dynamic]int,
+	active:         [dynamic]int,
+	final_wipe:     engine.Particle_Groups,
+	wipe_group:     int,
+	max_active:     int,
+	tick:           int,
+	wiping:         bool,
+	color_handling: engine.Existing_Color_Handling,
 }
 
 binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
@@ -95,8 +96,9 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -120,9 +122,7 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		.Diagonal_TR2BL,
 	)
 	n := len(s.characters)
-	s.final_colors = make([dynamic]engine.Color, n)
-	s.final_colors_by_id = make([dynamic]engine.Color, len(e.particles))
-	s.bit_ids = make([dynamic]engine.Particle_Id, n * 8)
+	s.final_codes = make([dynamic]engine.Appearance_Id, len(e.particles))
 	s.origins = make([dynamic]engine.Coord, n)
 	s.turns = make([dynamic]engine.Coord, n)
 	s.first_lengths = make([dynamic]f64, n)
@@ -132,13 +132,19 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	s.starts = make([dynamic]int, n)
 	s.pending = make([dynamic]int, n)
 
+	target_styles := make([]engine.Appearance, n, context.temp_allocator)
+	defer delete(target_styles, context.temp_allocator)
 	initial_coords := e.particles.initial_coord
-	visible_flags := e.particles.flags
+	flags := e.particles.flags
 	for id, i in s.characters {
 		target := initial_coords[id]
-		s.final_colors[i] = engine.gradient_sample(sampler, spectrum[:], target)
-		s.final_colors_by_id[id] = s.final_colors[i]
-		visible_flags[id] -= {.Visible}
+		if s.color_handling == .Dynamic {
+			init_style := engine.get_initial_appearance(e, id)
+			target_styles[i] = {colors = init_style.colors, bold = init_style.bold}
+		} else {
+			target_styles[i] = {colors = {fg = engine.gradient_sample(sampler, spectrum[:], target)}}
+		}
+		flags[id] -= {.Visible}
 		origin := engine.canvas_random_coord(e.canvas, true, false)
 		turn :=
 			engine.random_below(2) == 0 ? engine.coord(origin.column, target.row) : engine.coord(target.column, origin.row)
@@ -150,27 +156,58 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 		s.starts[i] = -1
 		s.pending[i] = i
 		// ttfx formats the source Unicode code point as eight binary digits.
-		r := e.particles.initial_symbol[engine.Particle_Id(id)]
-		s.codes[i] = u32(r)
+		s.codes[i] = u32(e.particles.initial_symbol[id])
 	}
+
+	unique_styles: [dynamic]engine.Appearance
+	unique_styles, s.style_index = engine.group_values(target_styles)
+	defer delete(unique_styles)
+	tweens := make([]engine.Tween(engine.Appearance), len(unique_styles), context.temp_allocator)
+	defer delete(tweens, context.temp_allocator)
+	final_row_codes := make([]engine.Appearance_Id, len(unique_styles), context.temp_allocator)
+	defer delete(final_row_codes, context.temp_allocator)
+	white := engine.Color{0xFF, 0xFF, 0xFF}
+	for row_style, row in unique_styles {
+		final_row_codes[row] = engine.prepare_appearance(e, row_style)
+		dimmed := row_style.colors
+		if fg, ok := dimmed.fg.?; ok do dimmed.fg = engine.adjust_color_brightness(fg, 0.5)
+		if bg, ok := dimmed.bg.?; ok do dimmed.bg = engine.adjust_color_brightness(bg, 0.5)
+		tweens[row] = {
+			from = {colors = {white, white}, bold = row_style.bold},
+			to   = {colors = dimmed, bold = row_style.bold},
+		}
+	}
+	s.collapse_ramp = engine.ramp_make(e, tweens, 6)
+	for id, i in s.characters {
+		s.final_codes[id] = final_row_codes[s.style_index[i]]
+	}
+
+	palette_len := max(len(s.config.binary_colors), 1)
+	binary_codes := make([]engine.Appearance_Id, palette_len, context.temp_allocator)
+	defer delete(binary_codes, context.temp_allocator)
+	if len(s.config.binary_colors) == 0 {
+		binary_codes[0] = engine.prepare_appearance(e, engine.Appearance{})
+	} else {
+		for color, ci in s.config.binary_colors {
+			binary_codes[ci] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+		}
+	}
+
 	// No character-storage column is held across add_particle: it can grow and
-	// relocate each SoA field. The prep pass above owns all source data needed
-	// to create the virtual bit rows below.
-	plain := engine.prepare_appearance(e, engine.Appearance{})
+	// relocate each SoA field. Bit particles occupy one contiguous ID span.
+	s.first_bit_id = engine.Particle_Id(len(e.particles))
 	characters := engine.particle_batch(e, 8 * n)
 	for i in 0 ..< n {
 		for bit in 0 ..< 8 {
+			code := binary_codes[engine.random_below(palette_len)]
 			bit_id := engine.add_particle(
 				&characters,
 				((s.codes[i] >> u32(7 - bit)) & 1) == 0 ? '0' : '1',
-				plain,
+				code,
 				s.origins[i],
 			)
-			color := s.config.binary_colors[engine.random_below(len(s.config.binary_colors))]
-			s.bit_ids[i * 8 + bit] = bit_id
 			e.particles.flags[bit_id] -= {.Visible}
 			e.particles.layer[bit_id] = 1
-			engine.set_foreground(e, bit_id, color)
 		}
 	}
 	s.max_active = max(engine.round_to_int(s.config.active_binary_groups * f64(n)), 1)
@@ -178,7 +215,7 @@ binarypath_build :: proc(s: ^Binarypath_State, e: ^engine.Engine) {
 	reserve(&s.collapsing, n)
 }
 
-binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int) -> engine.Coord {
+binarypath_coord_at :: proc(s: ^Binarypath_State, e: ^engine.Engine, i, age: int) -> engine.Coord #no_bounds_check {
 	steps := s.travel_steps[i]
 	travelled := min(f64(age + 1) / f64(steps), 1) * s.total_lengths[i]
 	if travelled <= s.first_lengths[i] {
@@ -194,23 +231,11 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool #no_bou
 	if s.wiping {
 		groups := len(s.final_wipe.spans)
 		if s.wipe_group >= groups do return false
-
-
-		visible_flags := e.particles.flags
 		for _ in 0 ..< 2 {
 			if s.wipe_group == groups do break
 			for id in engine.group_members(s.final_wipe, s.wipe_group) {
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-				if s.color_handling == .Dynamic {
-					appearance := engine.get_appearance(e, id)
-					engine.dynamic_apply_input_colors(
-						&appearance,
-						engine.get_initial_appearance(e, engine.Particle_Id(id)),
-					)
-					engine.set_appearance(e, id, appearance)
-				} else {
-					engine.set_foreground(e, id, s.final_colors_by_id[id])
-				}
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
+				engine.set_appearance(e, id, s.final_codes[id])
 				engine.set_particle(e, id, engine.Visible(true))
 			}
 			s.wipe_group += 1
@@ -228,34 +253,38 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool #no_bou
 		append(&s.active, rep)
 	}
 
-	visible_flags := e.particles.flags
-
-
 	write := 0
 	for rep in s.active {
 		age := s.tick - s.starts[rep]
-		if age <= s.travel_steps[rep] + 7 {
+		steps := s.travel_steps[rep]
+		base_bit := s.first_bit_id + engine.Particle_Id(rep * 8)
+		if age <= steps + 7 {
 			// Bit k at age a samples the path at a - k, which is where bit k - 1
 			// was published on the previous tick. Snapshot those coordinates
 			// before any write, so only the leading bit evaluates the path.
-			bits := s.bit_ids[rep * 8:rep * 8 + 8]
 			trail: [8]engine.Coord
-			trail[0] = binarypath_coord_at(s, e, rep, age)
-			for bit in 1 ..< 8 do trail[bit] = e.particles.current_coord[bits[bit - 1]]
-			for id, bit in bits {
-				if age < bit do continue
-				engine.set_particle(e, id, coord = trail[bit], visible = true, layer = e.particles[id].layer)
+			trail[0] =
+				age < steps ? binarypath_coord_at(s, e, rep, age) : e.particles.initial_coord[s.characters[rep]]
+			for bit in 1 ..< 8 do trail[bit] = e.particles.current_coord[base_bit + engine.Particle_Id(bit - 1)]
+			for bit in 0 ..< 8 {
+				if age < bit do break
+				id := base_bit + engine.Particle_Id(bit)
+				if age == bit {
+					engine.set_particle(e, id, trail[bit], true, 1)
+				} else {
+					engine.set_position(e, id, trail[bit])
+				}
 			}
 			s.active[write] = rep
 			write += 1
 		} else {
 			for bit in 0 ..< 8 {
-				engine.set_particle(e, s.bit_ids[rep * 8 + bit], engine.Visible(false))
+				engine.set_particle(e, base_bit + engine.Particle_Id(bit), engine.Visible(false))
 			}
 			append(&s.collapsing, rep)
 			s.starts[rep] = s.tick
 			id := s.characters[rep]
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+			engine.set_symbol(e, id, e.particles.initial_symbol[id])
 			engine.set_particle(e, id, engine.Visible(true))
 		}
 	}
@@ -269,23 +298,7 @@ binarypath_next :: proc(s: ^Binarypath_State, e: ^engine.Engine) -> bool #no_bou
 			s.collapsing[collapse_write] = i
 			collapse_write += 1
 			if age % 3 != 0 do continue
-			if s.color_handling == .Dynamic {
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				appearance := engine.get_appearance(e, id)
-				dimmed := style.colors
-				if fg, ok := dimmed.fg.?; ok do dimmed.fg = engine.adjust_color_brightness(fg, 0.5)
-				if bg, ok := dimmed.bg.?; ok do dimmed.bg = engine.adjust_color_brightness(bg, 0.5)
-				white := engine.Color{0xFF, 0xFF, 0xFF}
-				appearance.colors = engine.tween(engine.Color_Pair{white, white}, dimmed, 6, age / 3)
-				engine.set_appearance(e, id, appearance)
-			} else {
-				dim := engine.adjust_color_brightness(s.final_colors[i], 0.5)
-				engine.set_foreground(
-					e,
-					id,
-					engine.tween(engine.Color{0xFF, 0xFF, 0xFF}, dim, 6, age / 3),
-				)
-			}
+			engine.set_appearance(e, id, engine.ramp_code(s.collapse_ramp, s.style_index[i], age / 3))
 		}
 	}
 	resize(&s.collapsing, collapse_write)

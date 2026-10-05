@@ -73,7 +73,12 @@ Errorcorrect_State :: struct {
 	config:         Errorcorrect_Config,
 	swapped:        [dynamic]Errorcorrect_Pair,
 	swapped_head:   int,
-	final_colors:   [dynamic]engine.Color,
+	final_ramp:     engine.Appearance_Ramp,
+	fade_index:     [dynamic]int,
+	move_codes:     [11]engine.Appearance_Id,
+	error_code:     engine.Appearance_Id,
+	white_code:     engine.Appearance_Id,
+	correct_code:   engine.Appearance_Id,
 	origins:        [dynamic]engine.Coord,
 	max_steps:      [dynamic]int,
 	start_ticks:    [dynamic]int,
@@ -88,8 +93,9 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(spectrum[:])
+	defer delete(spectrum)
 	sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -106,46 +112,67 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
-	defer delete(characters[:])
-	s.final_colors = make([dynamic]engine.Color, len(e.particles))
+	defer delete(characters)
+	storage_len := len(e.particles)
 	s.color_handling = e.cfg.existing_color_handling
-	s.origins = make([dynamic]engine.Coord, len(e.particles))
-	s.max_steps = make([dynamic]int, len(e.particles))
-	s.start_ticks = make([dynamic]int, len(e.particles))
-	for i in 0 ..< len(s.start_ticks) do s.start_ticks[i] = -1
-	for id in characters {
-		s.final_colors[id] = engine.gradient_sample(
-			sampler,
-			spectrum[:],
-			e.particles.initial_coord[id],
-		)
-		engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
+	s.fade_index = make([dynamic]int, storage_len)
+	s.origins = make([dynamic]engine.Coord, storage_len)
+	s.max_steps = make([dynamic]int, storage_len)
+	s.start_ticks = make([dynamic]int, storage_len)
+	for i in 0 ..< storage_len do s.start_ticks[i] = -1
+	if len(characters) == 0 do return
+
+	s.error_code = engine.prepare_appearance(e, {colors = {fg = s.config.error_color}})
+	s.white_code = engine.prepare_appearance(e, {colors = {fg = engine.Color{0xff, 0xff, 0xff}}})
+	s.correct_code = engine.prepare_appearance(e, {colors = {fg = s.config.correct_color}})
+	s.move_codes[0] = s.error_code
+	s.move_codes[10] = s.correct_code
+	for step in 1 ..= 9 {
+		c := engine.tween(s.config.error_color, s.config.correct_color, 10, step)
+		s.move_codes[step] = engine.prepare_appearance(e, {colors = {fg = c}})
+	}
+
+	fade_tweens := make([]engine.Tween(engine.Appearance), len(characters), context.temp_allocator)
+	defer delete(fade_tweens, context.temp_allocator)
+	correct := s.config.correct_color
+	for id, k in characters {
 		if s.color_handling == .Dynamic {
-			engine.set_foreground(
-				e,
-				id,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.fg,
-			)
-			engine.set_background(
-				e,
-				id,
-				engine.get_initial_appearance(e, engine.Particle_Id(id)).colors.bg,
-			)
+			init_style := engine.get_initial_appearance(e, id)
+			fade_tweens[k] = {
+				from = {colors = {correct, correct}},
+				to   = {colors = init_style.colors},
+			}
 		} else {
-			engine.set_foreground(e, id, s.final_colors[id])
+			fc := engine.gradient_sample(sampler, spectrum[:], e.particles.initial_coord[id])
+			fade_tweens[k] = {
+				from = {colors = {fg = correct}},
+				to   = {colors = {fg = fc}},
+			}
 		}
+	}
+	unique_tweens, indices := engine.group_values(fade_tweens)
+	defer delete(unique_tweens)
+	defer delete(indices)
+	s.final_ramp = engine.ramp_make(e, unique_tweens[:], 10)
+	for id, k in characters {
+		idx := indices[k]
+		s.fade_index[id] = idx
+		engine.set_symbol(e, id, e.particles.initial_symbol[id])
+		engine.set_appearance(e, id, engine.ramp_code(s.final_ramp, idx, 10))
 		e.particles.flags[id] += {.Visible}
 	}
+
 	available := make([dynamic]engine.Particle_Id, 0, len(characters), context.temp_allocator)
+	defer delete(available)
 	append(&available, ..characters[:])
 	for _ in 0 ..< int(s.config.error_pairs * f64(len(characters))) {
 		if len(available) < 2 do break
-		first_index := engine.random_below(
-			len(available),
-		); first := available[first_index]; ordered_remove(&available, first_index)
-		second_index := engine.random_below(
-			len(available),
-		); second := available[second_index]; ordered_remove(&available, second_index)
+		first_index := engine.random_below(len(available))
+		first := available[first_index]
+		ordered_remove(&available, first_index)
+		second_index := engine.random_below(len(available))
+		second := available[second_index]
+		ordered_remove(&available, second_index)
 		first_home, second_home :=
 			e.particles.initial_coord[first], e.particles.initial_coord[second]
 		s.origins[first], s.origins[second] = second_home, first_home
@@ -163,11 +190,25 @@ errorcorrect_build :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) {
 			),
 			1,
 		)
-		// A swapped pair has to read as an error from the first frame, not only
-		// once its own correction starts. The reference activates an
-		// error-coloured scene for both characters during setup.
-		engine.set_foreground(e, first, s.config.error_color)
-		engine.set_foreground(e, second, s.config.error_color)
+		// A swapped pair has to read as an error from the first frame.
+		if s.color_handling == .Dynamic {
+			// Preserve input bg if present during initial swapped hold, matching set_foreground.
+			first_bg := engine.get_initial_appearance(e, first).colors.bg
+			second_bg := engine.get_initial_appearance(e, second).colors.bg
+			engine.set_appearance(
+				e,
+				first,
+				first_bg == nil ? s.error_code : engine.prepare_appearance(e, {colors = {fg = s.config.error_color, bg = first_bg}}),
+			)
+			engine.set_appearance(
+				e,
+				second,
+				second_bg == nil ? s.error_code : engine.prepare_appearance(e, {colors = {fg = s.config.error_color, bg = second_bg}}),
+			)
+		} else {
+			engine.set_appearance(e, first, s.error_code)
+			engine.set_appearance(e, second, s.error_code)
+		}
 		append(&s.swapped, Errorcorrect_Pair{first, second})
 	}
 	reserve(&s.active, 2 * len(s.swapped))
@@ -182,7 +223,9 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool #no
 		s.swap_delay = s.config.swap_delay
 	} else if s.swap_delay != 0 do s.swap_delay -= 1
 	if len(s.active) == 0 do return false
-	white := engine.Color{0xff, 0xff, 0xff}
+	first_wipe := Errorcorrect_First_Wipe
+	last_wipe := Errorcorrect_Last_Wipe
+	dynamic_mode := s.color_handling == .Dynamic
 	write := 0
 	for id in s.active {
 		age, motion_start := s.tick - s.start_ticks[id], 84
@@ -195,62 +238,63 @@ errorcorrect_next :: proc(s: ^Errorcorrect_State, e: ^engine.Engine) -> bool #no
 			if age % 3 != 0 do continue
 			if (age / 3) % 2 == 0 {
 				engine.set_symbol(e, id, '▓')
-				engine.set_foreground(e, id, s.config.error_color)
+				if dynamic_mode && engine.get_initial_appearance(e, id).colors.bg != nil {
+					engine.set_foreground(e, id, s.config.error_color)
+				} else {
+					engine.set_appearance(e, id, s.error_code)
+				}
 			} else {
-				engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-				engine.set_foreground(e, id, white)
+				engine.set_symbol(e, id, e.particles.initial_symbol[id])
+				if dynamic_mode && engine.get_initial_appearance(e, id).colors.bg != nil {
+					engine.set_foreground(e, id, engine.Color{0xff, 0xff, 0xff})
+				} else {
+					engine.set_appearance(e, id, s.white_code)
+				}
 			}
 		case age < 84:
 			if age % 3 != 0 do continue
-			engine.set_symbol(e, id, Errorcorrect_First_Wipe[(age - 60) / 3])
-			engine.set_foreground(e, id, s.config.error_color)
+			engine.set_symbol(e, id, first_wipe[(age - 60) / 3])
+			if dynamic_mode && engine.get_initial_appearance(e, id).colors.bg != nil {
+				engine.set_foreground(e, id, s.config.error_color)
+			} else {
+				engine.set_appearance(e, id, s.error_code)
+			}
 		case age < last_start:
 			progress := f64(age - motion_start + 1) / f64(s.max_steps[id])
-			engine.set_particle(
+			engine.set_placement(
 				e,
 				id,
 				engine.tween(s.origins[id], e.particles.initial_coord[id], progress),
+				true,
+				1,
 			)
-			engine.set_particle(e, id, engine.Layer(1))
 			engine.set_symbol(e, id, '█')
-			engine.set_foreground(
-				e,
-				id,
-				engine.tween(
-					s.config.error_color,
-					s.config.correct_color,
-					10,
-					min(engine.round_to_int(progress * 10), 10),
-				),
-			)
-		case age < last_start + 21:
-			if (age - last_start) % 3 != 0 do continue
-			if age == last_start {
-				engine.set_particle(e, id, e.particles.initial_coord[id])
-				engine.set_particle(e, id, engine.Layer(0))
-			}
-			engine.set_symbol(e, id, Errorcorrect_Last_Wipe[(age - last_start) / 3])
-			engine.set_foreground(e, id, s.config.correct_color)
-		case:
-			if (age - last_start - 21) % 3 != 0 do continue
-			engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-			step := min((age - last_start - 21) / 3, 10)
-			if s.color_handling == .Dynamic {
-				appearance := engine.get_appearance(e, id)
-				appearance.colors = engine.tween(engine.Color_Pair{s.config.correct_color, s.config.correct_color}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 10, step)
-				engine.set_appearance(e, id, appearance)
-			} else {
+			move_step := min(engine.round_to_int(progress * 10), 10)
+			if dynamic_mode && engine.get_initial_appearance(e, id).colors.bg != nil {
 				engine.set_foreground(
 					e,
 					id,
-					engine.tween(
-						s.config.correct_color,
-						s.final_colors[id],
-						10,
-						step,
-					),
+					engine.tween(s.config.error_color, s.config.correct_color, 10, move_step),
 				)
+			} else {
+				engine.set_appearance(e, id, s.move_codes[move_step])
 			}
+		case age < last_start + 21:
+			if (age - last_start) % 3 != 0 do continue
+			if age == last_start {
+				engine.set_placement(e, id, e.particles.initial_coord[id], true, 0)
+			}
+			engine.set_symbol(e, id, last_wipe[(age - last_start) / 3])
+			if dynamic_mode && engine.get_initial_appearance(e, id).colors.bg != nil {
+				engine.set_foreground(e, id, s.config.correct_color)
+			} else {
+				engine.set_appearance(e, id, s.correct_code)
+			}
+		case:
+			if (age - last_start - 21) % 3 != 0 do continue
+			engine.set_symbol(e, id, e.particles.initial_symbol[id])
+			step := min((age - last_start - 21) / 3, 10)
+			engine.set_appearance(e, id, engine.ramp_code(s.final_ramp, s.fade_index[id], step))
 		}
 	}
 	resize(&s.active, write)

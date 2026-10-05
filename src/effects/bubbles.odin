@@ -74,7 +74,7 @@ bubbles_parse :: proc(cfg: ^Bubbles_Config, args: []string) -> bool {
 		name, value, has_value := split_opt(args[i])
 		switch name {
 		case "--rainbow":
-			cfg.rainbow = true
+			if !parse_bool_flag(&cfg.rainbow, has_value) do return false
 		case "--bubble-colors":
 			if !parse_colors_flag(&cfg.bubble_colors, args, &i, value, has_value) do return false
 		case "--pop-color":
@@ -106,32 +106,38 @@ bubbles_parse :: proc(cfg: ^Bubbles_Config, args: []string) -> bool {
 }
 
 Bubbles_State :: struct {
-	config:          Bubbles_Config,
-	characters:      [dynamic]engine.Particle_Id,
-	final_colors:    [dynamic]engine.Color, // Particle_Id indexed
-	circle_dx:       [dynamic]int, // Particle_Id indexed
-	circle_dy:       [dynamic]int,
-	color_offsets:   [dynamic]int,
-	pop_offsets:     [dynamic]engine.Coord,
-	pop_origins:     [dynamic]engine.Coord,
-	pop_targets:     [dynamic]engine.Coord,
-	expand_steps:    [dynamic]int,
-	pop_steps:       [dynamic]int,
-	bubbles:         engine.Particle_Groups,
-	bubble_origins:  [dynamic]engine.Coord,
-	bubble_targets:  [dynamic]engine.Coord,
-	bubble_steps:    [dynamic]int,
-	bubble_radii:    [dynamic]int,
-	bubble_colors:   [dynamic]engine.Color,
-	bubble_states:   [dynamic]Bubbles_Bubble_State,
-	bubble_starts:   [dynamic]int,
-	pop_starts:      [dynamic]int,
-	active_bubbles:  [dynamic]int,
-	next_bubble:     int,
-	delay:           int,
-	rainbow_palette: [dynamic]engine.Color,
-	tick:            int,
-	color_handling:  engine.Existing_Color_Handling,
+	config:             Bubbles_Config,
+	characters:         [dynamic]engine.Particle_Id,
+	final_index:        [dynamic]int, // Particle_Id indexed ramp row
+	fades:              engine.Appearance_Ramp,
+	uncolored_dynamic:  [dynamic]bool, // Particle_Id indexed
+	circle_dx:          [dynamic]int, // Particle_Id indexed
+	circle_dy:          [dynamic]int,
+	color_offsets:      [dynamic]int,
+	pop_offsets:        [dynamic]engine.Coord,
+	pop_origins:        [dynamic]engine.Coord,
+	pop_targets:        [dynamic]engine.Coord,
+	expand_steps:       [dynamic]int,
+	pop_steps:          [dynamic]int,
+	bubbles:            engine.Particle_Groups,
+	bubble_origins:     [dynamic]engine.Coord,
+	bubble_targets:     [dynamic]engine.Coord,
+	last_anchors:       [dynamic]engine.Coord,
+	bubble_steps:       [dynamic]int,
+	bubble_radii:       [dynamic]int,
+	bubble_colors:      [dynamic]engine.Color,
+	bubble_color_codes: [dynamic]engine.Appearance_Id,
+	bubble_states:      [dynamic]Bubbles_Bubble_State,
+	bubble_starts:      [dynamic]int,
+	pop_starts:         [dynamic]int,
+	active_bubbles:     [dynamic]int,
+	next_bubble:        int,
+	delay:              int,
+	rainbow_palette:    [dynamic]engine.Color,
+	rainbow_codes:      [dynamic]engine.Appearance_Id,
+	pop_code:           engine.Appearance_Id,
+	tick:               int,
+	color_handling:     engine.Existing_Color_Handling,
 }
 
 bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
@@ -140,8 +146,9 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 		s.config.final_gradient_stops[:],
 		s.config.final_gradient_steps[:],
 		false,
+		context.temp_allocator,
 	)
-	defer delete(final_spectrum[:])
+	defer delete(final_spectrum)
 	final_sampler := engine.gradient_sampler(
 		e.canvas.text_bottom,
 		e.canvas.text_top,
@@ -159,25 +166,62 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 		engine.PARTICLE_FILTER_INPUT,
 		.Top_Bottom_Left_Right,
 	)
-	s.final_colors = make([dynamic]engine.Color, len(e.particles))
-	s.circle_dx = make([dynamic]int, len(e.particles))
-	s.circle_dy = make([dynamic]int, len(e.particles))
-	s.color_offsets = make([dynamic]int, len(e.particles))
-	s.pop_offsets = make([dynamic]engine.Coord, len(e.particles))
-	s.pop_origins = make([dynamic]engine.Coord, len(e.particles))
-	s.pop_targets = make([dynamic]engine.Coord, len(e.particles))
-	s.expand_steps = make([dynamic]int, len(e.particles))
-	s.pop_steps = make([dynamic]int, len(e.particles))
+	n_particles := len(e.particles)
+	s.final_index = make([dynamic]int, n_particles)
+	s.circle_dx = make([dynamic]int, n_particles)
+	s.circle_dy = make([dynamic]int, n_particles)
+	s.color_offsets = make([dynamic]int, n_particles)
+	s.pop_offsets = make([dynamic]engine.Coord, n_particles)
+	s.pop_origins = make([dynamic]engine.Coord, n_particles)
+	s.pop_targets = make([dynamic]engine.Coord, n_particles)
+	s.expand_steps = make([dynamic]int, n_particles)
+	s.pop_steps = make([dynamic]int, n_particles)
 	initial_coords := e.particles.initial_coord
 	visible_flags := e.particles.flags
-	for id in s.characters {
-		s.final_colors[id] = engine.gradient_sample(
-			final_sampler,
-			final_spectrum[:],
-			initial_coords[id],
-		)
-		visible_flags[id] -= {.Visible}
-		e.particles.layer[id] = 1
+
+	s.pop_code = engine.prepare_appearance(e, engine.Appearance{colors = {fg = s.config.pop_color}})
+	if s.color_handling == .Dynamic {
+		s.uncolored_dynamic = make([dynamic]bool, n_particles)
+		tweens := make([]engine.Tween(engine.Appearance), len(s.characters), context.temp_allocator)
+		defer delete(tweens, context.temp_allocator)
+		for id, slot in s.characters {
+			init_style := engine.get_initial_appearance(e, id)
+			s.uncolored_dynamic[id] = init_style.colors.fg == nil && init_style.colors.bg == nil
+			tweens[slot] = {
+				from = {colors = {s.config.pop_color, s.config.pop_color}, bold = init_style.bold},
+				to   = {colors = init_style.colors, bold = init_style.bold},
+			}
+			visible_flags[id] -= {.Visible}
+			e.particles.layer[id] = 1
+		}
+		unique_tweens, slot_rows := engine.group_values(tweens)
+		defer delete(unique_tweens)
+		defer delete(slot_rows)
+		if len(unique_tweens) > 0 {
+			s.fades = engine.ramp_make(e, unique_tweens[:], 8)
+			for id, slot in s.characters do s.final_index[id] = slot_rows[slot]
+		}
+	} else {
+		s.fades = engine.ramp_make(e, engine.tweens_from(s.config.pop_color, final_spectrum[:]), 8)
+		for id in s.characters {
+			s.final_index[id] = engine.gradient_sample_index(
+				final_sampler,
+				len(final_spectrum),
+				initial_coords[id],
+			)
+			visible_flags[id] -= {.Visible}
+			e.particles.layer[id] = 1
+		}
+	}
+
+	palette_codes := make([]engine.Appearance_Id, max(len(s.config.bubble_colors), 1), context.temp_allocator)
+	defer delete(palette_codes, context.temp_allocator)
+	if len(s.config.bubble_colors) == 0 {
+		palette_codes[0] = engine.prepare_appearance(e, engine.Appearance{})
+	} else {
+		for color, ci in s.config.bubble_colors {
+			palette_codes[ci] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+		}
 	}
 
 	rows := engine.get_particles_grouped(query, engine.PARTICLE_FILTER_INPUT, .Row_B2T)
@@ -194,9 +238,11 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 	bubble_count := len(s.bubbles.spans)
 	s.bubble_origins = make([dynamic]engine.Coord, bubble_count)
 	s.bubble_targets = make([dynamic]engine.Coord, bubble_count)
+	s.last_anchors = make([dynamic]engine.Coord, bubble_count)
 	s.bubble_steps = make([dynamic]int, bubble_count)
 	s.bubble_radii = make([dynamic]int, bubble_count)
 	s.bubble_colors = make([dynamic]engine.Color, bubble_count)
+	s.bubble_color_codes = make([dynamic]engine.Appearance_Id, bubble_count)
 	s.bubble_states = make([dynamic]Bubbles_Bubble_State, bubble_count)
 	s.bubble_starts = make([dynamic]int, bubble_count)
 	s.pop_starts = make([dynamic]int, bubble_count)
@@ -215,23 +261,28 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 		target := engine.coord(engine.random_range(e.canvas.left, e.canvas.right + 1), lowest)
 		s.bubble_origins[bi] = origin
 		s.bubble_targets[bi] = target
+		s.last_anchors[bi] = engine.coord(min(int), min(int))
 		s.bubble_steps[bi] = max(
 			engine.round_to_int(engine.line_length(origin, target, true) / s.config.bubble_speed),
 			1,
 		)
 		s.bubble_radii[bi] = radius
-		s.bubble_colors[bi] = s.config.bubble_colors[engine.random_below(len(s.config.bubble_colors))]
+		ci := engine.random_below(max(len(s.config.bubble_colors), 1))
+		if len(s.config.bubble_colors) > 0 do s.bubble_colors[bi] = s.config.bubble_colors[ci]
+		s.bubble_color_codes[bi] = palette_codes[ci]
 		circle_points := engine.find_coords_on_circle(
 			engine.coord(0, 0),
 			radius,
 			len(members),
 			false,
+			context.temp_allocator,
 		)
 		pop_points := engine.find_coords_on_circle(
 			engine.coord(0, 0),
 			radius + 3,
 			len(members),
 			false,
+			context.temp_allocator,
 		)
 		palette_offset := 0
 		for id, point in members {
@@ -247,8 +298,8 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 				1,
 			)
 		}
-		delete(circle_points[:])
-		delete(pop_points[:])
+		delete(circle_points)
+		delete(pop_points)
 	}
 	if s.config.rainbow {
 		s.rainbow_palette = engine.gradient_make(
@@ -264,6 +315,10 @@ bubbles_build :: proc(s: ^Bubbles_State, e: ^engine.Engine) {
 			[]int{5},
 			false,
 		)
+		s.rainbow_codes = make([dynamic]engine.Appearance_Id, len(s.rainbow_palette))
+		for color, ri in s.rainbow_palette {
+			s.rainbow_codes[ri] = engine.prepare_appearance(e, engine.Appearance{colors = {fg = color}})
+		}
 		for id in s.characters {
 			for s.color_offsets[id] >= len(s.rainbow_palette) do s.color_offsets[id] -= len(s.rainbow_palette)
 		}
@@ -298,24 +353,41 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 			steps := s.bubble_steps[bi]
 			progress := f64(min(age + 1, steps)) / f64(steps)
 			anchor := engine.tween(s.bubble_origins[bi], s.bubble_targets[bi], progress)
+			moved := age == 0 || anchor != s.last_anchors[bi]
+			recolor := (s.config.rainbow && age % 4 == 0) || (!s.config.rainbow && age == 0)
 			landed := age + 1 >= steps
-			for id in members {
-				engine.set_particle(
-					e,
-					id,
-					engine.coord(anchor.column + s.circle_dx[id], anchor.row + s.circle_dy[id]),
-				)
-				landed ||= anchor.row + s.circle_dy[id] == s.bubble_targets[bi].row
-				if age == 0 {
-					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
-					engine.set_particle(e, id, engine.Visible(true))
-				}
-				if s.config.rainbow && age % 4 == 0 {
-					color_index := s.color_offsets[id] + (age / 4) % len(s.rainbow_palette)
-					if color_index >= len(s.rainbow_palette) do color_index -= len(s.rainbow_palette)
-					engine.set_foreground(e, id, s.rainbow_palette[color_index])
-				} else if !s.config.rainbow && age == 0 {
-					engine.set_foreground(e, id, s.bubble_colors[bi])
+			if moved || recolor {
+				s.last_anchors[bi] = anchor
+				target_row := s.bubble_targets[bi].row
+				rainbow_step := (age / 4) % len(s.rainbow_palette) if s.config.rainbow else 0
+				for id in members {
+					if moved {
+						c := engine.coord(anchor.column + s.circle_dx[id], anchor.row + s.circle_dy[id])
+						if age == 0 {
+							engine.set_symbol(e, id, e.particles.initial_symbol[id])
+							engine.set_particle(e, id, c, true, 1)
+						} else {
+							engine.set_position(e, id, c)
+						}
+						landed ||= c.row == target_row
+					}
+					if recolor {
+						if s.config.rainbow {
+							color_index := s.color_offsets[id] + rainbow_step
+							if color_index >= len(s.rainbow_palette) do color_index -= len(s.rainbow_palette)
+							if s.color_handling == .Dynamic {
+								engine.set_foreground(e, id, s.rainbow_palette[color_index])
+							} else {
+								engine.set_appearance(e, id, s.rainbow_codes[color_index])
+							}
+						} else {
+							if s.color_handling == .Dynamic {
+								engine.set_foreground(e, id, s.bubble_colors[bi])
+							} else {
+								engine.set_appearance(e, id, s.bubble_color_codes[bi])
+							}
+						}
+					}
 				}
 			}
 			if landed || (s.config.pop_condition == .Anywhere && engine.random_float() < 0.002) {
@@ -341,11 +413,13 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 		} else {
 			age := s.tick - s.pop_starts[bi]
 			remaining := 0
+			color_tick := age >= 18 && age <= 66 && (age - 18) % 6 == 0
+			fade_step := min((age - 18) / 6, 8) if color_tick else 0
 			for id in members {
 				expand_steps := s.expand_steps[id]
 				move_age := age - expand_steps
 				if age < expand_steps {
-					engine.set_particle(
+					engine.set_position(
 						e,
 						id,
 						engine.tween(
@@ -356,48 +430,32 @@ bubbles_next :: proc(s: ^Bubbles_State, e: ^engine.Engine) -> bool #no_bounds_ch
 					)
 				} else if move_age < s.pop_steps[id] {
 					steps := s.pop_steps[id]
-					engine.set_particle(
-						e,
-						id,
-						engine.tween(
-							s.pop_targets[id],
-							initial_coords[id],
-							ease.ease(
-								.Exponential_In_Out,
-								f64(min(move_age + 1, steps)) / f64(steps),
-							),
+					coord := engine.tween(
+						s.pop_targets[id],
+						initial_coords[id],
+						ease.ease(
+							.Exponential_In_Out,
+							f64(min(move_age + 1, steps)) / f64(steps),
 						),
 					)
 					if move_age + 1 >= steps {
-						engine.set_particle(e, id, engine.Layer(0))
+						engine.set_particle(e, id, coord, true, 0)
+					} else {
+						engine.set_position(e, id, coord)
 					}
 				}
 				if age == 0 || age == 9 {
 					engine.set_symbol(e, id, age < 9 ? '*' : '\'')
-					engine.set_foreground(e, id, s.config.pop_color)
-				} else if age >= 18 && age <= 66 && (age - 18) % 6 == 0 {
-					color_age := age - 18
-					engine.set_symbol(e, id, e.particles.initial_symbol[engine.Particle_Id(id)])
 					if s.color_handling == .Dynamic {
-						appearance := engine.get_appearance(e, id)
-						appearance.colors = engine.tween(engine.Color_Pair{s.config.pop_color, s.config.pop_color}, engine.get_initial_appearance(e, engine.Particle_Id(id)).colors, 8, min(color_age / 6, 8))
-						engine.set_appearance(e, id, appearance)
+						engine.set_foreground(e, id, s.config.pop_color)
 					} else {
-						engine.set_foreground(
-							e,
-							id,
-							engine.tween(
-								s.config.pop_color,
-								s.final_colors[id],
-								8,
-								min(color_age / 6, 8),
-							),
-						)
+						engine.set_appearance(e, id, s.pop_code)
 					}
+				} else if color_tick {
+					if age == 18 do engine.set_symbol(e, id, e.particles.initial_symbol[id])
+					engine.set_appearance(e, id, engine.ramp_code(s.fades, s.final_index[id], fade_step))
 				}
-				style := engine.get_initial_appearance(e, engine.Particle_Id(id))
-				final_ticks :=
-					s.color_handling == .Dynamic && style.colors.fg == nil && style.colors.bg == nil ? 6 : 54
+				final_ticks := s.color_handling == .Dynamic && s.uncolored_dynamic[id] ? 6 : 54
 				if age + 1 < max(expand_steps + s.pop_steps[id], 18 + final_ticks) {
 					members[remaining] = id
 					remaining += 1
