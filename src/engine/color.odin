@@ -191,8 +191,11 @@ adjust_rgb_brightness :: proc(color: Color, brightness: f64) -> Color {
 }
 
 adjust_hsl_brightness :: proc(color: HSL_Color, brightness: f64) -> Color {
-	lightness := clamp(color.l * brightness, 0.0, 1.0)
-	rgba := linalg.vector4_hsl_to_rgb(color.h, color.s, lightness, 1)
+	return hsl_to_color({color.h, color.s, clamp(color.l * brightness, 0.0, 1.0)})
+}
+
+hsl_to_color :: proc(color: HSL_Color) -> Color {
+	rgba := linalg.vector4_hsl_to_rgb(color.h, color.s, color.l, 1)
 	return {
 		u8(round_to_int(rgba.x * 255)),
 		u8(round_to_int(rgba.y * 255)),

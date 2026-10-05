@@ -5,13 +5,14 @@ import "core:math/linalg"
 
 // Values moving between two endpoints. Every kind keeps its own rule: colors
 // step with TerminalTextEffects' integer channel deltas, so palettes match what
-// users know; color pairs step each lane that has a target; coordinates and
-// scalars interpolate linearly. Callers apply any easing to the step or
+// users know; color pairs step each lane that has a target; coordinates, HSL
+// colors and scalars interpolate linearly. Callers apply any easing to the step or
 // fraction they pass, and own when a tween advances.
 tween :: proc {
 	tween_color,
 	tween_colors,
 	tween_coord,
+	tween_hsl,
 	tween_scalar,
 }
 
@@ -47,6 +48,12 @@ tween_colors :: proc(from, to: Color_Pair, steps, step: int) -> Color_Pair {
 // Fraction `t` of the way along the line, rounded to a terminal cell.
 tween_coord :: #force_inline proc(from, to: Coord, t: f64) -> Coord {
 	return rounded_coord(linalg.lerp(coord_vec(from), coord_vec(to), t))
+}
+
+// Each HSL component moves linearly; hue takes the direct path, not the short
+// way around the wheel. Tweening only lightness scales brightness.
+tween_hsl :: #force_inline proc(from, to: HSL_Color, t: f64) -> HSL_Color {
+	return {math.lerp(from.h, to.h, t), math.lerp(from.s, to.s, t), math.lerp(from.l, to.l, t)}
 }
 
 tween_scalar :: #force_inline proc(from, to, t: f64) -> f64 {

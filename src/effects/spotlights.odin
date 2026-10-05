@@ -175,15 +175,20 @@ spotlights_build :: proc(s: ^Spotlights_State, e: ^engine.Engine) {
 	steps := Spotlights_Light_Levels - 1
 	light := make([]engine.Appearance, len(bases) * Spotlights_Light_Levels, context.temp_allocator)
 	for lit, row in bases {
-		fg_hsl, bg_hsl: engine.HSL_Color
-		if fg, ok := lit.colors.fg.?; ok do fg_hsl = engine.color_to_hsl(fg)
-		if bg, ok := lit.colors.bg.?; ok do bg_hsl = engine.color_to_hsl(bg)
+		// Light scales HSL lightness, so each lane tweens from its dimmed
+		// lightness up to the lit color.
+		fg_lit, bg_lit: engine.HSL_Color
+		if fg, ok := lit.colors.fg.?; ok do fg_lit = engine.color_to_hsl(fg)
+		if bg, ok := lit.colors.bg.?; ok do bg_lit = engine.color_to_hsl(bg)
+		fg_dark, bg_dark := fg_lit, bg_lit
+		fg_dark.l *= Spotlights_Dimmest
+		bg_dark.l *= Spotlights_Dimmest
 		for step in 0 ..= steps {
 			style := lit
 			if step < steps {
-				brightness := engine.tween(Spotlights_Dimmest, 1, f64(step) / f64(steps))
-				if lit.colors.fg != nil do style.colors.fg = engine.adjust_color_brightness(fg_hsl, brightness)
-				if lit.colors.bg != nil do style.colors.bg = engine.adjust_color_brightness(bg_hsl, brightness)
+				t := f64(step) / f64(steps)
+				if lit.colors.fg != nil do style.colors.fg = engine.hsl_to_color(engine.tween(fg_dark, fg_lit, t))
+				if lit.colors.bg != nil do style.colors.bg = engine.hsl_to_color(engine.tween(bg_dark, bg_lit, t))
 			}
 			light[row * Spotlights_Light_Levels + step] = style
 		}
