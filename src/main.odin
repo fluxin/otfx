@@ -14,7 +14,7 @@ import "core:terminal"
 // effect registry
 // ---------------------------------------------------------------------------
 
-OTFX_VERSION :: #config(OTFX_VERSION, "0.0.1")
+OTFX_VERSION :: #config(OTFX_VERSION, "0.0.2")
 
 Effect_Kind :: effects.Effect_Kind
 

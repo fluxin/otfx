@@ -20,6 +20,8 @@ jobs:
             runner: ubuntu-24.04
           - target: linux-aarch64
             runner: ubuntu-24.04-arm
+          - target: macos-aarch64
+            runner: macos-15
 
     steps:
       - name: Checkout
@@ -40,15 +42,32 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           VERSION="${TAG#v}"
-          odin build src -o:speed -disable-assert -define:OTFX_VERSION="${VERSION}" -out:otfx
-          strip otfx
+          if [ "$(uname -s)" = "Darwin" ]; then
+            odin build src -o:speed -disable-assert -minimum-os-version:11.0 -define:OTFX_VERSION="${VERSION}" -out:otfx
+            strip -x otfx
+            codesign -v otfx
+            LC_VER="$(otool -l otfx | grep -A4 LC_BUILD_VERSION)"
+            printf '%s\n' "${LC_VER}"
+            printf '%s\n' "${LC_VER}" | grep -Eq '^[[:space:]]*minos 11\.0$'
+          else
+            odin build src -o:speed -disable-assert -define:OTFX_VERSION="${VERSION}" -out:otfx
+            strip otfx
+          fi
           ./otfx --version
           printf 'otfx\n' | COLUMNS=80 LINES=24 ./otfx --seed 1 --frame-rate 0 wipe >/dev/null
 
           STAGE="otfx-${TAG}-${TARGET}"
           mkdir -p "dist/${STAGE}"
           cp otfx LICENSE README.md "dist/${STAGE}/"
-          tar -C dist -czf "dist/${STAGE}.tar.gz" "${STAGE}"
+          if [ "$(uname -s)" = "Darwin" ]; then
+            COPYFILE_DISABLE=1 tar -C dist -czf "dist/${STAGE}.tar.gz" "${STAGE}"
+          else
+            tar -C dist -czf "dist/${STAGE}.tar.gz" "${STAGE}"
+          fi
+          if tar -tzf "dist/${STAGE}.tar.gz" | grep -Eq '(^|/)\._'; then
+            echo "Error: AppleDouble (._*) files found in archive" >&2
+            exit 1
+          fi
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
