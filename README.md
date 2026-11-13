@@ -439,6 +439,25 @@ otfx matrix --help
 otfx bubbles --help
 ```
 
+## Install
+
+Prebuilt archives are published on [GitHub Releases](https://github.com/fluxin/otfx/releases)
+for `linux-x86_64`, `linux-aarch64`, and `macos-aarch64` (Apple Silicon, macOS 11.0+):
+
+```sh
+TAG=v0.0.2
+curl -fsSL "https://github.com/fluxin/otfx/releases/download/${TAG}/otfx-${TAG}-macos-aarch64.tar.gz" | tar -xz
+install -m 755 "otfx-${TAG}-macos-aarch64/otfx" ~/.local/bin/otfx
+```
+
+The macOS build is ad-hoc signed and **not notarized**. Installing with `curl`
+and `tar` in a terminal works directly. A browser download is quarantined and
+macOS blocks the first run; fix it with:
+
+```sh
+xattr -d com.apple.quarantine otfx
+```
+
 ## Usage
 
 ```text

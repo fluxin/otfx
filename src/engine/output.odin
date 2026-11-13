@@ -1,6 +1,7 @@
 package engine
 
 import "base:intrinsics"
+import "core:c"
 import "core:c/libc"
 import "core:container/bit_array"
 import "core:fmt"
@@ -8,7 +9,7 @@ import "core:os"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
-import "core:sys/linux"
+import "core:sys/posix"
 import "core:terminal/ansi"
 import "core:time"
 
@@ -142,23 +143,26 @@ frame_bytes :: proc(e: ^Engine, allocator := context.temp_allocator) -> []byte {
 }
 
 // A short write may stop anywhere; retry from that exact byte.
-write_all :: proc(fd: linux.Fd, bytes: []byte, e: ^Engine = nil) -> linux.Errno {
+write_all :: proc(fd: posix.FD, bytes: []byte, e: ^Engine = nil) -> posix.Errno {
 	remaining := bytes
 	for len(remaining) != 0 {
 		when FRAME_STATS_ENABLED {if e != nil do e.stats.write_calls += 1}
-		count, err := linux.write(fd, remaining)
-		if err == .EINTR do continue
-		if err != nil do return err
-		if count == 0 do return .EIO
-		when FRAME_STATS_ENABLED {if e != nil do e.stats.write_bytes += count}
-		remaining = remaining[count:]
+		written := posix.write(fd, raw_data(remaining), len(remaining))
+		if written < 0 {
+			err := posix.errno()
+			if err == .EINTR do continue
+			return err
+		}
+		if written == 0 do return .EIO
+		when FRAME_STATS_ENABLED {if e != nil do e.stats.write_bytes += int(written)}
+		remaining = remaining[int(written):]
 	}
-	return nil
+	return .NONE
 }
 
 print_frame :: proc(e: ^Engine) {
 	when FRAME_STATS_ENABLED {e.stats.clock = time.tick_now()}
-	write_all(1, frame_output(e), e)
+	write_all(posix.STDOUT_FILENO, frame_output(e), e)
 	os.flush(os.stdout)
 	when FRAME_STATS_ENABLED {e.stats.write += time.tick_diff(e.stats.clock, time.tick_now())}
 }
@@ -173,7 +177,10 @@ resize_signal_handler :: proc "c" (_: i32) {
 }
 
 install_resize_handler :: proc() {
-	_ = libc.signal(28, resize_signal_handler) // SIGWINCH on supported Linux targets
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+		SIGWINCH :: 28
+		_ = libc.signal(SIGWINCH, resize_signal_handler)
+	}
 }
 
 take_resize_signal :: proc() -> bool {
@@ -185,10 +192,25 @@ Winsize :: struct {
 	xpixel, ypixel: u16,
 }
 
+when ODIN_OS == .Linux {
+	TIOCGWINSZ :: 0x5413
+} else when ODIN_OS == .Darwin {
+	TIOCGWINSZ :: 0x40087468
+}
+
+when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+	foreign import sys_c "system:c"
+	@(default_calling_convention = "c")
+	foreign sys_c {
+		ioctl :: proc(fd: c.int, request: c.ulong, #c_vararg args: ..any) -> c.int ---
+	}
+}
+
 ioctl_winsize :: proc(fd: int) -> (int, int) {
-	ws: Winsize
-	ret := linux.ioctl(linux.Fd(fd), u32(linux.TIOCGWINSZ), uintptr(&ws))
-	if int(ret) == 0 do return int(ws.col), int(ws.row)
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+		ws: Winsize
+		if ioctl(c.int(fd), TIOCGWINSZ, &ws) == 0 do return int(ws.col), int(ws.row)
+	}
 	return 0, 0
 }
 
