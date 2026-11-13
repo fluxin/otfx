@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Test & Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Odin
+        uses: laytan/setup-odin@v2
+        with:
+          release: dev-2026-11a
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run tests
+        run: odin test tests
+
+      - name: Build release binary
+        run: odin build src -o:speed -disable-assert -out:otfx
+
+      - name: Smoke test CLI
+        run: |
+          ./otfx --version
+          printf 'hello\nworld\n' | COLUMNS=80 LINES=24 ./otfx --seed 42 --frame-rate 0 --max-frames 4 decrypt >/dev/null

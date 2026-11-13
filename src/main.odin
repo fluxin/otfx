@@ -14,6 +14,8 @@ import "core:terminal"
 // effect registry
 // ---------------------------------------------------------------------------
 
+OTFX_VERSION :: #config(OTFX_VERSION, "0.0.1")
+
 Effect_Kind :: effects.Effect_Kind
 
 Completion_Shell :: enum {
@@ -291,11 +293,11 @@ parse_terminal_opts :: proc(args: []string) -> (Terminal_Opts, bool) {
 				return opts, false
 			}
 		case "--version", "-v":
-			fmt.println("otfx 0.1.0 (odin port of ttfx)")
-			return opts, false
+			fmt.printf("otfx %s (odin-native terminal text effects)\n", OTFX_VERSION)
+			os.exit(0)
 		case "--help", "-h":
 			print_usage()
-			return opts, false
+			os.exit(0)
 		case:
 			fmt.eprintln("Error: unknown option: ", name)
 			return opts, false
